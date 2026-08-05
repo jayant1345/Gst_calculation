@@ -84,7 +84,7 @@
 <body>
     <div class="app-container">
         <!-- Sidebar Navigation -->
-        <aside class="sidebar">
+        <aside class="sidebar" id="sidebar">
             <div class="sidebar-brand">
                 <i class="fa-solid fa-building-columns brand-icon"></i>
                 <div class="brand-text">
@@ -124,10 +124,15 @@
             </div>
         </aside>
 
+        <div class="sidebar-backdrop" id="sidebar-backdrop"></div>
+
         <!-- Main Content Area -->
         <main class="main-content">
             <!-- Header -->
             <header class="top-header">
+                <button class="mobile-menu-toggle" id="mobile-menu-toggle" aria-label="Open menu">
+                    <i class="fa-solid fa-bars"></i>
+                </button>
                 <div class="header-title">
                     <h1>Portal Settings</h1>
                     <p class="section-desc">Manage your account credentials</p>
@@ -184,5 +189,7 @@
             </section>
         </main>
     </div>
+
+    <script src="/static/nav.js"></script>
 </body>
 </html>
