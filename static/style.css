@@ -47,6 +47,10 @@ body {
     min-height: 100vh;
 }
 
+.app-container > .main-content {
+    min-width: 0;
+}
+
 /* Sidebar Navigation */
 .sidebar {
     background-color: var(--sidebar-bg);
