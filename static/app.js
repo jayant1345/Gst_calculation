@@ -67,7 +67,8 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    dropZone.addEventListener('click', () => {
+    dropZone.addEventListener('click', (e) => {
+        if (e.target.closest('label')) return;
         fileInput.click();
     });
 
