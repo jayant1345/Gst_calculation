@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GST ITC Reconciliation Portal | Nutan Nagrik Bank</title>
+    
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- Custom Style Sheet -->
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar Navigation -->
+        <aside class="sidebar">
+            <div class="sidebar-brand">
+                <i class="fa-solid fa-building-columns brand-icon"></i>
+                <div class="brand-text">
+                    <h2>Nutan Nagrik</h2>
+                    <span class="sub-text">SAHAKARI BANK LTD.</span>
+                </div>
+            </div>
+            
+            <nav class="sidebar-nav">
+                <a href="#" class="nav-item active">
+                    <i class="fa-solid fa-chart-line"></i>
+                    <span>ITC Dashboard</span>
+                </a>
+                <a href="#" class="nav-item" onclick="alert('Feature coming soon!')">
+                    <i class="fa-solid fa-clock-rotate-left"></i>
+                    <span>Filing History</span>
+                </a>
+                <a href="#" class="nav-item" onclick="alert('Feature coming soon!')">
+                    <i class="fa-solid fa-file-invoice"></i>
+                    <span>Reconciliation</span>
+                </a>
+                <a href="#" class="nav-item" onclick="alert('Feature coming soon!')">
+                    <i class="fa-solid fa-gears"></i>
+                    <span>Portal Settings</span>
+                </a>
+                <a href="/logout" class="nav-item">
+                    <i class="fa-solid fa-right-from-bracket"></i>
+                    <span>Logout</span>
+                </a>
+            </nav>
+            
+            <div class="sidebar-footer">
+                <span class="badge-status">
+                    <span class="pulse-indicator"></span>
+                    API Connected
+                </span>
+            </div>
+        </aside>
+
+        <!-- Main Content Area -->
+        <main class="main-content">
+            <!-- Header -->
+            <header class="top-header">
+                <div class="header-title">
+                    <h1>GST ITC Reconciliation Portal</h1>
+                    <p class="section-desc">Automated Section 17(4) 50% Credit Division System</p>
+                </div>
+                <div class="user-profile">
+                    <div class="profile-info">
+                        <span class="profile-name">{{ session['username'] }}</span>
+                        <span class="profile-role">Nutan Nagrik Bank</span>
+                    </div>
+                    <div class="profile-avatar">
+                        <i class="fa-solid fa-user-tie"></i>
+                    </div>
+                </div>
+            </header>
+
+            <!-- GST Rule Explanation Alert -->
+            <div class="rule-banner">
+                <div class="banner-icon">
+                    <i class="fa-solid fa-circle-info"></i>
+                </div>
+                <div class="banner-text">
+                    <strong>CGST Act Section 17(4) Compliance:</strong> Banking companies opting for this method must claim exactly <strong>50% of the eligible Input Tax Credit (ITC)</strong> on inputs, capital goods, and input services. The remaining 50% is treated as ineligible credit and lapses.
+                </div>
+            </div>
+
+            <!-- Dashboard Metric Cards -->
+            <section class="metrics-grid">
+                <div class="metric-card">
+                    <div class="card-icon blue"><i class="fa-solid fa-money-bill-wave"></i></div>
+                    <div class="card-data">
+                        <h3>Total Billing Amount</h3>
+                        <span class="metric-value" id="metric-total-billing">₹0.00</span>
+                    </div>
+                </div>
+                
+                <div class="metric-card">
+                    <div class="card-icon yellow"><i class="fa-solid fa-file-lines"></i></div>
+                    <div class="card-data">
+                        <h3>Total Taxable Value</h3>
+                        <span class="metric-value" id="metric-total-taxable">₹0.00</span>
+                    </div>
+                </div>
+                
+                <div class="metric-card eligible-card">
+                    <div class="card-icon green"><i class="fa-solid fa-circle-check"></i></div>
+                    <div class="card-data">
+                        <h3>Eligible ITC (50%)</h3>
+                        <span class="metric-value text-green" id="metric-eligible-itc">₹0.00</span>
+                    </div>
+                </div>
+                
+                <div class="metric-card ineligible-card">
+                    <div class="card-icon red"><i class="fa-solid fa-circle-xmark"></i></div>
+                    <div class="card-data">
+                        <h3>Ineligible ITC (50%)</h3>
+                        <span class="metric-value text-red" id="metric-ineligible-itc">₹0.00</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- File Upload Area -->
+            <section class="dashboard-panel upload-panel">
+                <div class="panel-header">
+                    <h2><i class="fa-solid fa-file-arrow-up"></i> Ingest Invoice Data</h2>
+                    <p class="panel-subtitle">Upload multiple purchase registers, invoices, or utility bills</p>
+                </div>
+                
+                <div class="drop-zone" id="drop-zone">
+                    <div class="drop-zone-content">
+                        <i class="fa-solid fa-cloud-arrow-up cloud-icon"></i>
+                        <h3>Drag & drop invoices here</h3>
+                        <p>Supports <strong>PDF, JPG, PNG, WEBP, XLSX, XLS, CSV</strong> formats</p>
+                        <span class="or-separator">or</span>
+                        <label for="file-input" class="btn btn-primary">Browse Files</label>
+                        <input type="file" id="file-input" multiple accept=".pdf,.png,.jpg,.jpeg,.webp,.xlsx,.xls,.csv" style="display: none;">
+                    </div>
+                </div>
+                
+                <!-- File Uploading Progress List -->
+                <div class="upload-progress-container" id="progress-container" style="display: none;">
+                    <h3>Processing Files...</h3>
+                    <div class="progress-list" id="progress-list">
+                        <!-- Dynamic items -->
+                    </div>
+                </div>
+            </section>
+
+            <!-- Invoice Table Panel -->
+            <section class="dashboard-panel table-panel">
+                <div class="panel-toolbar">
+                    <div class="toolbar-left">
+                        <h2><i class="fa-solid fa-list-check"></i> Parsed Invoices List</h2>
+                        <span class="row-count" id="invoice-count">0 Invoices Loaded</span>
+                    </div>
+                    
+                    <div class="toolbar-right">
+                        <div class="search-box">
+                            <i class="fa-solid fa-magnifying-glass"></i>
+                            <input type="text" id="table-search" placeholder="Search vendor, invoice no...">
+                        </div>
+                        <button class="btn btn-secondary" id="btn-clear-all">
+                            <i class="fa-solid fa-trash-can"></i> Clear All
+                        </button>
+                        <button class="btn btn-gold" id="btn-export-excel">
+                            <i class="fa-solid fa-file-excel"></i> Export Reconciled Excel
+                        </button>
+                    </div>
+                </div>
+
+                <div class="table-container">
+                    <table class="invoice-table" id="invoice-table">
+                        <thead>
+                            <tr>
+                                <th width="9%">Invoice #</th>
+                                <th width="9%">Date</th>
+                                <th width="16%">Vendor Name</th>
+                                <th width="11%">Taxable Value (₹)</th>
+                                <th width="10%">CGST (₹)</th>
+                                <th width="10%">SGST (₹)</th>
+                                <th width="9%">IGST (₹)</th>
+                                <th width="11%" class="th-green">Eligible ITC (50%)</th>
+                                <th width="11%" class="th-red">Ineligible ITC (50%)</th>
+                                <th width="4%">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="invoice-table-body">
+                            <tr class="empty-state-row">
+                                <td colspan="10">
+                                    <div class="empty-state">
+                                        <i class="fa-solid fa-receipt"></i>
+                                        <p>No invoices processed yet. Drag & drop or upload files above to automatically extract values and calculate 50% GST credit.</p>
+                                    </div>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

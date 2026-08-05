@@ -1,0 +1,4 @@
+.env
+__pycache__/
+*.pyc
+GST_ITC_Reconciled_Sheet.xlsx

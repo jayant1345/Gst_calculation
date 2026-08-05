@@ -1,0 +1,6 @@
+flask
+pandas
+openpyxl
+pypdf
+python-dotenv
+psycopg2-binary
