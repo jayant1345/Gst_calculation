@@ -95,6 +95,19 @@ def init_db():
         cur.execute("UPDATE users SET is_admin = TRUE WHERE username = 'admin' AND is_admin = FALSE;")
         conn.commit()
 
+        # Backfill NULL fields on invoices saved before extracted-field
+        # normalization existed, which otherwise crash the table renderer
+        cur.execute("UPDATE invoices SET vendor_name = 'Unknown Vendor' WHERE vendor_name IS NULL;")
+        cur.execute("UPDATE invoices SET invoice_number = 'N/A' WHERE invoice_number IS NULL;")
+        cur.execute("UPDATE invoices SET invoice_date = 'N/A' WHERE invoice_date IS NULL;")
+        cur.execute("UPDATE invoices SET taxable_value = 0 WHERE taxable_value IS NULL;")
+        cur.execute("UPDATE invoices SET cgst = 0 WHERE cgst IS NULL;")
+        cur.execute("UPDATE invoices SET sgst = 0 WHERE sgst IS NULL;")
+        cur.execute("UPDATE invoices SET igst = 0 WHERE igst IS NULL;")
+        cur.execute("UPDATE invoices SET eligible_itc = 0 WHERE eligible_itc IS NULL;")
+        cur.execute("UPDATE invoices SET ineligible_itc = 0 WHERE ineligible_itc IS NULL;")
+        conn.commit()
+
         cur.close()
         conn.close()
         print("PostgreSQL Database initialized successfully.")

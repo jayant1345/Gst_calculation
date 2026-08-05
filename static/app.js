@@ -159,8 +159,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const query = searchInput.value.toLowerCase().trim();
         const filteredInvoices = invoices.filter(inv => {
             return (
-                inv.vendor_name.toLowerCase().includes(query) ||
-                inv.invoice_number.toLowerCase().includes(query)
+                (inv.vendor_name || '').toLowerCase().includes(query) ||
+                (inv.invoice_number || '').toLowerCase().includes(query)
             );
         });
 
@@ -188,15 +188,15 @@ document.addEventListener('DOMContentLoaded', () => {
             const tr = document.createElement('tr');
             tr.dataset.index = index;
             tr.innerHTML = `
-                <td><input type="text" class="field-number" value="${inv.invoice_number}"></td>
-                <td><input type="text" class="field-date" value="${inv.invoice_date}"></td>
-                <td><input type="text" class="field-vendor" value="${inv.vendor_name}"></td>
-                <td class="numeric"><input type="number" step="0.01" class="field-taxable" value="${inv.taxable_value.toFixed(2)}"></td>
-                <td class="numeric"><input type="number" step="0.01" class="field-cgst" value="${inv.cgst.toFixed(2)}"></td>
-                <td class="numeric"><input type="number" step="0.01" class="field-sgst" value="${inv.sgst.toFixed(2)}"></td>
-                <td class="numeric"><input type="number" step="0.01" class="field-igst" value="${inv.igst.toFixed(2)}"></td>
-                <td class="numeric eligible-column font-bold" id="row-eligible-${index}">₹${inv.eligible_itc.toFixed(2)}</td>
-                <td class="numeric ineligible-column" id="row-ineligible-${index}">₹${inv.ineligible_itc.toFixed(2)}</td>
+                <td><input type="text" class="field-number" value="${inv.invoice_number || ''}"></td>
+                <td><input type="text" class="field-date" value="${inv.invoice_date || ''}"></td>
+                <td><input type="text" class="field-vendor" value="${inv.vendor_name || ''}"></td>
+                <td class="numeric"><input type="number" step="0.01" class="field-taxable" value="${(inv.taxable_value || 0).toFixed(2)}"></td>
+                <td class="numeric"><input type="number" step="0.01" class="field-cgst" value="${(inv.cgst || 0).toFixed(2)}"></td>
+                <td class="numeric"><input type="number" step="0.01" class="field-sgst" value="${(inv.sgst || 0).toFixed(2)}"></td>
+                <td class="numeric"><input type="number" step="0.01" class="field-igst" value="${(inv.igst || 0).toFixed(2)}"></td>
+                <td class="numeric eligible-column font-bold" id="row-eligible-${index}">₹${(inv.eligible_itc || 0).toFixed(2)}</td>
+                <td class="numeric ineligible-column" id="row-ineligible-${index}">₹${(inv.ineligible_itc || 0).toFixed(2)}</td>
                 ${window.IS_ADMIN ? `<td class="col-owner">${inv.username || ''}</td>` : ''}
                 <td>
                     <button class="btn-delete" title="Remove row">
@@ -325,12 +325,12 @@ document.addEventListener('DOMContentLoaded', () => {
         let totalIneligible = 0;
 
         invoices.forEach(inv => {
-            totalTaxable += inv.taxable_value;
-            totalCgst += inv.cgst;
-            totalSgst += inv.sgst;
-            totalIgst += inv.igst;
-            totalEligible += inv.eligible_itc;
-            totalIneligible += inv.ineligible_itc;
+            totalTaxable += inv.taxable_value || 0;
+            totalCgst += inv.cgst || 0;
+            totalSgst += inv.sgst || 0;
+            totalIgst += inv.igst || 0;
+            totalEligible += inv.eligible_itc || 0;
+            totalIneligible += inv.ineligible_itc || 0;
         });
 
         const totalGst = totalCgst + totalSgst + totalIgst;
