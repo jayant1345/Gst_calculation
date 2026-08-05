@@ -643,27 +643,36 @@ def process_invoices():
             conn = get_db_connection()
             cur = conn.cursor()
             for inv in parsed_list:
-                total_gst = inv.get("cgst", 0.0) + inv.get("sgst", 0.0) + inv.get("igst", 0.0)
+                inv["invoice_number"] = inv.get("invoice_number") or "N/A"
+                inv["invoice_date"] = inv.get("invoice_date") or "N/A"
+                inv["vendor_name"] = inv.get("vendor_name") or "Unknown Vendor"
+                for field in ("taxable_value", "cgst", "sgst", "igst"):
+                    try:
+                        inv[field] = float(inv.get(field) or 0.0)
+                    except (TypeError, ValueError):
+                        inv[field] = 0.0
+
+                total_gst = inv["cgst"] + inv["sgst"] + inv["igst"]
                 eligible = round(total_gst * 0.5, 2)
                 ineligible = round(total_gst * 0.5, 2)
                 
                 cur.execute('''
                     INSERT INTO invoices (user_id, invoice_number, invoice_date, vendor_name, taxable_value, cgst, sgst, igst, eligible_itc, ineligible_itc)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
-                ''', (user_id, inv.get("invoice_number", ""), inv.get("invoice_date", ""), inv.get("vendor_name", ""),
-                      inv.get("taxable_value", 0.0), inv.get("cgst", 0.0), inv.get("sgst", 0.0), inv.get("igst", 0.0),
+                ''', (user_id, inv["invoice_number"], inv["invoice_date"], inv["vendor_name"],
+                      inv["taxable_value"], inv["cgst"], inv["sgst"], inv["igst"],
                       eligible, ineligible))
-                
+
                 db_id = cur.fetchone()[0]
                 results.append({
                     "id": db_id,
-                    "invoice_number": inv.get("invoice_number", ""),
-                    "invoice_date": inv.get("invoice_date", ""),
-                    "vendor_name": inv.get("vendor_name", ""),
-                    "taxable_value": inv.get("taxable_value", 0.0),
-                    "cgst": inv.get("cgst", 0.0),
-                    "sgst": inv.get("sgst", 0.0),
-                    "igst": inv.get("igst", 0.0),
+                    "invoice_number": inv["invoice_number"],
+                    "invoice_date": inv["invoice_date"],
+                    "vendor_name": inv["vendor_name"],
+                    "taxable_value": inv["taxable_value"],
+                    "cgst": inv["cgst"],
+                    "sgst": inv["sgst"],
+                    "igst": inv["igst"],
                     "eligible_itc": eligible,
                     "ineligible_itc": ineligible,
                     "filename": filename

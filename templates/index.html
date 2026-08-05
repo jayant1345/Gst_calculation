@@ -136,8 +136,14 @@
                         <h3>Drag & drop invoices here</h3>
                         <p>Supports <strong>PDF, JPG, PNG, WEBP, XLSX, XLS, CSV</strong> formats</p>
                         <span class="or-separator">or</span>
-                        <label for="file-input" class="btn btn-primary">Browse Files</label>
+                        <div class="upload-btn-row">
+                            <label for="file-input" class="btn btn-primary">Browse Files</label>
+                            <label for="camera-input" class="btn btn-secondary">
+                                <i class="fa-solid fa-camera"></i> Scan Bill
+                            </label>
+                        </div>
                         <input type="file" id="file-input" multiple accept=".pdf,.png,.jpg,.jpeg,.webp,.xlsx,.xls,.csv" style="display: none;">
+                        <input type="file" id="camera-input" accept="image/*" capture="environment" style="display: none;">
                     </div>
                 </div>
                 

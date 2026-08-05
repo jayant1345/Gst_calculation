@@ -5,6 +5,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // DOM Elements
     const dropZone = document.getElementById('drop-zone');
     const fileInput = document.getElementById('file-input');
+    const cameraInput = document.getElementById('camera-input');
     const progressContainer = document.getElementById('progress-container');
     const progressList = document.getElementById('progress-list');
     const tableBody = document.getElementById('invoice-table-body');
@@ -76,6 +77,13 @@ document.addEventListener('DOMContentLoaded', () => {
         if (fileInput.files.length > 0) {
             handleFileUpload(fileInput.files);
         }
+    });
+
+    cameraInput.addEventListener('change', () => {
+        if (cameraInput.files.length > 0) {
+            handleFileUpload(cameraInput.files);
+        }
+        cameraInput.value = '';
     });
 
     // File Upload handling
