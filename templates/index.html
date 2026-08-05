@@ -41,7 +41,7 @@
                     <i class="fa-solid fa-file-invoice"></i>
                     <span>Reconciliation</span>
                 </a>
-                <a href="#" class="nav-item" onclick="alert('Feature coming soon!')">
+                <a href="/settings" class="nav-item">
                     <i class="fa-solid fa-gears"></i>
                     <span>Portal Settings</span>
                 </a>
@@ -185,12 +185,13 @@
                                 <th width="9%">IGST (₹)</th>
                                 <th width="11%" class="th-green">Eligible ITC (50%)</th>
                                 <th width="11%" class="th-red">Ineligible ITC (50%)</th>
+                                {% if is_admin %}<th width="9%" class="col-owner">Uploaded By</th>{% endif %}
                                 <th width="4%">Actions</th>
                             </tr>
                         </thead>
                         <tbody id="invoice-table-body">
                             <tr class="empty-state-row">
-                                <td colspan="10">
+                                <td colspan="{{ 11 if is_admin else 10 }}">
                                     <div class="empty-state">
                                         <i class="fa-solid fa-receipt"></i>
                                         <p>No invoices processed yet. Drag & drop or upload files above to automatically extract values and calculate 50% GST credit.</p>
@@ -204,6 +205,7 @@
         </main>
     </div>
 
+    <script>window.IS_ADMIN = {{ 'true' if is_admin else 'false' }};</script>
     <script src="/static/app.js"></script>
 </body>
 </html>

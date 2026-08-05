@@ -618,6 +618,8 @@ body {
 .invoice-table th:nth-child(8), .invoice-table td:nth-child(8) { min-width: 95px; }
 .invoice-table th:nth-child(9), .invoice-table td:nth-child(9) { min-width: 95px; }
 .invoice-table th:nth-child(10), .invoice-table td:nth-child(10) { min-width: 55px; }
+.invoice-table th:nth-child(11), .invoice-table td:nth-child(11) { min-width: 55px; }
+.invoice-table th.col-owner, .invoice-table td.col-owner { min-width: 110px; }
 
 .invoice-table tbody tr {
     border-bottom: 1px solid var(--border-color);

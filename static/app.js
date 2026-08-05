@@ -156,10 +156,12 @@ document.addEventListener('DOMContentLoaded', () => {
             );
         });
 
+        const colCount = window.IS_ADMIN ? 11 : 10;
+
         if (filteredInvoices.length === 0) {
             tableBody.innerHTML = `
                 <tr class="empty-state-row">
-                    <td colspan="10">
+                    <td colspan="${colCount}">
                         <div class="empty-state">
                             <i class="fa-solid fa-receipt"></i>
                             <p>${query ? 'No matching invoices found.' : 'No invoices processed yet. Drag & drop or upload files above.'}</p>
@@ -187,6 +189,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 <td class="numeric"><input type="number" step="0.01" class="field-igst" value="${inv.igst.toFixed(2)}"></td>
                 <td class="numeric eligible-column font-bold" id="row-eligible-${index}">₹${inv.eligible_itc.toFixed(2)}</td>
                 <td class="numeric ineligible-column" id="row-ineligible-${index}">₹${inv.ineligible_itc.toFixed(2)}</td>
+                ${window.IS_ADMIN ? `<td class="col-owner">${inv.username || ''}</td>` : ''}
                 <td>
                     <button class="btn-delete" title="Remove row">
                         <i class="fa-solid fa-trash"></i>

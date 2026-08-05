@@ -3,7 +3,7 @@ import json
 import base64
 import urllib.request
 import ssl
-from flask import Flask, request, jsonify, render_template, send_file, redirect, url_for, session
+from flask import Flask, request, jsonify, render_template, send_file, redirect, url_for, session, flash
 import pandas as pd
 from pypdf import PdfReader
 from dotenv import load_dotenv
@@ -50,10 +50,15 @@ def init_db():
                 id SERIAL PRIMARY KEY,
                 username VARCHAR(50) UNIQUE NOT NULL,
                 password_hash TEXT NOT NULL,
+                is_admin BOOLEAN NOT NULL DEFAULT FALSE,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         ''')
-        
+
+        # Migrate existing installs that predate the is_admin column
+        cur.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT FALSE;')
+
+
         # Create invoices table (using numeric for high-precision currency values)
         cur.execute('''
             CREATE TABLE IF NOT EXISTS invoices (
@@ -81,10 +86,15 @@ def init_db():
             default_username = 'admin'
             default_password = 'admin'
             hashed_pw = generate_password_hash(default_password)
-            cur.execute('INSERT INTO users (username, password_hash) VALUES (%s, %s)', (default_username, hashed_pw))
+            cur.execute('INSERT INTO users (username, password_hash, is_admin) VALUES (%s, %s, TRUE)', (default_username, hashed_pw))
             conn.commit()
             print("Seeded default admin user account: admin / admin")
-            
+
+        # Ensure the 'admin' account is always flagged as admin, even on installs
+        # created before the is_admin column existed
+        cur.execute("UPDATE users SET is_admin = TRUE WHERE username = 'admin' AND is_admin = FALSE;")
+        conn.commit()
+
         cur.close()
         conn.close()
         print("PostgreSQL Database initialized successfully.")
@@ -328,7 +338,7 @@ def parse_excel_register(file_bytes):
 @app.route('/')
 @login_required
 def home():
-    return render_template('index.html')
+    return render_template('index.html', is_admin=session.get('is_admin', False))
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -351,6 +361,7 @@ def login():
             if user and check_password_hash(user['password_hash'], password):
                 session['user_id'] = user['id']
                 session['username'] = user['username']
+                session['is_admin'] = bool(user['is_admin'])
                 return redirect(url_for('home'))
             else:
                 error = "Invalid username or password"
@@ -365,11 +376,10 @@ def register():
         return redirect(url_for('home'))
         
     error = None
-    success = None
     if request.method == 'POST':
         username = request.form.get('username', '').strip()
         password = request.form.get('password', '').strip()
-        
+
         if not username or not password:
             error = "All fields are required"
         else:
@@ -385,35 +395,87 @@ def register():
                     hashed_pw = generate_password_hash(password)
                     cur.execute('INSERT INTO users (username, password_hash) VALUES (%s, %s)', (username, hashed_pw))
                     conn.commit()
-                    success = "Registration successful! You can now log in."
+                    cur.close()
+                    conn.close()
+                    flash("Registration successful! You can now log in.", "success")
+                    return redirect(url_for('login'))
                 cur.close()
                 conn.close()
             except Exception as e:
                 error = f"Database connection error: {e}"
-                
-    return render_template('register.html', error=error, success=success)
+
+    return render_template('register.html', error=error)
 
 @app.route('/logout')
 def logout():
     session.clear()
     return redirect(url_for('login'))
 
+@app.route('/settings', methods=['GET', 'POST'])
+@login_required
+def settings():
+    error = None
+    if request.method == 'POST':
+        current_password = request.form.get('current_password', '').strip()
+        new_password = request.form.get('new_password', '').strip()
+        confirm_password = request.form.get('confirm_password', '').strip()
+
+        if not current_password or not new_password or not confirm_password:
+            error = "All fields are required"
+        elif new_password != confirm_password:
+            error = "New password and confirmation do not match"
+        else:
+            try:
+                conn = get_db_connection()
+                cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+                cur.execute('SELECT * FROM users WHERE id = %s', (session['user_id'],))
+                user = cur.fetchone()
+
+                if not user or not check_password_hash(user['password_hash'], current_password):
+                    error = "Current password is incorrect"
+                else:
+                    hashed_pw = generate_password_hash(new_password)
+                    cur.execute('UPDATE users SET password_hash = %s WHERE id = %s', (hashed_pw, session['user_id']))
+                    conn.commit()
+
+                cur.close()
+                conn.close()
+
+                if not error:
+                    flash("Password updated successfully.", "success")
+                    return redirect(url_for('settings'))
+            except Exception as e:
+                error = f"Database connection error: {e}"
+
+    return render_template('settings.html', error=error)
+
 # API Endpoints
 @app.route('/api/get-invoices', methods=['GET'])
 @login_required
 def get_invoices():
     user_id = session['user_id']
+    is_admin = session.get('is_admin', False)
     try:
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute('''
-            SELECT id, invoice_number, invoice_date, vendor_name, 
-                   taxable_value::float, cgst::float, sgst::float, igst::float, 
-                   eligible_itc::float, ineligible_itc::float 
-            FROM invoices 
-            WHERE user_id = %s 
-            ORDER BY created_at DESC
-        ''', (user_id,))
+        if is_admin:
+            cur.execute('''
+                SELECT invoices.id, invoice_number, invoice_date, vendor_name,
+                       taxable_value::float, cgst::float, sgst::float, igst::float,
+                       eligible_itc::float, ineligible_itc::float, users.username
+                FROM invoices
+                JOIN users ON users.id = invoices.user_id
+                ORDER BY invoices.created_at DESC
+            ''')
+        else:
+            cur.execute('''
+                SELECT id, invoice_number, invoice_date, vendor_name,
+                       taxable_value::float, cgst::float, sgst::float, igst::float,
+                       eligible_itc::float, ineligible_itc::float
+                FROM invoices
+                WHERE user_id = %s
+                ORDER BY created_at DESC
+            ''', (user_id,))
         rows = cur.fetchall()
         cur.close()
         conn.close()
@@ -441,19 +503,30 @@ def save_invoice():
     eligible = round(total_gst * 0.5, 2)
     ineligible = round(total_gst * 0.5, 2)
     
+    is_admin = session.get('is_admin', False)
+
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-        
+
         if db_id:
-            # Update existing invoice
-            cur.execute('''
-                UPDATE invoices 
-                SET invoice_number = %s, invoice_date = %s, vendor_name = %s, 
-                    taxable_value = %s, cgst = %s, sgst = %s, igst = %s, 
-                    eligible_itc = %s, ineligible_itc = %s 
-                WHERE id = %s AND user_id = %s
-            ''', (inv_num, inv_date, vendor, taxable, cgst, sgst, igst, eligible, ineligible, db_id, user_id))
+            # Update existing invoice (admins may edit any user's invoice)
+            if is_admin:
+                cur.execute('''
+                    UPDATE invoices
+                    SET invoice_number = %s, invoice_date = %s, vendor_name = %s,
+                        taxable_value = %s, cgst = %s, sgst = %s, igst = %s,
+                        eligible_itc = %s, ineligible_itc = %s
+                    WHERE id = %s
+                ''', (inv_num, inv_date, vendor, taxable, cgst, sgst, igst, eligible, ineligible, db_id))
+            else:
+                cur.execute('''
+                    UPDATE invoices
+                    SET invoice_number = %s, invoice_date = %s, vendor_name = %s,
+                        taxable_value = %s, cgst = %s, sgst = %s, igst = %s,
+                        eligible_itc = %s, ineligible_itc = %s
+                    WHERE id = %s AND user_id = %s
+                ''', (inv_num, inv_date, vendor, taxable, cgst, sgst, igst, eligible, ineligible, db_id, user_id))
             ret_id = db_id
         else:
             # Insert new invoice
@@ -480,16 +553,20 @@ def save_invoice():
 @login_required
 def delete_invoice():
     user_id = session['user_id']
+    is_admin = session.get('is_admin', False)
     data = request.json
     db_id = data.get('id')
-    
+
     if not db_id:
         return jsonify({"error": "Invoice ID required"}), 400
-        
+
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute('DELETE FROM invoices WHERE id = %s AND user_id = %s', (db_id, user_id))
+        if is_admin:
+            cur.execute('DELETE FROM invoices WHERE id = %s', (db_id,))
+        else:
+            cur.execute('DELETE FROM invoices WHERE id = %s AND user_id = %s', (db_id, user_id))
         conn.commit()
         cur.close()
         conn.close()
