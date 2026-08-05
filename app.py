@@ -3,7 +3,7 @@ import json
 import base64
 import urllib.request
 import ssl
-from flask import Flask, request, jsonify, render_template, send_from_directory, redirect, url_for, session
+from flask import Flask, request, jsonify, render_template, send_file, redirect, url_for, session
 import pandas as pd
 from pypdf import PdfReader
 from dotenv import load_dotenv
@@ -716,23 +716,13 @@ def export_excel():
             worksheet.column_dimensions[col_letter].width = max(max_len + 3, 12)
             
     output.seek(0)
-    
-    return send_from_directory(
-        directory=os.path.dirname(os.path.abspath(__file__)),
-        path="GST_ITC_Reconciled_Sheet.xlsx",
-        as_attachment=True
-    ), 200
 
-@app.after_request
-def save_temp_excel(response):
-    if request.path == '/api/export-excel' and response.status_code == 200:
-        try:
-            data = b"".join(response.response)
-            with open("GST_ITC_Reconciled_Sheet.xlsx", "wb") as f:
-                f.write(data)
-        except Exception as e:
-            print(f"Error saving temp Excel file: {e}")
-    return response
+    return send_file(
+        output,
+        as_attachment=True,
+        download_name="GST_ITC_Reconciled_Sheet.xlsx",
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
 
 if __name__ == '__main__':
     # Ensure static and template folders exist
