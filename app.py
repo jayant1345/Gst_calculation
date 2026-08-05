@@ -110,6 +110,23 @@ def login_required(f):
         return f(*args, **kwargs)
     return decorated_function
 
+def is_admin_user():
+    """Checks admin status directly from the database rather than trusting a
+    value cached in the session cookie, so role changes take effect immediately
+    without requiring the user to log out and back in."""
+    if 'user_id' not in session:
+        return False
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute('SELECT is_admin FROM users WHERE id = %s', (session['user_id'],))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        return bool(row[0]) if row else False
+    except Exception:
+        return False
+
 def call_claude_api(payload):
     """Utility to make direct HTTP requests to the Anthropic Claude API."""
     url = "https://api.anthropic.com/v1/messages"
@@ -338,7 +355,7 @@ def parse_excel_register(file_bytes):
 @app.route('/')
 @login_required
 def home():
-    return render_template('index.html', is_admin=session.get('is_admin', False))
+    return render_template('index.html', is_admin=is_admin_user())
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -454,7 +471,7 @@ def settings():
 @login_required
 def get_invoices():
     user_id = session['user_id']
-    is_admin = session.get('is_admin', False)
+    is_admin = is_admin_user()
     try:
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -503,7 +520,7 @@ def save_invoice():
     eligible = round(total_gst * 0.5, 2)
     ineligible = round(total_gst * 0.5, 2)
     
-    is_admin = session.get('is_admin', False)
+    is_admin = is_admin_user()
 
     try:
         conn = get_db_connection()
@@ -553,7 +570,7 @@ def save_invoice():
 @login_required
 def delete_invoice():
     user_id = session['user_id']
-    is_admin = session.get('is_admin', False)
+    is_admin = is_admin_user()
     data = request.json
     db_id = data.get('id')
 
