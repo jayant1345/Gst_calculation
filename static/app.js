@@ -198,7 +198,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 <td class="numeric eligible-column font-bold" id="row-eligible-${index}">₹${(inv.eligible_itc || 0).toFixed(2)}</td>
                 <td class="numeric ineligible-column" id="row-ineligible-${index}">₹${(inv.ineligible_itc || 0).toFixed(2)}</td>
                 ${window.IS_ADMIN ? `<td class="col-owner">${inv.username || ''}</td>` : ''}
-                <td>
+                <td class="actions-cell">
+                    ${inv.has_file ? `
+                    <button class="btn-view-file" title="View original bill" data-id="${inv.id}">
+                        <i class="fa-solid fa-file-invoice"></i>
+                    </button>` : ''}
                     <button class="btn-delete" title="Remove row">
                         <i class="fa-solid fa-trash"></i>
                     </button>
@@ -216,6 +220,13 @@ document.addEventListener('DOMContentLoaded', () => {
             tr.querySelector('.btn-delete').addEventListener('click', () => {
                 deleteInvoice(index);
             });
+
+            const viewFileBtn = tr.querySelector('.btn-view-file');
+            if (viewFileBtn) {
+                viewFileBtn.addEventListener('click', () => {
+                    window.open(`/api/invoice-file/${viewFileBtn.dataset.id}`, '_blank');
+                });
+            }
 
             tableBody.appendChild(tr);
         });

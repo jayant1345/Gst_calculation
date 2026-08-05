@@ -718,7 +718,13 @@ body {
     text-align: right;
 }
 
-.btn-delete {
+.actions-cell {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.btn-delete, .btn-view-file {
     background: transparent;
     border: none;
     color: #94a3b8;
@@ -732,6 +738,11 @@ body {
 .btn-delete:hover {
     color: var(--accent-red);
     background-color: #fee2e2;
+}
+
+.btn-view-file:hover {
+    color: var(--accent-blue);
+    background-color: rgba(37, 99, 235, 0.08);
 }
 
 /* Empty State */

@@ -73,10 +73,19 @@ def init_db():
                 igst NUMERIC(15,2),
                 eligible_itc NUMERIC(15,2),
                 ineligible_itc NUMERIC(15,2),
+                file_data BYTEA,
+                file_mime_type VARCHAR(100),
+                file_name VARCHAR(255),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         ''')
-        
+
+        # Migrate existing installs that predate the original-file columns
+        cur.execute('ALTER TABLE invoices ADD COLUMN IF NOT EXISTS file_data BYTEA;')
+        cur.execute('ALTER TABLE invoices ADD COLUMN IF NOT EXISTS file_mime_type VARCHAR(100);')
+        cur.execute('ALTER TABLE invoices ADD COLUMN IF NOT EXISTS file_name VARCHAR(255);')
+
+
         conn.commit()
         
         # Auto-seed a default user 'admin' if the users table is empty
@@ -492,7 +501,8 @@ def get_invoices():
             cur.execute('''
                 SELECT invoices.id, invoice_number, invoice_date, vendor_name,
                        taxable_value::float, cgst::float, sgst::float, igst::float,
-                       eligible_itc::float, ineligible_itc::float, users.username
+                       eligible_itc::float, ineligible_itc::float, users.username,
+                       (file_data IS NOT NULL) AS has_file
                 FROM invoices
                 JOIN users ON users.id = invoices.user_id
                 ORDER BY invoices.created_at DESC
@@ -501,7 +511,8 @@ def get_invoices():
             cur.execute('''
                 SELECT id, invoice_number, invoice_date, vendor_name,
                        taxable_value::float, cgst::float, sgst::float, igst::float,
-                       eligible_itc::float, ineligible_itc::float
+                       eligible_itc::float, ineligible_itc::float,
+                       (file_data IS NOT NULL) AS has_file
                 FROM invoices
                 WHERE user_id = %s
                 ORDER BY created_at DESC
@@ -604,6 +615,35 @@ def delete_invoice():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route('/api/invoice-file/<int:invoice_id>', methods=['GET'])
+@login_required
+def get_invoice_file(invoice_id):
+    user_id = session['user_id']
+    is_admin = is_admin_user()
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        if is_admin:
+            cur.execute('SELECT file_data, file_mime_type, file_name FROM invoices WHERE id = %s', (invoice_id,))
+        else:
+            cur.execute('SELECT file_data, file_mime_type, file_name FROM invoices WHERE id = %s AND user_id = %s', (invoice_id, user_id))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+
+        if not row or row[0] is None:
+            return jsonify({"error": "No file attached to this invoice"}), 404
+
+        file_data, mime_type, file_name = row
+        return send_file(
+            io.BytesIO(bytes(file_data)),
+            mimetype=mime_type or "application/octet-stream",
+            as_attachment=False,
+            download_name=file_name or f"invoice-{invoice_id}"
+        )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.route('/api/clear-invoices', methods=['POST'])
 @login_required
 def clear_invoices():
@@ -634,6 +674,13 @@ def process_invoices():
         ext = filename.split('.')[-1].lower()
         file_bytes = file.read()
         
+        # Original bill file, stored alongside the extracted invoice for
+        # single-invoice sources (PDF/image). Purchase registers (Excel/CSV)
+        # produce many invoices per file, so there's no single bill to attach.
+        store_file_bytes = None
+        store_mime_type = None
+        store_file_name = None
+
         try:
             parsed_list = []
             # 1. Excel/CSV Processing
@@ -643,9 +690,9 @@ def process_invoices():
                     out = io.BytesIO()
                     df.to_excel(out, index=False)
                     file_bytes = out.getvalue()
-                
+
                 parsed_list = parse_excel_register(file_bytes)
-                    
+
             # 2. PDF Processing
             elif ext == 'pdf':
                 pdf_file = io.BytesIO(file_bytes)
@@ -653,14 +700,17 @@ def process_invoices():
                 text = ""
                 for page in reader.pages:
                     text += page.extract_text() or ""
-                
+
                 if len(text.strip()) > 100:
                     inv = extract_from_text(text)
                 else:
                     base64_pdf = base64.b64encode(file_bytes).decode('utf-8')
                     inv = extract_from_pdf_binary(base64_pdf)
                 parsed_list = [inv]
-                
+                store_file_bytes = file_bytes
+                store_mime_type = "application/pdf"
+                store_file_name = filename
+
             # 3. Image Processing
             elif ext in ['png', 'jpg', 'jpeg', 'webp']:
                 mime_type = f"image/{ext}"
@@ -668,6 +718,9 @@ def process_invoices():
                 base64_img = base64.b64encode(file_bytes).decode('utf-8')
                 inv = extract_from_image(base64_img, mime_type)
                 parsed_list = [inv]
+                store_file_bytes = file_bytes
+                store_mime_type = mime_type
+                store_file_name = filename
             
             # Save parsed invoices to Postgres immediately
             conn = get_db_connection()
@@ -687,11 +740,13 @@ def process_invoices():
                 ineligible = round(total_gst * 0.5, 2)
                 
                 cur.execute('''
-                    INSERT INTO invoices (user_id, invoice_number, invoice_date, vendor_name, taxable_value, cgst, sgst, igst, eligible_itc, ineligible_itc)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
+                    INSERT INTO invoices (user_id, invoice_number, invoice_date, vendor_name, taxable_value, cgst, sgst, igst, eligible_itc, ineligible_itc, file_data, file_mime_type, file_name)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
                 ''', (user_id, inv["invoice_number"], inv["invoice_date"], inv["vendor_name"],
                       inv["taxable_value"], inv["cgst"], inv["sgst"], inv["igst"],
-                      eligible, ineligible))
+                      eligible, ineligible,
+                      psycopg2.Binary(store_file_bytes) if store_file_bytes else None,
+                      store_mime_type, store_file_name))
 
                 db_id = cur.fetchone()[0]
                 results.append({
@@ -703,6 +758,7 @@ def process_invoices():
                     "cgst": inv["cgst"],
                     "sgst": inv["sgst"],
                     "igst": inv["igst"],
+                    "has_file": store_file_bytes is not None,
                     "eligible_itc": eligible,
                     "ineligible_itc": ineligible,
                     "filename": filename
