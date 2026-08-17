@@ -11,6 +11,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const tableBody = document.getElementById('invoice-table-body');
     const searchInput = document.getElementById('table-search');
     const invoiceCountText = document.getElementById('invoice-count');
+    const branchInput = document.getElementById('branch-input');
+    const branchSuggestions = document.getElementById('branch-suggestions');
     
     // Metric Elements
     const billingMetric = document.getElementById('metric-total-billing');
@@ -36,6 +38,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     invoices = data.invoices;
                     renderTable();
                     updateMetrics();
+                    updateBranchSuggestions();
                 }
             })
             .catch(error => {
@@ -92,7 +95,8 @@ document.addEventListener('DOMContentLoaded', () => {
         progressList.innerHTML = '';
         
         const formData = new FormData();
-        
+        formData.append('branch', branchInput.value.trim());
+
         Array.from(files).forEach((file, index) => {
             formData.append('files[]', file);
             
@@ -136,6 +140,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 invoices = [...validInvoices, ...invoices];
                 renderTable();
                 updateMetrics();
+                updateBranchSuggestions();
             }
             
             setTimeout(() => {
@@ -154,6 +159,12 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // Populate the branch datalist with previously used branch names
+    function updateBranchSuggestions() {
+        const branches = [...new Set(invoices.map(inv => inv.branch).filter(b => b && b !== 'Unassigned'))].sort();
+        branchSuggestions.innerHTML = branches.map(b => `<option value="${b}"></option>`).join('');
+    }
+
     // Render Invoices Table
     function renderTable() {
         const query = searchInput.value.toLowerCase().trim();
@@ -164,7 +175,7 @@ document.addEventListener('DOMContentLoaded', () => {
             );
         });
 
-        const colCount = window.IS_ADMIN ? 11 : 10;
+        const colCount = window.IS_ADMIN ? 13 : 12;
 
         if (filteredInvoices.length === 0) {
             tableBody.innerHTML = `
@@ -188,6 +199,8 @@ document.addEventListener('DOMContentLoaded', () => {
             const tr = document.createElement('tr');
             tr.dataset.index = index;
             tr.innerHTML = `
+                <td><input type="text" class="field-branch" list="branch-suggestions" value="${inv.branch || ''}"></td>
+                <td><input type="text" class="field-gstin" value="${inv.gstin || ''}"></td>
                 <td><input type="text" class="field-number" value="${inv.invoice_number || ''}"></td>
                 <td><input type="text" class="field-date" value="${inv.invoice_date || ''}"></td>
                 <td><input type="text" class="field-vendor" value="${inv.vendor_name || ''}"></td>
@@ -234,6 +247,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Sync input values with invoice state, calculate 50% split, and POST update to database
     function updateStateFromRow(rowEl, index) {
+        const branch = rowEl.querySelector('.field-branch').value.trim() || 'Unassigned';
+        const gstin = rowEl.querySelector('.field-gstin').value.trim() || 'N/A';
         const invNum = rowEl.querySelector('.field-number').value;
         const invDate = rowEl.querySelector('.field-date').value;
         const vendor = rowEl.querySelector('.field-vendor').value;
@@ -248,6 +263,8 @@ document.addEventListener('DOMContentLoaded', () => {
         // Update local state
         invoices[index] = {
             ...invoices[index],
+            branch: branch,
+            gstin: gstin,
             invoice_number: invNum,
             invoice_date: invDate,
             vendor_name: vendor,
@@ -258,6 +275,7 @@ document.addEventListener('DOMContentLoaded', () => {
             eligible_itc: halfGst,
             ineligible_itc: halfGst
         };
+        updateBranchSuggestions();
 
         // Sync with Postgres database
         fetch('/api/save-invoice', {

@@ -135,6 +135,13 @@
                     <p class="panel-subtitle">Upload multiple purchase registers, invoices, or utility bills</p>
                 </div>
                 
+                <div class="branch-input-row">
+                    <label for="branch-input"><i class="fa-solid fa-code-branch"></i> Branch</label>
+                    <input type="text" id="branch-input" list="branch-suggestions" placeholder="e.g. Ashram Road" autocomplete="off">
+                    <datalist id="branch-suggestions"></datalist>
+                    <span class="branch-input-hint">Applied to all files uploaded together below</span>
+                </div>
+
                 <div class="drop-zone" id="drop-zone">
                     <div class="drop-zone-content">
                         <i class="fa-solid fa-cloud-arrow-up cloud-icon"></i>
@@ -187,22 +194,24 @@
                     <table class="invoice-table" id="invoice-table">
                         <thead>
                             <tr>
-                                <th width="9%">Invoice #</th>
-                                <th width="9%">Date</th>
-                                <th width="16%">Vendor Name</th>
-                                <th width="11%">Taxable Value (₹)</th>
-                                <th width="10%">CGST (₹)</th>
-                                <th width="10%">SGST (₹)</th>
-                                <th width="9%">IGST (₹)</th>
-                                <th width="11%" class="th-green">Eligible ITC (50%)</th>
-                                <th width="11%" class="th-red">Ineligible ITC (50%)</th>
-                                {% if is_admin %}<th width="9%" class="col-owner">Uploaded By</th>{% endif %}
+                                <th width="8%">Branch</th>
+                                <th width="9%">GST No</th>
+                                <th width="8%">Invoice #</th>
+                                <th width="8%">Date</th>
+                                <th width="13%">Vendor Name</th>
+                                <th width="9%">Taxable Value (₹)</th>
+                                <th width="8%">CGST (₹)</th>
+                                <th width="8%">SGST (₹)</th>
+                                <th width="7%">IGST (₹)</th>
+                                <th width="9%" class="th-green">Eligible ITC (50%)</th>
+                                <th width="9%" class="th-red">Ineligible ITC (50%)</th>
+                                {% if is_admin %}<th width="8%" class="col-owner">Uploaded By</th>{% endif %}
                                 <th width="4%">Actions</th>
                             </tr>
                         </thead>
                         <tbody id="invoice-table-body">
                             <tr class="empty-state-row">
-                                <td colspan="{{ 11 if is_admin else 10 }}">
+                                <td colspan="{{ 13 if is_admin else 12 }}">
                                     <div class="empty-state">
                                         <i class="fa-solid fa-receipt"></i>
                                         <p>No invoices processed yet. Drag & drop or upload files above to automatically extract values and calculate 50% GST credit.</p>

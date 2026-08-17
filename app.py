@@ -85,6 +85,10 @@ def init_db():
         cur.execute('ALTER TABLE invoices ADD COLUMN IF NOT EXISTS file_mime_type VARCHAR(100);')
         cur.execute('ALTER TABLE invoices ADD COLUMN IF NOT EXISTS file_name VARCHAR(255);')
 
+        # Migrate existing installs that predate the branch/GSTIN columns
+        cur.execute('ALTER TABLE invoices ADD COLUMN IF NOT EXISTS branch VARCHAR(100);')
+        cur.execute('ALTER TABLE invoices ADD COLUMN IF NOT EXISTS gstin VARCHAR(20);')
+
 
         conn.commit()
         
@@ -115,6 +119,8 @@ def init_db():
         cur.execute("UPDATE invoices SET igst = 0 WHERE igst IS NULL;")
         cur.execute("UPDATE invoices SET eligible_itc = 0 WHERE eligible_itc IS NULL;")
         cur.execute("UPDATE invoices SET ineligible_itc = 0 WHERE ineligible_itc IS NULL;")
+        cur.execute("UPDATE invoices SET branch = 'Unassigned' WHERE branch IS NULL OR branch = '';")
+        cur.execute("UPDATE invoices SET gstin = 'N/A' WHERE gstin IS NULL OR gstin = '';")
         conn.commit()
 
         cur.close()
@@ -186,6 +192,7 @@ def extract_from_text(text):
     - Invoice Number (invoice_number)
     - Invoice Date (invoice_date)
     - Vendor Name (vendor_name)
+    - Vendor GSTIN (gstin) - The vendor's/supplier's GST registration number, if present
     - Taxable Value (taxable_value) - The value before taxes
     - CGST Amount (cgst)
     - SGST Amount (sgst)
@@ -201,6 +208,7 @@ def extract_from_text(text):
       "invoice_number": "...",
       "invoice_date": "...",
       "vendor_name": "...",
+      "gstin": "...",
       "taxable_value": 0.0,
       "cgst": 0.0,
       "sgst": 0.0,
@@ -232,8 +240,8 @@ def extract_from_image(base64_data, mime_type):
         "Do not include any explanation or markdown formatting outside the JSON."
     )
     
-    user_prompt = "Extract invoice details: invoice_number, invoice_date, vendor_name, taxable_value, cgst, sgst, igst."
-    
+    user_prompt = "Extract invoice details: invoice_number, invoice_date, vendor_name, gstin (vendor's GST registration number, if present), taxable_value, cgst, sgst, igst."
+
     payload = {
         "model": "claude-sonnet-4-6",
         "max_tokens": 1000,
@@ -274,8 +282,8 @@ def extract_from_pdf_binary(base64_pdf):
         "Do not include any explanation or markdown formatting outside the JSON."
     )
     
-    user_prompt = "Extract invoice details: invoice_number, invoice_date, vendor_name, taxable_value, cgst, sgst, igst."
-    
+    user_prompt = "Extract invoice details: invoice_number, invoice_date, vendor_name, gstin (vendor's GST registration number, if present), taxable_value, cgst, sgst, igst."
+
     payload = {
         "model": "claude-sonnet-4-6",
         "max_tokens": 1000,
@@ -333,6 +341,7 @@ def parse_excel_register(file_bytes):
     cgst_cols = ["cgst", "cgstamount", "cgstamt", "centraltax"]
     sgst_cols = ["sgst", "sgstamount", "sgstamt", "statetax", "utgst", "unionterritorytax"]
     igst_cols = ["igst", "igstamount", "igstamt", "integratedtax"]
+    gstin_cols = ["gstin", "gstno", "gstnumber", "vendorgstin", "suppliergstin", "gstregistrationnumber"]
 
     col_num = find_column(inv_num_cols)
     col_date = find_column(inv_date_cols)
@@ -341,6 +350,7 @@ def parse_excel_register(file_bytes):
     col_cgst = find_column(cgst_cols)
     col_sgst = find_column(sgst_cols)
     col_igst = find_column(igst_cols)
+    col_gstin = find_column(gstin_cols)
 
     if not col_vendor and len(orig_cols) > 0: col_vendor = orig_cols[0]
     if not col_num and len(orig_cols) > 1: col_num = orig_cols[1]
@@ -352,16 +362,18 @@ def parse_excel_register(file_bytes):
             vendor = str(row[col_vendor]) if col_vendor and pd.notna(row[col_vendor]) else "Unknown Vendor"
             inv_no = str(row[col_num]) if col_num and pd.notna(row[col_num]) else "N/A"
             inv_date = str(row[col_date]).split(" ")[0] if col_date and pd.notna(row[col_date]) else "N/A"
-            
+            gstin = str(row[col_gstin]) if col_gstin and pd.notna(row[col_gstin]) else "N/A"
+
             taxable = float(row[col_taxable]) if col_taxable and pd.notna(row[col_taxable]) else 0.0
             cgst = float(row[col_cgst]) if col_cgst and pd.notna(row[col_cgst]) else 0.0
             sgst = float(row[col_sgst]) if col_sgst and pd.notna(row[col_sgst]) else 0.0
             igst = float(row[col_igst]) if col_igst and pd.notna(row[col_igst]) else 0.0
-            
+
             invoices.append({
                 "invoice_number": inv_no,
                 "invoice_date": inv_date,
                 "vendor_name": vendor,
+                "gstin": gstin,
                 "taxable_value": taxable,
                 "cgst": cgst,
                 "sgst": sgst,
@@ -499,7 +511,7 @@ def get_invoices():
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         if is_admin:
             cur.execute('''
-                SELECT invoices.id, invoice_number, invoice_date, vendor_name,
+                SELECT invoices.id, invoice_number, invoice_date, vendor_name, gstin, branch,
                        taxable_value::float, cgst::float, sgst::float, igst::float,
                        eligible_itc::float, ineligible_itc::float, users.username,
                        (file_data IS NOT NULL) AS has_file
@@ -509,7 +521,7 @@ def get_invoices():
             ''')
         else:
             cur.execute('''
-                SELECT id, invoice_number, invoice_date, vendor_name,
+                SELECT id, invoice_number, invoice_date, vendor_name, gstin, branch,
                        taxable_value::float, cgst::float, sgst::float, igst::float,
                        eligible_itc::float, ineligible_itc::float,
                        (file_data IS NOT NULL) AS has_file
@@ -534,16 +546,18 @@ def save_invoice():
     inv_num = inv.get('invoice_number', '')
     inv_date = inv.get('invoice_date', '')
     vendor = inv.get('vendor_name', '')
+    gstin = inv.get('gstin', '') or 'N/A'
+    branch = inv.get('branch', '') or 'Unassigned'
     taxable = float(inv.get('taxable_value', 0.0))
     cgst = float(inv.get('cgst', 0.0))
     sgst = float(inv.get('sgst', 0.0))
     igst = float(inv.get('igst', 0.0))
-    
+
     # Recalculate 50% split on server to ensure precision
     total_gst = cgst + sgst + igst
     eligible = round(total_gst * 0.5, 2)
     ineligible = round(total_gst * 0.5, 2)
-    
+
     is_admin = is_admin_user()
 
     try:
@@ -555,26 +569,26 @@ def save_invoice():
             if is_admin:
                 cur.execute('''
                     UPDATE invoices
-                    SET invoice_number = %s, invoice_date = %s, vendor_name = %s,
+                    SET invoice_number = %s, invoice_date = %s, vendor_name = %s, gstin = %s, branch = %s,
                         taxable_value = %s, cgst = %s, sgst = %s, igst = %s,
                         eligible_itc = %s, ineligible_itc = %s
                     WHERE id = %s
-                ''', (inv_num, inv_date, vendor, taxable, cgst, sgst, igst, eligible, ineligible, db_id))
+                ''', (inv_num, inv_date, vendor, gstin, branch, taxable, cgst, sgst, igst, eligible, ineligible, db_id))
             else:
                 cur.execute('''
                     UPDATE invoices
-                    SET invoice_number = %s, invoice_date = %s, vendor_name = %s,
+                    SET invoice_number = %s, invoice_date = %s, vendor_name = %s, gstin = %s, branch = %s,
                         taxable_value = %s, cgst = %s, sgst = %s, igst = %s,
                         eligible_itc = %s, ineligible_itc = %s
                     WHERE id = %s AND user_id = %s
-                ''', (inv_num, inv_date, vendor, taxable, cgst, sgst, igst, eligible, ineligible, db_id, user_id))
+                ''', (inv_num, inv_date, vendor, gstin, branch, taxable, cgst, sgst, igst, eligible, ineligible, db_id, user_id))
             ret_id = db_id
         else:
             # Insert new invoice
             cur.execute('''
-                INSERT INTO invoices (user_id, invoice_number, invoice_date, vendor_name, taxable_value, cgst, sgst, igst, eligible_itc, ineligible_itc)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
-            ''', (user_id, inv_num, inv_date, vendor, taxable, cgst, sgst, igst, eligible, ineligible))
+                INSERT INTO invoices (user_id, invoice_number, invoice_date, vendor_name, gstin, branch, taxable_value, cgst, sgst, igst, eligible_itc, ineligible_itc)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
+            ''', (user_id, inv_num, inv_date, vendor, gstin, branch, taxable, cgst, sgst, igst, eligible, ineligible))
             ret_id = cur.fetchone()[0]
             
         conn.commit()
@@ -665,8 +679,9 @@ def process_invoices():
     user_id = session['user_id']
     if 'files[]' not in request.files:
         return jsonify({"error": "No files uploaded"}), 400
-        
+
     files = request.files.getlist('files[]')
+    branch = request.form.get('branch', '').strip() or 'Unassigned'
     results = []
     
     for file in files:
@@ -729,6 +744,7 @@ def process_invoices():
                 inv["invoice_number"] = inv.get("invoice_number") or "N/A"
                 inv["invoice_date"] = inv.get("invoice_date") or "N/A"
                 inv["vendor_name"] = inv.get("vendor_name") or "Unknown Vendor"
+                inv["gstin"] = inv.get("gstin") or "N/A"
                 for field in ("taxable_value", "cgst", "sgst", "igst"):
                     try:
                         inv[field] = float(inv.get(field) or 0.0)
@@ -738,11 +754,11 @@ def process_invoices():
                 total_gst = inv["cgst"] + inv["sgst"] + inv["igst"]
                 eligible = round(total_gst * 0.5, 2)
                 ineligible = round(total_gst * 0.5, 2)
-                
+
                 cur.execute('''
-                    INSERT INTO invoices (user_id, invoice_number, invoice_date, vendor_name, taxable_value, cgst, sgst, igst, eligible_itc, ineligible_itc, file_data, file_mime_type, file_name)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
-                ''', (user_id, inv["invoice_number"], inv["invoice_date"], inv["vendor_name"],
+                    INSERT INTO invoices (user_id, invoice_number, invoice_date, vendor_name, gstin, branch, taxable_value, cgst, sgst, igst, eligible_itc, ineligible_itc, file_data, file_mime_type, file_name)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
+                ''', (user_id, inv["invoice_number"], inv["invoice_date"], inv["vendor_name"], inv["gstin"], branch,
                       inv["taxable_value"], inv["cgst"], inv["sgst"], inv["igst"],
                       eligible, ineligible,
                       psycopg2.Binary(store_file_bytes) if store_file_bytes else None,
@@ -754,6 +770,8 @@ def process_invoices():
                     "invoice_number": inv["invoice_number"],
                     "invoice_date": inv["invoice_date"],
                     "vendor_name": inv["vendor_name"],
+                    "gstin": inv["gstin"],
+                    "branch": branch,
                     "taxable_value": inv["taxable_value"],
                     "cgst": inv["cgst"],
                     "sgst": inv["sgst"],
@@ -774,6 +792,8 @@ def process_invoices():
                 "invoice_number": "ERROR",
                 "invoice_date": "-",
                 "vendor_name": f"Failed to parse {filename}",
+                "gstin": "N/A",
+                "branch": branch,
                 "taxable_value": 0.0,
                 "cgst": 0.0,
                 "sgst": 0.0,
@@ -788,105 +808,171 @@ def process_invoices():
 @app.route('/api/export-excel', methods=['POST'])
 @login_required
 def export_excel():
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+
     data = request.json
     invoices = data.get('invoices', [])
-    
-    df = pd.DataFrame(invoices)
-    
-    # Cleanup keys
-    for col in ['filename', 'id', 'user_id']:
-        if col in df.columns:
-            df = df.drop(columns=[col])
-        
-    column_mapping = {
-        "invoice_number": "Invoice Number",
-        "invoice_date": "Invoice Date",
-        "vendor_name": "Vendor Name",
-        "taxable_value": "Taxable Value (INR)",
-        "cgst": "CGST (INR)",
-        "sgst": "SGST (INR)",
-        "igst": "IGST (INR)",
-        "eligible_itc": "Eligible ITC (50%)",
-        "ineligible_itc": "Ineligible ITC (50%)"
-    }
-    df = df.rename(columns=column_mapping)
-    
-    total_row = {
-        "Invoice Number": "TOTAL",
-        "Invoice Date": "",
-        "Vendor Name": "",
-        "Taxable Value (INR)": df["Taxable Value (INR)"].sum(),
-        "CGST (INR)": df["CGST (INR)"].sum(),
-        "SGST (INR)": df["SGST (INR)"].sum(),
-        "IGST (INR)": df["IGST (INR)"].sum(),
-        "Eligible ITC (50%)": df["Eligible ITC (50%)"].sum(),
-        "Ineligible ITC (50%)": df["Ineligible ITC (50%)"].sum()
-    }
-    
-    df = pd.concat([df, pd.DataFrame([total_row])], ignore_index=True)
-    output = io.BytesIO()
-    
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False, sheet_name="GST ITC Reconciled")
-        
-        workbook = writer.book
-        worksheet = writer.sheets["GST ITC Reconciled"]
-        
-        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-        
-        navy_header_fill = PatternFill(start_color="0A2540", end_color="0A2540", fill_type="solid")
-        total_fill = PatternFill(start_color="E6F4EA", end_color="E6F4EA", fill_type="solid")
-        white_font = Font(name="Arial", size=11, bold=True, color="FFFFFF")
-        bold_font = Font(name="Arial", size=11, bold=True)
-        regular_font = Font(name="Arial", size=10)
-        
-        thin_border = Border(
-            left=Side(style='thin', color='DDDDDD'), right=Side(style='thin', color='DDDDDD'),
-            top=Side(style='thin', color='DDDDDD'), bottom=Side(style='thin', color='DDDDDD')
-        )
-        
-        double_bottom_border = Border(
-            top=Side(style='thin', color='000000'), bottom=Side(style='double', color='000000')
-        )
-        
-        for col_idx in range(1, len(df.columns) + 1):
-            cell = worksheet.cell(row=1, column=col_idx)
+
+    # Normalize + compute the eligible/ineligible split per tax head (CGST/SGST/IGST),
+    # matching the bank's required reconciliation format instead of a single 50% total.
+    rows = []
+    for inv in invoices:
+        cgst = float(inv.get('cgst') or 0.0)
+        sgst = float(inv.get('sgst') or 0.0)
+        igst = float(inv.get('igst') or 0.0)
+        taxable = float(inv.get('taxable_value') or 0.0)
+        rows.append({
+            "branch": inv.get('branch') or 'Unassigned',
+            "gstin": inv.get('gstin') or 'N/A',
+            "invoice_date": inv.get('invoice_date') or '',
+            "vendor_name": inv.get('vendor_name') or '',
+            "invoice_number": inv.get('invoice_number') or '',
+            "taxable_value": taxable,
+            "cgst": cgst,
+            "sgst": sgst,
+            "igst": igst,
+            "total_invoice_value": taxable + cgst + sgst + igst,
+            "elig_cgst": round(cgst * 0.5, 2),
+            "elig_sgst": round(sgst * 0.5, 2),
+            "elig_igst": round(igst * 0.5, 2),
+            "inelig_cgst": round(cgst * 0.5, 2),
+            "inelig_sgst": round(sgst * 0.5, 2),
+            "inelig_igst": round(igst * 0.5, 2),
+        })
+
+    # Group by branch (blank/Unassigned sorted last), preserving upload order within a branch
+    branches = sorted(
+        {r["branch"] for r in rows},
+        key=lambda b: (b == 'Unassigned', b.lower())
+    )
+
+    NUMERIC_FIELDS = ["taxable_value", "cgst", "sgst", "igst", "total_invoice_value",
+                       "elig_cgst", "elig_sgst", "elig_igst", "inelig_cgst", "inelig_sgst", "inelig_igst"]
+
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "GST ITC Reconciled"
+
+    navy_header_fill = PatternFill(start_color="0A2540", end_color="0A2540", fill_type="solid")
+    subtotal_fill = PatternFill(start_color="DCE6F1", end_color="DCE6F1", fill_type="solid")
+    total_fill = PatternFill(start_color="E6F4EA", end_color="E6F4EA", fill_type="solid")
+    white_font = Font(name="Arial", size=11, bold=True, color="FFFFFF")
+    bold_font = Font(name="Arial", size=11, bold=True)
+    regular_font = Font(name="Arial", size=10)
+
+    thin_border = Border(
+        left=Side(style='thin', color='DDDDDD'), right=Side(style='thin', color='DDDDDD'),
+        top=Side(style='thin', color='DDDDDD'), bottom=Side(style='thin', color='DDDDDD')
+    )
+    double_bottom_border = Border(
+        top=Side(style='thin', color='000000'), bottom=Side(style='double', color='000000')
+    )
+
+    # ---- Header (two rows, with merged ELIGIBLE / INELIGIBLE groups) ----
+    single_headers = [
+        (1, "Branch"), (2, "GST No"), (3, "Date"), (4, "Vendor Name"), (5, "Invoice No"),
+        (6, "Taxable Value (INR)"), (7, "CGST (INR)"), (8, "SGST (INR)"), (9, "IGST (INR)"),
+        (10, "Total Invoice Value (INR)")
+    ]
+    for col_idx, label in single_headers:
+        worksheet.merge_cells(start_row=1, start_column=col_idx, end_row=2, end_column=col_idx)
+        worksheet.cell(row=1, column=col_idx, value=label)
+
+    worksheet.merge_cells(start_row=1, start_column=11, end_row=1, end_column=13)
+    worksheet.cell(row=1, column=11, value="ELIGIBLE ITC (50%)")
+    worksheet.merge_cells(start_row=1, start_column=14, end_row=1, end_column=16)
+    worksheet.cell(row=1, column=14, value="INELIGIBLE ITC (50%)")
+
+    for col_idx, label in [(11, "CGST"), (12, "SGST"), (13, "IGST"), (14, "CGST"), (15, "SGST"), (16, "IGST")]:
+        worksheet.cell(row=2, column=col_idx, value=label)
+
+    total_cols = 16
+    for row_idx in (1, 2):
+        for col_idx in range(1, total_cols + 1):
+            cell = worksheet.cell(row=row_idx, column=col_idx)
             cell.fill = navy_header_fill
             cell.font = white_font
             cell.alignment = Alignment(horizontal="center", vertical="center")
-            
-        max_row = worksheet.max_row
-        for row_idx in range(2, max_row):
-            for col_idx in range(1, len(df.columns) + 1):
-                cell = worksheet.cell(row=row_idx, column=col_idx)
+
+    # ---- Data rows, grouped by branch with a subtotal row per branch ----
+    row_idx = 3
+    grand_totals = {f: 0.0 for f in NUMERIC_FIELDS}
+
+    for branch in branches:
+        branch_rows = [r for r in rows if r["branch"] == branch]
+        branch_totals = {f: 0.0 for f in NUMERIC_FIELDS}
+
+        for r in branch_rows:
+            values = [
+                r["branch"], r["gstin"], r["invoice_date"], r["vendor_name"], r["invoice_number"],
+                r["taxable_value"], r["cgst"], r["sgst"], r["igst"], r["total_invoice_value"],
+                r["elig_cgst"], r["elig_sgst"], r["elig_igst"], r["inelig_cgst"], r["inelig_sgst"], r["inelig_igst"]
+            ]
+            for col_idx, val in enumerate(values, start=1):
+                cell = worksheet.cell(row=row_idx, column=col_idx, value=val)
                 cell.font = regular_font
                 cell.border = thin_border
-                
-                if col_idx >= 4:
+                if col_idx >= 6:
                     cell.alignment = Alignment(horizontal="right")
                     cell.number_format = '#,##0.00'
                 else:
                     cell.alignment = Alignment(horizontal="left")
-                    
-        for col_idx in range(1, len(df.columns) + 1):
-            cell = worksheet.cell(row=max_row, column=col_idx)
+            for f in NUMERIC_FIELDS:
+                branch_totals[f] += r[f]
+                grand_totals[f] += r[f]
+            row_idx += 1
+
+        # Branch subtotal row
+        subtotal_values = [f"{branch} - Subtotal", "", "", "", "",
+                            branch_totals["taxable_value"], branch_totals["cgst"], branch_totals["sgst"],
+                            branch_totals["igst"], branch_totals["total_invoice_value"],
+                            branch_totals["elig_cgst"], branch_totals["elig_sgst"], branch_totals["elig_igst"],
+                            branch_totals["inelig_cgst"], branch_totals["inelig_sgst"], branch_totals["inelig_igst"]]
+        for col_idx, val in enumerate(subtotal_values, start=1):
+            cell = worksheet.cell(row=row_idx, column=col_idx, value=val)
             cell.font = bold_font
-            cell.fill = total_fill
-            cell.border = double_bottom_border
-            if col_idx >= 4:
+            cell.fill = subtotal_fill
+            cell.border = thin_border
+            if col_idx >= 6:
                 cell.alignment = Alignment(horizontal="right")
                 cell.number_format = '#,##0.00'
-                
-        for col in worksheet.columns:
-            max_len = 0
-            col_letter = col[0].column_letter
-            for cell in col:
-                val_to_check = str(cell.value or '')
+        row_idx += 1
+
+    # ---- Grand total row ----
+    grand_total_values = ["GRAND TOTAL", "", "", "", "",
+                           grand_totals["taxable_value"], grand_totals["cgst"], grand_totals["sgst"],
+                           grand_totals["igst"], grand_totals["total_invoice_value"],
+                           grand_totals["elig_cgst"], grand_totals["elig_sgst"], grand_totals["elig_igst"],
+                           grand_totals["inelig_cgst"], grand_totals["inelig_sgst"], grand_totals["inelig_igst"]]
+    for col_idx, val in enumerate(grand_total_values, start=1):
+        cell = worksheet.cell(row=row_idx, column=col_idx, value=val)
+        cell.font = bold_font
+        cell.fill = total_fill
+        cell.border = double_bottom_border
+        if col_idx >= 6:
+            cell.alignment = Alignment(horizontal="right")
+            cell.number_format = '#,##0.00'
+
+    # ---- Autofit columns ----
+    for col_idx in range(1, total_cols + 1):
+        col_letter = get_column_letter(col_idx)
+        max_len = 0
+        for row in worksheet.iter_rows(min_col=col_idx, max_col=col_idx):
+            for cell in row:
+                if cell.value is None:
+                    continue
+                val_to_check = str(cell.value)
                 if cell.number_format == '#,##0.00' and isinstance(cell.value, (int, float)):
                     val_to_check = f"{cell.value:,.2f}"
                 max_len = max(max_len, len(val_to_check))
-            worksheet.column_dimensions[col_letter].width = max(max_len + 3, 12)
-            
+        worksheet.column_dimensions[col_letter].width = max(max_len + 3, 12)
+
+    worksheet.freeze_panes = "A3"
+
+    output = io.BytesIO()
+    workbook.save(output)
     output.seek(0)
 
     return send_file(
