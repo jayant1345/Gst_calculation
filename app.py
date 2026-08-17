@@ -192,7 +192,11 @@ def extract_from_text(text):
     - Invoice Number (invoice_number)
     - Invoice Date (invoice_date)
     - Vendor Name (vendor_name)
-    - Vendor GSTIN (gstin) - The vendor's/supplier's GST registration number, if present
+    - Vendor GSTIN (gstin) - The SELLER/SUPPLIER's own GST registration number (usually printed
+      near the letterhead, or near the signature/footer). Do NOT use the buyer/recipient's GSTIN,
+      which is often printed next to the "M/s" or "Bill To" / customer name-and-address block -
+      that number belongs to the customer, not the vendor. If only a buyer GSTIN is visible and no
+      distinct seller GSTIN appears anywhere on the invoice, leave this blank rather than guessing.
     - Taxable Value (taxable_value) - The value before taxes
     - CGST Amount (cgst)
     - SGST Amount (sgst)
@@ -240,7 +244,13 @@ def extract_from_image(base64_data, mime_type):
         "Do not include any explanation or markdown formatting outside the JSON."
     )
     
-    user_prompt = "Extract invoice details: invoice_number, invoice_date, vendor_name, gstin (vendor's GST registration number, if present), taxable_value, cgst, sgst, igst."
+    user_prompt = (
+        "Extract invoice details: invoice_number, invoice_date, vendor_name, "
+        "gstin (the SELLER/SUPPLIER's own GST registration number - usually near the letterhead "
+        "or signature/footer; do NOT use the buyer/recipient's GSTIN, often printed next to the "
+        "'M/s' or 'Bill To' customer block - leave blank if no distinct seller GSTIN is visible), "
+        "taxable_value, cgst, sgst, igst."
+    )
 
     payload = {
         "model": "claude-sonnet-4-6",
@@ -282,7 +292,13 @@ def extract_from_pdf_binary(base64_pdf):
         "Do not include any explanation or markdown formatting outside the JSON."
     )
     
-    user_prompt = "Extract invoice details: invoice_number, invoice_date, vendor_name, gstin (vendor's GST registration number, if present), taxable_value, cgst, sgst, igst."
+    user_prompt = (
+        "Extract invoice details: invoice_number, invoice_date, vendor_name, "
+        "gstin (the SELLER/SUPPLIER's own GST registration number - usually near the letterhead "
+        "or signature/footer; do NOT use the buyer/recipient's GSTIN, often printed next to the "
+        "'M/s' or 'Bill To' customer block - leave blank if no distinct seller GSTIN is visible), "
+        "taxable_value, cgst, sgst, igst."
+    )
 
     payload = {
         "model": "claude-sonnet-4-6",
