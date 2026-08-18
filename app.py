@@ -351,13 +351,14 @@ def parse_excel_register(file_bytes):
         return None
 
     inv_num_cols = ["invoicenumber", "invoiceno", "invno", "invoicenum", "billno", "documentnumber", "docno"]
-    inv_date_cols = ["invoicedate", "invdate", "billdate", "documentdate", "docdate", "date"]
+    inv_date_cols = ["invoicedate", "invdate", "billdate", "documentdate", "docdate", "date", "inovicedate"]
     vendor_cols = ["vendorname", "suppliername", "partyname", "vendor", "supplier", "party", "legalname"]
     taxable_cols = ["taxablevalue", "taxableamt", "taxableamount", "assessablevalue", "taxval", "value"]
     cgst_cols = ["cgst", "cgstamount", "cgstamt", "centraltax"]
     sgst_cols = ["sgst", "sgstamount", "sgstamt", "statetax", "utgst", "unionterritorytax"]
     igst_cols = ["igst", "igstamount", "igstamt", "integratedtax"]
     gstin_cols = ["gstin", "gstno", "gstnumber", "vendorgstin", "suppliergstin", "gstregistrationnumber"]
+    branch_cols = ["branch", "branchname", "location", "office", "unit"]
 
     col_num = find_column(inv_num_cols)
     col_date = find_column(inv_date_cols)
@@ -367,9 +368,13 @@ def parse_excel_register(file_bytes):
     col_sgst = find_column(sgst_cols)
     col_igst = find_column(igst_cols)
     col_gstin = find_column(gstin_cols)
+    col_branch = find_column(branch_cols)
 
+    # Positional fallback only makes sense for legacy 3-column registers (vendor, invoice no,
+    # date with no headers). It's intentionally NOT applied to invoice number, since manual-bill
+    # templates put GST No / Branch in those early columns and would otherwise get misread as
+    # invoice numbers.
     if not col_vendor and len(orig_cols) > 0: col_vendor = orig_cols[0]
-    if not col_num and len(orig_cols) > 1: col_num = orig_cols[1]
     if not col_date and len(orig_cols) > 2: col_date = orig_cols[2]
 
     invoices = []
@@ -379,6 +384,7 @@ def parse_excel_register(file_bytes):
             inv_no = str(row[col_num]) if col_num and pd.notna(row[col_num]) else "N/A"
             inv_date = str(row[col_date]).split(" ")[0] if col_date and pd.notna(row[col_date]) else "N/A"
             gstin = str(row[col_gstin]) if col_gstin and pd.notna(row[col_gstin]) else "N/A"
+            branch = str(row[col_branch]).strip() if col_branch and pd.notna(row[col_branch]) else None
 
             taxable = float(row[col_taxable]) if col_taxable and pd.notna(row[col_taxable]) else 0.0
             cgst = float(row[col_cgst]) if col_cgst and pd.notna(row[col_cgst]) else 0.0
@@ -390,6 +396,7 @@ def parse_excel_register(file_bytes):
                 "invoice_date": inv_date,
                 "vendor_name": vendor,
                 "gstin": gstin,
+                "branch": branch,
                 "taxable_value": taxable,
                 "cgst": cgst,
                 "sgst": sgst,
@@ -697,7 +704,7 @@ def process_invoices():
         return jsonify({"error": "No files uploaded"}), 400
 
     files = request.files.getlist('files[]')
-    branch = request.form.get('branch', '').strip() or 'Unassigned'
+    batch_branch = request.form.get('branch', '').strip()
     results = []
     
     for file in files:
@@ -761,6 +768,10 @@ def process_invoices():
                 inv["invoice_date"] = inv.get("invoice_date") or "N/A"
                 inv["vendor_name"] = inv.get("vendor_name") or "Unknown Vendor"
                 inv["gstin"] = inv.get("gstin") or "N/A"
+                # A bulk manual-bill sheet may carry its own Branch column per row (multiple
+                # branches combined in one file); otherwise fall back to the single branch
+                # entered for this upload batch.
+                inv["branch"] = inv.get("branch") or batch_branch or "Unassigned"
                 for field in ("taxable_value", "cgst", "sgst", "igst"):
                     try:
                         inv[field] = float(inv.get(field) or 0.0)
@@ -774,7 +785,7 @@ def process_invoices():
                 cur.execute('''
                     INSERT INTO invoices (user_id, invoice_number, invoice_date, vendor_name, gstin, branch, taxable_value, cgst, sgst, igst, eligible_itc, ineligible_itc, file_data, file_mime_type, file_name)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
-                ''', (user_id, inv["invoice_number"], inv["invoice_date"], inv["vendor_name"], inv["gstin"], branch,
+                ''', (user_id, inv["invoice_number"], inv["invoice_date"], inv["vendor_name"], inv["gstin"], inv["branch"],
                       inv["taxable_value"], inv["cgst"], inv["sgst"], inv["igst"],
                       eligible, ineligible,
                       psycopg2.Binary(store_file_bytes) if store_file_bytes else None,
@@ -787,7 +798,7 @@ def process_invoices():
                     "invoice_date": inv["invoice_date"],
                     "vendor_name": inv["vendor_name"],
                     "gstin": inv["gstin"],
-                    "branch": branch,
+                    "branch": inv["branch"],
                     "taxable_value": inv["taxable_value"],
                     "cgst": inv["cgst"],
                     "sgst": inv["sgst"],
@@ -809,7 +820,7 @@ def process_invoices():
                 "invoice_date": "-",
                 "vendor_name": f"Failed to parse {filename}",
                 "gstin": "N/A",
-                "branch": branch,
+                "branch": batch_branch or "Unassigned",
                 "taxable_value": 0.0,
                 "cgst": 0.0,
                 "sgst": 0.0,

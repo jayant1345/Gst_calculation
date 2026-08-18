@@ -23,6 +23,18 @@ document.addEventListener('DOMContentLoaded', () => {
     // Button Elements
     const btnClearAll = document.getElementById('btn-clear-all');
     const btnExportExcel = document.getElementById('btn-export-excel');
+    const btnAddManual = document.getElementById('btn-add-manual');
+
+    // Manual Bill Modal Elements
+    const manualBillOverlay = document.getElementById('manual-bill-overlay');
+    const manualBillForm = document.getElementById('manual-bill-form');
+    const manualBillClose = document.getElementById('manual-bill-close');
+    const manualBillCancel = document.getElementById('manual-bill-cancel');
+    const mbDirectFields = document.getElementById('mb-direct-fields');
+    const mbAutoFields = document.getElementById('mb-auto-fields');
+    const mbPreview = document.getElementById('mb-preview');
+    const mbRate = document.getElementById('mb-rate');
+    const mbCustomRateField = document.getElementById('mb-custom-rate-field');
 
     // Load saved invoices from PostgreSQL on initial load
     loadInvoices();
@@ -406,6 +418,155 @@ document.addEventListener('DOMContentLoaded', () => {
                 alert('Failed to clear invoices from database.');
             });
         }
+    });
+
+    // ---- Manual Bill Entry (no physical/soft copy available) ----
+    function openManualBillModal() {
+        manualBillForm.reset();
+        document.getElementById('mb-branch').value = branchInput.value.trim();
+        mbDirectFields.style.display = 'grid';
+        mbAutoFields.style.display = 'none';
+        mbPreview.style.display = 'none';
+        mbCustomRateField.style.display = 'none';
+        manualBillOverlay.style.display = 'flex';
+        document.getElementById('mb-branch').focus();
+    }
+
+    function closeManualBillModal() {
+        manualBillOverlay.style.display = 'none';
+    }
+
+    btnAddManual.addEventListener('click', openManualBillModal);
+    manualBillClose.addEventListener('click', closeManualBillModal);
+    manualBillCancel.addEventListener('click', closeManualBillModal);
+    manualBillOverlay.addEventListener('click', (e) => {
+        if (e.target === manualBillOverlay) closeManualBillModal();
+    });
+
+    // Toggle between "enter tax amounts directly" and "enter total, auto-split GST"
+    manualBillForm.querySelectorAll('input[name="mb-mode"]').forEach(radio => {
+        radio.addEventListener('change', () => {
+            const isAuto = manualBillForm.querySelector('input[name="mb-mode"]:checked').value === 'auto';
+            mbDirectFields.style.display = isAuto ? 'none' : 'grid';
+            mbAutoFields.style.display = isAuto ? 'grid' : 'none';
+            mbPreview.style.display = isAuto ? 'block' : 'none';
+            if (isAuto) updateAutoSplitPreview();
+        });
+    });
+
+    mbRate.addEventListener('change', () => {
+        mbCustomRateField.style.display = mbRate.value === 'custom' ? 'block' : 'none';
+        updateAutoSplitPreview();
+    });
+
+    ['mb-total', 'mb-custom-rate', 'mb-supply-type'].forEach(id => {
+        document.getElementById(id).addEventListener('input', updateAutoSplitPreview);
+        document.getElementById(id).addEventListener('change', updateAutoSplitPreview);
+    });
+
+    // Back-calculates taxable value + CGST/SGST/IGST from a tax-inclusive total amount
+    function computeGstSplit() {
+        const total = parseFloat(document.getElementById('mb-total').value) || 0;
+        const rateSelection = mbRate.value;
+        const rate = rateSelection === 'custom'
+            ? (parseFloat(document.getElementById('mb-custom-rate').value) || 0)
+            : parseFloat(rateSelection);
+        const supplyType = document.getElementById('mb-supply-type').value;
+
+        const taxable = rate > 0 ? total / (1 + rate / 100) : total;
+        const taxAmount = total - taxable;
+
+        let cgst = 0, sgst = 0, igst = 0;
+        if (supplyType === 'intra') {
+            cgst = taxAmount / 2;
+            sgst = taxAmount / 2;
+        } else {
+            igst = taxAmount;
+        }
+
+        return {
+            taxable_value: Math.round(taxable * 100) / 100,
+            cgst: Math.round(cgst * 100) / 100,
+            sgst: Math.round(sgst * 100) / 100,
+            igst: Math.round(igst * 100) / 100
+        };
+    }
+
+    function updateAutoSplitPreview() {
+        const split = computeGstSplit();
+        document.getElementById('mb-preview-taxable').textContent = `₹${split.taxable_value.toFixed(2)}`;
+        document.getElementById('mb-preview-cgst').textContent = `₹${split.cgst.toFixed(2)}`;
+        document.getElementById('mb-preview-sgst').textContent = `₹${split.sgst.toFixed(2)}`;
+        document.getElementById('mb-preview-igst').textContent = `₹${split.igst.toFixed(2)}`;
+    }
+
+    manualBillForm.addEventListener('submit', (e) => {
+        e.preventDefault();
+
+        const isAuto = manualBillForm.querySelector('input[name="mb-mode"]:checked').value === 'auto';
+        let taxable, cgst, sgst, igst;
+
+        if (isAuto) {
+            const split = computeGstSplit();
+            taxable = split.taxable_value;
+            cgst = split.cgst;
+            sgst = split.sgst;
+            igst = split.igst;
+        } else {
+            taxable = parseFloat(document.getElementById('mb-taxable').value) || 0;
+            cgst = parseFloat(document.getElementById('mb-cgst').value) || 0;
+            sgst = parseFloat(document.getElementById('mb-sgst').value) || 0;
+            igst = parseFloat(document.getElementById('mb-igst').value) || 0;
+        }
+
+        const newInvoice = {
+            id: null,
+            branch: document.getElementById('mb-branch').value.trim() || 'Unassigned',
+            gstin: document.getElementById('mb-gstin').value.trim() || 'N/A',
+            invoice_number: 'N/A',
+            invoice_date: document.getElementById('mb-date').value.trim() || 'N/A',
+            vendor_name: document.getElementById('mb-party').value.trim() || 'Unknown Vendor',
+            taxable_value: taxable,
+            cgst: cgst,
+            sgst: sgst,
+            igst: igst,
+            eligible_itc: (cgst + sgst + igst) * 0.5,
+            ineligible_itc: (cgst + sgst + igst) * 0.5
+        };
+
+        const saveBtn = document.getElementById('manual-bill-save');
+        saveBtn.disabled = true;
+        saveBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving...';
+
+        fetch('/api/save-invoice', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(newInvoice)
+        })
+        .then(response => {
+            if (!response.ok) throw new Error('Failed to save manual bill');
+            return response.json();
+        })
+        .then(data => {
+            if (data.success) {
+                newInvoice.id = data.id;
+                newInvoice.eligible_itc = data.eligible_itc;
+                newInvoice.ineligible_itc = data.ineligible_itc;
+                invoices = [newInvoice, ...invoices];
+                renderTable();
+                updateMetrics();
+                updateBranchSuggestions();
+                closeManualBillModal();
+            }
+        })
+        .catch(error => {
+            console.error('Error saving manual bill:', error);
+            alert('Failed to save the manual bill. Check connection.');
+        })
+        .finally(() => {
+            saveBtn.disabled = false;
+            saveBtn.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Save Bill';
+        });
     });
 
     // Export to Excel

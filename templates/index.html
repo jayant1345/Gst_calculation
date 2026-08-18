@@ -132,9 +132,9 @@
             <section class="dashboard-panel upload-panel">
                 <div class="panel-header">
                     <h2><i class="fa-solid fa-file-arrow-up"></i> Ingest Invoice Data</h2>
-                    <p class="panel-subtitle">Upload multiple purchase registers, invoices, or utility bills</p>
+                    <p class="panel-subtitle">Upload multiple purchase registers, invoices, or utility bills. No physical/soft copy? Use <strong>+ Add Manual Bill</strong> below, or prepare one xlsx/csv with columns Branch, GST No, Date, Party Name, Taxable Amount, CGST, SGST, IGST for several bills at once.</p>
                 </div>
-                
+
                 <div class="branch-input-row">
                     <label for="branch-input"><i class="fa-solid fa-code-branch"></i> Branch</label>
                     <input type="text" id="branch-input" list="branch-suggestions" placeholder="e.g. Ashram Road" autocomplete="off">
@@ -181,6 +181,9 @@
                             <i class="fa-solid fa-magnifying-glass"></i>
                             <input type="text" id="table-search" placeholder="Search vendor, invoice no...">
                         </div>
+                        <button class="btn btn-secondary" id="btn-add-manual">
+                            <i class="fa-solid fa-pen-to-square"></i> Add Manual Bill
+                        </button>
                         <button class="btn btn-secondary" id="btn-clear-all">
                             <i class="fa-solid fa-trash-can"></i> Clear All
                         </button>
@@ -223,6 +226,113 @@
                 </div>
             </section>
         </main>
+    </div>
+
+    <!-- Manual Bill Entry Modal -->
+    <div class="modal-overlay" id="manual-bill-overlay" style="display: none;">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3><i class="fa-solid fa-pen-to-square"></i> Add Manual Bill</h3>
+                <button type="button" class="modal-close" id="manual-bill-close" aria-label="Close">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+
+            <form id="manual-bill-form" class="modal-body">
+                <div class="form-grid">
+                    <div class="form-field">
+                        <label for="mb-branch">Branch</label>
+                        <input type="text" id="mb-branch" list="branch-suggestions" placeholder="e.g. Ashram Road" autocomplete="off">
+                    </div>
+                    <div class="form-field">
+                        <label for="mb-gstin">GST No</label>
+                        <input type="text" id="mb-gstin" placeholder="Vendor GSTIN (if known)" autocomplete="off">
+                    </div>
+                    <div class="form-field">
+                        <label for="mb-date">Invoice Date</label>
+                        <input type="text" id="mb-date" placeholder="DD-MM-YYYY" autocomplete="off">
+                    </div>
+                    <div class="form-field">
+                        <label for="mb-party">Party Name</label>
+                        <input type="text" id="mb-party" placeholder="Vendor / Party name" autocomplete="off">
+                    </div>
+                </div>
+
+                <div class="entry-mode-toggle">
+                    <label class="radio-pill">
+                        <input type="radio" name="mb-mode" value="direct" checked>
+                        <span>Enter Taxable + GST amounts</span>
+                    </label>
+                    <label class="radio-pill">
+                        <input type="radio" name="mb-mode" value="auto">
+                        <span>Enter Total Amount (auto-split GST)</span>
+                    </label>
+                </div>
+
+                <!-- Direct entry -->
+                <div class="form-grid" id="mb-direct-fields">
+                    <div class="form-field">
+                        <label for="mb-taxable">Taxable Value (₹)</label>
+                        <input type="number" step="0.01" id="mb-taxable" value="0.00">
+                    </div>
+                    <div class="form-field">
+                        <label for="mb-cgst">CGST (₹)</label>
+                        <input type="number" step="0.01" id="mb-cgst" value="0.00">
+                    </div>
+                    <div class="form-field">
+                        <label for="mb-sgst">SGST (₹)</label>
+                        <input type="number" step="0.01" id="mb-sgst" value="0.00">
+                    </div>
+                    <div class="form-field">
+                        <label for="mb-igst">IGST (₹)</label>
+                        <input type="number" step="0.01" id="mb-igst" value="0.00">
+                    </div>
+                </div>
+
+                <!-- Auto-split entry -->
+                <div class="form-grid" id="mb-auto-fields" style="display: none;">
+                    <div class="form-field">
+                        <label for="mb-total">Total Bill Amount (₹)</label>
+                        <input type="number" step="0.01" id="mb-total" value="0.00">
+                    </div>
+                    <div class="form-field">
+                        <label for="mb-rate">GST Rate</label>
+                        <select id="mb-rate">
+                            <option value="5">5%</option>
+                            <option value="12">12%</option>
+                            <option value="18" selected>18%</option>
+                            <option value="28">28%</option>
+                            <option value="custom">Custom</option>
+                        </select>
+                    </div>
+                    <div class="form-field" id="mb-custom-rate-field" style="display: none;">
+                        <label for="mb-custom-rate">Custom Rate (%)</label>
+                        <input type="number" step="0.01" id="mb-custom-rate" value="0.00">
+                    </div>
+                    <div class="form-field">
+                        <label for="mb-supply-type">Supply Type</label>
+                        <select id="mb-supply-type">
+                            <option value="intra">Intra-state (CGST + SGST)</option>
+                            <option value="inter">Inter-state (IGST)</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="auto-split-preview" id="mb-preview" style="display: none;">
+                    Taxable: <strong id="mb-preview-taxable">₹0.00</strong> &nbsp;|&nbsp;
+                    CGST: <strong id="mb-preview-cgst">₹0.00</strong> &nbsp;|&nbsp;
+                    SGST: <strong id="mb-preview-sgst">₹0.00</strong> &nbsp;|&nbsp;
+                    IGST: <strong id="mb-preview-igst">₹0.00</strong>
+                </div>
+
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" id="manual-bill-cancel">Cancel</button>
+                    <button type="submit" class="btn btn-primary" id="manual-bill-save">
+                        <i class="fa-solid fa-floppy-disk"></i> Save Bill
+                    </button>
+                </div>
+            </form>
+        </div>
     </div>
 
     <script>window.IS_ADMIN = {{ 'true' if is_admin else 'false' }};</script>
