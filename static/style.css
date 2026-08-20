@@ -51,6 +51,16 @@ body {
     min-width: 0;
 }
 
+/* Stage 2/3 tab-switcher wrapper divs are direct flex-items of
+   .main-content, which defaults them to min-width: auto -- letting the
+   wide reconciliation table push the whole layout wider instead of
+   scrolling inside .table-container. */
+.main-content > #view-stage2,
+.main-content > #view-stage3,
+.main-content > .control-center-grid {
+    min-width: 0;
+}
+
 /* Sidebar Navigation */
 .sidebar {
     background-color: var(--sidebar-bg);
