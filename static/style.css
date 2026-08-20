@@ -1419,6 +1419,10 @@ body {
     background-color: rgba(37, 99, 235, 0.02);
 }
 
+.recon-row.status-possible-match {
+    background-color: rgba(147, 51, 234, 0.03);
+}
+
 .value-diff {
     color: var(--accent-amber);
     font-weight: 600;
@@ -1452,6 +1456,11 @@ body {
 .badge-blue {
     background-color: rgba(37, 99, 235, 0.1);
     color: var(--accent-blue);
+}
+
+.badge-purple {
+    background-color: rgba(147, 51, 234, 0.1);
+    color: #9333ea;
 }
 
 .action-btn-cell {

@@ -844,6 +844,44 @@ def delete_invoice():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route('/api/apply-book-correction', methods=['POST'])
+@login_required
+def apply_book_correction():
+    """Used from the Stage 3 'Possible Match - Verify' review flow: once a
+    human confirms a near-match is really the same invoice (identical
+    amounts, one OCR-misread character), overwrite the book entry's
+    GSTIN/invoice number with the portal's government-verified values so
+    the next reconciliation run matches it exactly."""
+    user_id = session['user_id']
+    is_admin = is_admin_user()
+    data = request.json or {}
+    book_id = data.get('book_id')
+    invoice_number = (data.get('invoice_number') or '').strip()
+    gstin = (data.get('gstin') or '').strip()
+
+    if not book_id or not invoice_number or not gstin:
+        return jsonify({"error": "book_id, invoice_number and gstin are required"}), 400
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        if is_admin:
+            cur.execute('UPDATE invoices SET invoice_number = %s, gstin = %s WHERE id = %s', (invoice_number, gstin, book_id))
+        else:
+            cur.execute('UPDATE invoices SET invoice_number = %s, gstin = %s WHERE id = %s AND user_id = %s', (invoice_number, gstin, book_id, user_id))
+        updated = cur.rowcount
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        if updated == 0:
+            return jsonify({"error": "Invoice not found or access denied"}), 404
+
+        log_activity(user_id, 'bill_corrected', f'Corrected invoice #{invoice_number} to match GSTR-2B (Stage 3 review)', record_count=1)
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.route('/api/invoice-file/<int:invoice_id>', methods=['GET'])
 @login_required
 def get_invoice_file(invoice_id):
@@ -1273,6 +1311,25 @@ def clean_invoice_number(num):
         return ''
     cleaned = re.sub(r'[^a-zA-Z0-9]', '', str(num)).lower()
     return cleaned.lstrip('0')
+
+def levenshtein(a, b):
+    """Edit distance between two strings, used to spot a likely OCR misread
+    (e.g. 'O'/'0', 'P'/'F') between an otherwise-identical book/portal pair
+    that the exact-match reconciliation pass would otherwise miss entirely."""
+    if a == b:
+        return 0
+    if not a:
+        return len(b)
+    if not b:
+        return len(a)
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        curr = [i] + [0] * len(b)
+        for j, cb in enumerate(b, 1):
+            cost = 0 if ca == cb else 1
+            curr[j] = min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost)
+        prev = curr
+    return prev[-1]
 
 def parse_gstr2b_excel(file_bytes):
     """
@@ -1736,13 +1793,63 @@ def execute_reconciliation(fy, months, user_id, is_admin):
             })
             missing_books_count += 1
 
+    # Second pass: near-match detection. OCR commonly misreads a single
+    # character (0/O, P/F, 1/I, 5/S...), so the same real-world invoice can
+    # fail the strict GSTIN+invoice-number key match above and show up as
+    # two separate, unexplained "missing" rows. Amounts identical to the
+    # existing ±10 tolerance plus a small edit distance on GSTIN/invoice
+    # number is a strong signal it's the same bill -- flag it for a human
+    # to confirm rather than auto-merging (a wrong merge would hide a
+    # genuine discrepancy).
+    unmatched_book = [r for r in reconciled if r["status"] == "Missing in GSTR-2B"]
+    unmatched_portal = [r for r in reconciled if r["status"] == "Missing in Books"]
+    used_portal_ids = set()
+    possible_match_count = 0
+
+    for br in unmatched_book:
+        bi = br["book"]
+        bgst = bi['gstin'].strip().upper()
+        bnum = clean_invoice_number(bi['invoice_number'])
+        best = None
+        best_score = None
+
+        for pr in unmatched_portal:
+            pe = pr["portal"]
+            if pe['id'] in used_portal_ids:
+                continue
+            if abs(pe['total_gst'] - bi['total_gst']) > 10.0 or abs(pe['taxable_value'] - bi['taxable_value']) > 10.0:
+                continue
+            gstin_dist = levenshtein(bgst, pe['gstin'].strip().upper())
+            num_dist = levenshtein(bnum, clean_invoice_number(pe['invoice_number']))
+            if gstin_dist == 0 and num_dist == 0:
+                continue  # would already have matched exactly above
+            if gstin_dist > 2 or num_dist > 3:
+                continue
+            score = gstin_dist + num_dist
+            if best is None or score < best_score:
+                best = pr
+                best_score = score
+
+        if best is not None:
+            used_portal_ids.add(best["portal"]['id'])
+            br["status"] = "Possible Match"
+            br["portal"] = best["portal"]
+            possible_match_count += 1
+
+    if used_portal_ids:
+        reconciled = [r for r in reconciled
+                      if not (r["status"] == "Missing in Books" and r["portal"]['id'] in used_portal_ids)]
+        missing_portal_count -= possible_match_count
+        missing_books_count -= possible_match_count
+
     summary = {
         "total_books": len(books_invoices),
         "total_portal": len(portal_entries),
         "matched": matched_count,
         "mismatched": mismatched_count,
         "missing_in_portal": missing_portal_count,
-        "missing_in_books": missing_books_count
+        "missing_in_books": missing_books_count,
+        "possible_match": possible_match_count
     }
 
     return summary, reconciled, books_invoices, portal_entries

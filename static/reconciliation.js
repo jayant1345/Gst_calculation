@@ -229,11 +229,15 @@ document.addEventListener('DOMContentLoaded', function() {
             let actionBtn = '';
             if (item.status === 'Matched') {
                 actionBtn = `<button class="btn-action-small approve" data-action="approve" title="Approve ITC"><i class="fa-solid fa-check"></i></button>`;
+            } else if (item.status === 'Possible Match') {
+                actionBtn = `<button class="btn-action-small approve" data-action="confirm-match" title="Confirm this is the same invoice"><i class="fa-solid fa-code-compare"></i></button>`;
             } else if (item.status === 'Missing in GSTR-2B' || item.status === 'Value Mismatched') {
                 actionBtn = `<button class="btn-action-small notify" data-action="notify" title="Notify Vendor"><i class="fa-solid fa-envelope"></i></button>`;
             } else {
                 actionBtn = `<button class="btn-action-small hold" data-action="hold" title="Hold"><i class="fa-solid fa-pause"></i></button>`;
             }
+
+            const highlightDiff = item.status === 'Value Mismatched' || item.status === 'Possible Match';
 
             tr.innerHTML = `
                 <td>
@@ -243,11 +247,11 @@ document.addEventListener('DOMContentLoaded', function() {
                     </div>
                 </td>
                 <td>${escapeHtml(bBranch)}</td>
-                <td class="${item.status === 'Value Mismatched' ? 'value-diff' : ''}">${escapeHtml(bInv)}</td>
+                <td class="${highlightDiff ? 'value-diff' : ''}">${escapeHtml(bInv)}</td>
                 <td>${escapeHtml(bDate)}</td>
                 <td class="text-right ${item.status === 'Value Mismatched' ? 'value-diff' : ''}">${bGst}</td>
 
-                <td class="${item.status === 'Value Mismatched' ? 'value-diff' : ''}">${escapeHtml(pInv)}</td>
+                <td class="${highlightDiff ? 'value-diff' : ''}">${escapeHtml(pInv)}</td>
                 <td>${escapeHtml(pDate)}</td>
                 <td class="text-right ${item.status === 'Value Mismatched' ? 'value-diff' : ''}">${pGst}</td>
                 <td class="text-right">${pTaxable}</td>
@@ -261,6 +265,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 actionEl.addEventListener('click', () => {
                     const kind = actionEl.dataset.action;
                     if (kind === 'approve') alert('ITC Approved!');
+                    else if (kind === 'confirm-match') confirmPossibleMatch(item.book.id, item.portal.invoice_number, item.portal.gstin, supplier);
                     else if (kind === 'notify') alert(`Sending follow-up to vendor: ${supplier}`);
                     else alert('Put invoice on hold.');
                 });
@@ -291,9 +296,15 @@ document.addEventListener('DOMContentLoaded', function() {
             const statusBadge = `<span class="badge ${getStatusBadgeClass(item.status)}">${escapeHtml(item.status)}</span>`;
 
             const isMatched = item.status === 'Matched';
-            const actionHtml = isMatched
-                ? `<button class="mobile-action-btn approve" data-action="approve"><i class="fa-solid fa-check"></i> Approve</button>`
-                : `<button class="mobile-action-btn notify" data-action="notify"><i class="fa-solid fa-envelope"></i> Send Notice</button>`;
+            const isPossibleMatch = item.status === 'Possible Match';
+            let actionHtml;
+            if (isMatched) {
+                actionHtml = `<button class="mobile-action-btn approve" data-action="approve"><i class="fa-solid fa-check"></i> Approve</button>`;
+            } else if (isPossibleMatch) {
+                actionHtml = `<button class="mobile-action-btn approve" data-action="confirm-match"><i class="fa-solid fa-code-compare"></i> Confirm Match</button>`;
+            } else {
+                actionHtml = `<button class="mobile-action-btn notify" data-action="notify"><i class="fa-solid fa-envelope"></i> Send Notice</button>`;
+            }
 
             card.innerHTML = `
                 <div class="card-mobile-header">
@@ -328,7 +339,9 @@ document.addEventListener('DOMContentLoaded', function() {
             const cardActionEl = card.querySelector('[data-action]');
             if (cardActionEl) {
                 cardActionEl.addEventListener('click', () => {
-                    if (cardActionEl.dataset.action === 'approve') alert('ITC Approved!');
+                    const kind = cardActionEl.dataset.action;
+                    if (kind === 'approve') alert('ITC Approved!');
+                    else if (kind === 'confirm-match') confirmPossibleMatch(item.book.id, item.portal.invoice_number, item.portal.gstin, supplier);
                     else alert(`Notifying vendor: ${supplier}`);
                 });
             }
@@ -340,8 +353,38 @@ document.addEventListener('DOMContentLoaded', function() {
     function getStatusBadgeClass(status) {
         if (status === 'Matched') return 'badge-green';
         if (status === 'Value Mismatched') return 'badge-yellow';
+        if (status === 'Possible Match') return 'badge-purple';
         if (status === 'Missing in GSTR-2B') return 'badge-red';
         return 'badge-blue';
+    }
+
+    // Stage 3 review action: the human has confirmed a "Possible Match" row
+    // really is the same invoice (identical amounts, one OCR-misread
+    // character), so overwrite the book entry's GSTIN/invoice number with
+    // the portal's values and re-run reconciliation to fold it into
+    // "Matched" on the next fetch.
+    function confirmPossibleMatch(bookId, portalInvoiceNumber, portalGstin, supplier) {
+        if (!confirm(`Confirm this is the same invoice as "${supplier}"?\n\nThis will update the book entry to:\nInvoice #: ${portalInvoiceNumber}\nGSTIN: ${portalGstin}`)) {
+            return;
+        }
+        fetch('/api/apply-book-correction', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ book_id: bookId, invoice_number: portalInvoiceNumber, gstin: portalGstin })
+        })
+        .then(res => res.json())
+        .then(data => {
+            if (data.success) {
+                fetchReconciliationData();
+                if (activeStage === 3) loadStage3Data();
+            } else {
+                alert(data.error || 'Failed to apply correction.');
+            }
+        })
+        .catch(err => {
+            alert('Network error while applying correction.');
+            console.error(err);
+        });
     }
 
     function renderEmptyLedger(msg) {
