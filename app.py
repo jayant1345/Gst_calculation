@@ -1562,7 +1562,8 @@ def parse_gstr2b_excel(file_bytes):
 @app.route('/reconciliation')
 @login_required
 def reconciliation():
-    return render_template('reconciliation.html', api_key_configured=bool(ANTHROPIC_API_KEY), ai_model_name=AI_MODEL_NAME)
+    current_fy, _ = _dt_to_fy_and_month(datetime.datetime.now())
+    return render_template('reconciliation.html', api_key_configured=bool(ANTHROPIC_API_KEY), ai_model_name=AI_MODEL_NAME, current_fy=current_fy)
 
 @app.route('/api/export-annual-report', methods=['GET'])
 @login_required

@@ -116,9 +116,10 @@
                         <div class="filter-group">
                             <label for="fy-select">Financial Year</label>
                             <select id="fy-select" class="form-control">
-                                <option value="2025-26" selected>FY 2025-26</option>
-                                <option value="2026-27">FY 2026-27</option>
-                                <option value="2024-25">FY 2024-25</option>
+                                <option value="2024-25" {{ 'selected' if current_fy == '2024-25' else '' }}>FY 2024-25</option>
+                                <option value="2025-26" {{ 'selected' if current_fy == '2025-26' else '' }}>FY 2025-26</option>
+                                <option value="2026-27" {{ 'selected' if current_fy == '2026-27' else '' }}>FY 2026-27</option>
+                                <option value="2027-28" {{ 'selected' if current_fy == '2027-28' else '' }}>FY 2027-28</option>
                             </select>
                         </div>
                         <div class="filter-group">
