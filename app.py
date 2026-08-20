@@ -145,6 +145,11 @@ def init_db():
         cur.execute('ALTER TABLE invoices ADD COLUMN IF NOT EXISTS financial_year VARCHAR(10);')
         cur.execute('ALTER TABLE invoices ADD COLUMN IF NOT EXISTS month VARCHAR(20);')
 
+        # Migrate existing installs that predate ITC-blocked tracking and the
+        # stamped/handwritten payment date (distinct from the printed invoice date)
+        cur.execute('ALTER TABLE invoices ADD COLUMN IF NOT EXISTS itc_blocked BOOLEAN NOT NULL DEFAULT FALSE;')
+        cur.execute('ALTER TABLE invoices ADD COLUMN IF NOT EXISTS payment_date VARCHAR(20);')
+
         # Create GSTR-2B table
         cur.execute('''
             CREATE TABLE IF NOT EXISTS gstr2b_entries (
@@ -274,7 +279,12 @@ def extract_from_text(text):
     user_prompt = f"""
     Please extract the following details from this invoice text:
     - Invoice Number (invoice_number)
-    - Invoice Date (invoice_date)
+    - Invoice Date (invoice_date) - The printed date the invoice/bill was issued.
+    - Payment Date (payment_date) - The date the bill was actually PAID, which is usually a
+      HANDWRITTEN note or RUBBER-STAMPED annotation added after the invoice was printed
+      (commonly near text like "RTGS/P.O. No.", "NEFT", "Cheque No.", or a "Sanctioned" /
+      "Please Pay" stamp/signature block). This is DIFFERENT from the printed Invoice Date above.
+      Leave blank if no such stamped/handwritten payment date is visible anywhere on the document.
     - Vendor Name (vendor_name)
     - Vendor GSTIN (gstin) - The SELLER/SUPPLIER's own GST registration number (usually printed
       near the letterhead, or near the signature/footer). Do NOT use the buyer/recipient's GSTIN,
@@ -295,6 +305,7 @@ def extract_from_text(text):
     {{
       "invoice_number": "...",
       "invoice_date": "...",
+      "payment_date": "...",
       "vendor_name": "...",
       "gstin": "...",
       "taxable_value": 0.0,
@@ -329,7 +340,12 @@ def extract_from_image(base64_data, mime_type):
     )
     
     user_prompt = (
-        "Extract invoice details: invoice_number, invoice_date, vendor_name, "
+        "Extract invoice details: invoice_number, invoice_date, "
+        "payment_date (the date the bill was actually PAID - usually a HANDWRITTEN note or "
+        "RUBBER-STAMPED annotation added after printing, commonly near 'RTGS/P.O. No.', 'NEFT', "
+        "'Cheque No.', or a 'Sanctioned'/'Please Pay' stamp; this is DIFFERENT from the printed "
+        "invoice_date - leave blank if no such stamped/handwritten payment date is visible), "
+        "vendor_name, "
         "gstin (the SELLER/SUPPLIER's own GST registration number - usually near the letterhead "
         "or signature/footer; do NOT use the buyer/recipient's GSTIN, often printed next to the "
         "'M/s' or 'Bill To' customer block - leave blank if no distinct seller GSTIN is visible), "
@@ -377,7 +393,12 @@ def extract_from_pdf_binary(base64_pdf):
     )
     
     user_prompt = (
-        "Extract invoice details: invoice_number, invoice_date, vendor_name, "
+        "Extract invoice details: invoice_number, invoice_date, "
+        "payment_date (the date the bill was actually PAID - usually a HANDWRITTEN note or "
+        "RUBBER-STAMPED annotation added after printing, commonly near 'RTGS/P.O. No.', 'NEFT', "
+        "'Cheque No.', or a 'Sanctioned'/'Please Pay' stamp; this is DIFFERENT from the printed "
+        "invoice_date - leave blank if no such stamped/handwritten payment date is visible), "
+        "vendor_name, "
         "gstin (the SELLER/SUPPLIER's own GST registration number - usually near the letterhead "
         "or signature/footer; do NOT use the buyer/recipient's GSTIN, often printed next to the "
         "'M/s' or 'Bill To' customer block - leave blank if no distinct seller GSTIN is visible), "
@@ -443,6 +464,8 @@ def parse_excel_register(file_bytes):
     igst_cols = ["igst", "igstamount", "igstamt", "integratedtax"]
     gstin_cols = ["gstin", "gstno", "gstnumber", "vendorgstin", "suppliergstin", "gstregistrationnumber"]
     branch_cols = ["branch", "branchname", "location", "office", "unit"]
+    payment_date_cols = ["paymentdate", "paiddate", "datepaid", "paymentdt"]
+    itc_blocked_cols = ["itcblocked", "gstblocked", "blocked", "noitc", "itcineligible"]
 
     col_num = find_column(inv_num_cols)
     col_date = find_column(inv_date_cols)
@@ -453,6 +476,8 @@ def parse_excel_register(file_bytes):
     col_igst = find_column(igst_cols)
     col_gstin = find_column(gstin_cols)
     col_branch = find_column(branch_cols)
+    col_payment_date = find_column(payment_date_cols)
+    col_itc_blocked = find_column(itc_blocked_cols)
 
     # Positional fallback only makes sense for legacy 3-column registers (vendor, invoice no,
     # date with no headers). It's intentionally NOT applied to invoice number, since manual-bill
@@ -467,8 +492,10 @@ def parse_excel_register(file_bytes):
             vendor = str(row[col_vendor]) if col_vendor and pd.notna(row[col_vendor]) else "Unknown Vendor"
             inv_no = str(row[col_num]) if col_num and pd.notna(row[col_num]) else "N/A"
             inv_date = str(row[col_date]).split(" ")[0] if col_date and pd.notna(row[col_date]) else "N/A"
+            payment_date = str(row[col_payment_date]).split(" ")[0].strip() if col_payment_date and pd.notna(row[col_payment_date]) else None
             gstin = str(row[col_gstin]) if col_gstin and pd.notna(row[col_gstin]) else "N/A"
             branch = str(row[col_branch]).strip() if col_branch and pd.notna(row[col_branch]) else None
+            itc_blocked = str(row[col_itc_blocked]).strip().lower() in ('yes', 'true', '1', 'y') if col_itc_blocked and pd.notna(row[col_itc_blocked]) else False
 
             taxable = float(row[col_taxable]) if col_taxable and pd.notna(row[col_taxable]) else 0.0
             cgst = float(row[col_cgst]) if col_cgst and pd.notna(row[col_cgst]) else 0.0
@@ -478,9 +505,11 @@ def parse_excel_register(file_bytes):
             invoices.append({
                 "invoice_number": inv_no,
                 "invoice_date": inv_date,
+                "payment_date": payment_date,
                 "vendor_name": vendor,
                 "gstin": gstin,
                 "branch": branch,
+                "itc_blocked": itc_blocked,
                 "taxable_value": taxable,
                 "cgst": cgst,
                 "sgst": sgst,
@@ -618,8 +647,8 @@ def get_invoices():
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         if is_admin:
             cur.execute('''
-                SELECT invoices.id, invoice_number, invoice_date, vendor_name, gstin, branch,
-                       taxable_value::float, cgst::float, sgst::float, igst::float,
+                SELECT invoices.id, invoice_number, invoice_date, payment_date, vendor_name, gstin, branch,
+                       taxable_value::float, cgst::float, sgst::float, igst::float, itc_blocked,
                        eligible_itc::float, ineligible_itc::float, users.username,
                        (file_data IS NOT NULL) AS has_file
                 FROM invoices
@@ -628,8 +657,8 @@ def get_invoices():
             ''')
         else:
             cur.execute('''
-                SELECT id, invoice_number, invoice_date, vendor_name, gstin, branch,
-                       taxable_value::float, cgst::float, sgst::float, igst::float,
+                SELECT id, invoice_number, invoice_date, payment_date, vendor_name, gstin, branch,
+                       taxable_value::float, cgst::float, sgst::float, igst::float, itc_blocked,
                        eligible_itc::float, ineligible_itc::float,
                        (file_data IS NOT NULL) AS has_file
                 FROM invoices
@@ -652,6 +681,7 @@ def save_invoice():
     db_id = inv.get('id')
     inv_num = inv.get('invoice_number', '')
     inv_date = inv.get('invoice_date', '')
+    payment_date = inv.get('payment_date') or None
     vendor = inv.get('vendor_name', '')
     gstin = inv.get('gstin', '') or 'N/A'
     branch = inv.get('branch', '') or 'Unassigned'
@@ -659,11 +689,18 @@ def save_invoice():
     cgst = float(inv.get('cgst', 0.0))
     sgst = float(inv.get('sgst', 0.0))
     igst = float(inv.get('igst', 0.0))
+    itc_blocked = bool(inv.get('itc_blocked', False))
 
-    # Recalculate 50% split on server to ensure precision
+    # Recalculate the ITC split on the server to ensure precision. Bills
+    # marked ITC-blocked (e.g. Section 17(5) blocked credits) get 0%
+    # eligible / 100% ineligible instead of the default flat 50/50 split.
     total_gst = cgst + sgst + igst
-    eligible = round(total_gst * 0.5, 2)
-    ineligible = round(total_gst * 0.5, 2)
+    if itc_blocked:
+        eligible = 0.0
+        ineligible = round(total_gst, 2)
+    else:
+        eligible = round(total_gst * 0.5, 2)
+        ineligible = round(total_gst * 0.5, 2)
 
     fy, m = parse_date_to_fy_and_month(inv_date)
 
@@ -678,34 +715,34 @@ def save_invoice():
             if is_admin:
                 cur.execute('''
                     UPDATE invoices
-                    SET invoice_number = %s, invoice_date = %s, vendor_name = %s, gstin = %s, branch = %s,
-                        taxable_value = %s, cgst = %s, sgst = %s, igst = %s,
+                    SET invoice_number = %s, invoice_date = %s, payment_date = %s, vendor_name = %s, gstin = %s, branch = %s,
+                        taxable_value = %s, cgst = %s, sgst = %s, igst = %s, itc_blocked = %s,
                         eligible_itc = %s, ineligible_itc = %s, financial_year = %s, month = %s
                     WHERE id = %s
-                ''', (inv_num, inv_date, vendor, gstin, branch, taxable, cgst, sgst, igst, eligible, ineligible, fy, m, db_id))
+                ''', (inv_num, inv_date, payment_date, vendor, gstin, branch, taxable, cgst, sgst, igst, itc_blocked, eligible, ineligible, fy, m, db_id))
             else:
                 cur.execute('''
                     UPDATE invoices
-                    SET invoice_number = %s, invoice_date = %s, vendor_name = %s, gstin = %s, branch = %s,
-                        taxable_value = %s, cgst = %s, sgst = %s, igst = %s,
+                    SET invoice_number = %s, invoice_date = %s, payment_date = %s, vendor_name = %s, gstin = %s, branch = %s,
+                        taxable_value = %s, cgst = %s, sgst = %s, igst = %s, itc_blocked = %s,
                         eligible_itc = %s, ineligible_itc = %s, financial_year = %s, month = %s
                     WHERE id = %s AND user_id = %s
-                ''', (inv_num, inv_date, vendor, gstin, branch, taxable, cgst, sgst, igst, eligible, ineligible, fy, m, db_id, user_id))
+                ''', (inv_num, inv_date, payment_date, vendor, gstin, branch, taxable, cgst, sgst, igst, itc_blocked, eligible, ineligible, fy, m, db_id, user_id))
             ret_id = db_id
         else:
             # Insert new invoice
             cur.execute('''
-                INSERT INTO invoices (user_id, invoice_number, invoice_date, vendor_name, gstin, branch, taxable_value, cgst, sgst, igst, eligible_itc, ineligible_itc, financial_year, month)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
-            ''', (user_id, inv_num, inv_date, vendor, gstin, branch, taxable, cgst, sgst, igst, eligible, ineligible, fy, m))
+                INSERT INTO invoices (user_id, invoice_number, invoice_date, payment_date, vendor_name, gstin, branch, taxable_value, cgst, sgst, igst, itc_blocked, eligible_itc, ineligible_itc, financial_year, month)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
+            ''', (user_id, inv_num, inv_date, payment_date, vendor, gstin, branch, taxable, cgst, sgst, igst, itc_blocked, eligible, ineligible, fy, m))
             ret_id = cur.fetchone()[0]
-            
+
         conn.commit()
         cur.close()
         conn.close()
-        
+
         return jsonify({
-            "success": True, 
+            "success": True,
             "id": ret_id,
             "eligible_itc": eligible,
             "ineligible_itc": ineligible
@@ -852,12 +889,14 @@ def process_invoices():
             for inv in parsed_list:
                 inv["invoice_number"] = inv.get("invoice_number") or "N/A"
                 inv["invoice_date"] = inv.get("invoice_date") or "N/A"
+                inv["payment_date"] = inv.get("payment_date") or None
                 inv["vendor_name"] = inv.get("vendor_name") or "Unknown Vendor"
                 inv["gstin"] = inv.get("gstin") or "N/A"
                 # A bulk manual-bill sheet may carry its own Branch column per row (multiple
                 # branches combined in one file); otherwise fall back to the single branch
                 # entered for this upload batch.
                 inv["branch"] = inv.get("branch") or batch_branch or "Unassigned"
+                inv["itc_blocked"] = bool(inv.get("itc_blocked", False))
                 for field in ("taxable_value", "cgst", "sgst", "igst"):
                     try:
                         inv[field] = float(inv.get(field) or 0.0)
@@ -865,16 +904,20 @@ def process_invoices():
                         inv[field] = 0.0
 
                 total_gst = inv["cgst"] + inv["sgst"] + inv["igst"]
-                eligible = round(total_gst * 0.5, 2)
-                ineligible = round(total_gst * 0.5, 2)
+                if inv["itc_blocked"]:
+                    eligible = 0.0
+                    ineligible = round(total_gst, 2)
+                else:
+                    eligible = round(total_gst * 0.5, 2)
+                    ineligible = round(total_gst * 0.5, 2)
 
                 fy, m = parse_date_to_fy_and_month(inv["invoice_date"])
 
                 cur.execute('''
-                    INSERT INTO invoices (user_id, invoice_number, invoice_date, vendor_name, gstin, branch, taxable_value, cgst, sgst, igst, eligible_itc, ineligible_itc, file_data, file_mime_type, file_name, financial_year, month)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
-                ''', (user_id, inv["invoice_number"], inv["invoice_date"], inv["vendor_name"], inv["gstin"], inv["branch"],
-                      inv["taxable_value"], inv["cgst"], inv["sgst"], inv["igst"],
+                    INSERT INTO invoices (user_id, invoice_number, invoice_date, payment_date, vendor_name, gstin, branch, taxable_value, cgst, sgst, igst, itc_blocked, eligible_itc, ineligible_itc, file_data, file_mime_type, file_name, financial_year, month)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
+                ''', (user_id, inv["invoice_number"], inv["invoice_date"], inv["payment_date"], inv["vendor_name"], inv["gstin"], inv["branch"],
+                      inv["taxable_value"], inv["cgst"], inv["sgst"], inv["igst"], inv["itc_blocked"],
                       eligible, ineligible,
                       psycopg2.Binary(store_file_bytes) if store_file_bytes else None,
                       store_mime_type, store_file_name, fy, m))
@@ -884,6 +927,7 @@ def process_invoices():
                     "id": db_id,
                     "invoice_number": inv["invoice_number"],
                     "invoice_date": inv["invoice_date"],
+                    "payment_date": inv["payment_date"],
                     "vendor_name": inv["vendor_name"],
                     "gstin": inv["gstin"],
                     "branch": inv["branch"],
@@ -891,6 +935,7 @@ def process_invoices():
                     "cgst": inv["cgst"],
                     "sgst": inv["sgst"],
                     "igst": inv["igst"],
+                    "itc_blocked": inv["itc_blocked"],
                     "has_file": store_file_bytes is not None,
                     "eligible_itc": eligible,
                     "ineligible_itc": ineligible,
@@ -906,6 +951,7 @@ def process_invoices():
                 "id": None,
                 "invoice_number": "ERROR",
                 "invoice_date": "-",
+                "payment_date": None,
                 "vendor_name": f"Failed to parse {filename}",
                 "gstin": "N/A",
                 "branch": batch_branch or "Unassigned",
@@ -913,6 +959,8 @@ def process_invoices():
                 "cgst": 0.0,
                 "sgst": 0.0,
                 "igst": 0.0,
+                "itc_blocked": False,
+                "has_file": False,
                 "eligible_itc": 0.0,
                 "ineligible_itc": 0.0,
                 "filename": filename

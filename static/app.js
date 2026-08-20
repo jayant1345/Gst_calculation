@@ -187,7 +187,7 @@ document.addEventListener('DOMContentLoaded', () => {
             );
         });
 
-        const colCount = window.IS_ADMIN ? 13 : 12;
+        const colCount = window.IS_ADMIN ? 15 : 14;
 
         if (filteredInvoices.length === 0) {
             tableBody.innerHTML = `
@@ -215,11 +215,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 <td><input type="text" class="field-gstin" value="${inv.gstin || ''}"></td>
                 <td><input type="text" class="field-number" value="${inv.invoice_number || ''}"></td>
                 <td><input type="text" class="field-date" value="${inv.invoice_date || ''}"></td>
+                <td><input type="text" class="field-payment-date" placeholder="DD-MM-YYYY" value="${inv.payment_date || ''}"></td>
                 <td><input type="text" class="field-vendor" value="${inv.vendor_name || ''}"></td>
                 <td class="numeric"><input type="number" step="0.01" class="field-taxable" value="${(inv.taxable_value || 0).toFixed(2)}"></td>
                 <td class="numeric"><input type="number" step="0.01" class="field-cgst" value="${(inv.cgst || 0).toFixed(2)}"></td>
                 <td class="numeric"><input type="number" step="0.01" class="field-sgst" value="${(inv.sgst || 0).toFixed(2)}"></td>
                 <td class="numeric"><input type="number" step="0.01" class="field-igst" value="${(inv.igst || 0).toFixed(2)}"></td>
+                <td class="checkbox-cell"><input type="checkbox" class="field-itc-blocked" title="Section 17(5) blocked credit / fully ineligible" ${inv.itc_blocked ? 'checked' : ''}></td>
                 <td class="numeric eligible-column font-bold" id="row-eligible-${index}">₹${(inv.eligible_itc || 0).toFixed(2)}</td>
                 <td class="numeric ineligible-column" id="row-ineligible-${index}">₹${(inv.ineligible_itc || 0).toFixed(2)}</td>
                 ${window.IS_ADMIN ? `<td class="col-owner">${inv.username || ''}</td>` : ''}
@@ -263,14 +265,17 @@ document.addEventListener('DOMContentLoaded', () => {
         const gstin = rowEl.querySelector('.field-gstin').value.trim() || 'N/A';
         const invNum = rowEl.querySelector('.field-number').value;
         const invDate = rowEl.querySelector('.field-date').value;
+        const paymentDate = rowEl.querySelector('.field-payment-date').value.trim() || null;
         const vendor = rowEl.querySelector('.field-vendor').value;
         const taxable = parseFloat(rowEl.querySelector('.field-taxable').value) || 0;
         const cgst = parseFloat(rowEl.querySelector('.field-cgst').value) || 0;
         const sgst = parseFloat(rowEl.querySelector('.field-sgst').value) || 0;
         const igst = parseFloat(rowEl.querySelector('.field-igst').value) || 0;
+        const itcBlocked = rowEl.querySelector('.field-itc-blocked').checked;
 
         const totalGst = cgst + sgst + igst;
-        const halfGst = totalGst * 0.5;
+        const eligible = itcBlocked ? 0 : totalGst * 0.5;
+        const ineligible = itcBlocked ? totalGst : totalGst * 0.5;
 
         // Update local state
         invoices[index] = {
@@ -279,13 +284,15 @@ document.addEventListener('DOMContentLoaded', () => {
             gstin: gstin,
             invoice_number: invNum,
             invoice_date: invDate,
+            payment_date: paymentDate,
             vendor_name: vendor,
             taxable_value: taxable,
             cgst: cgst,
             sgst: sgst,
             igst: igst,
-            eligible_itc: halfGst,
-            ineligible_itc: halfGst
+            itc_blocked: itcBlocked,
+            eligible_itc: eligible,
+            ineligible_itc: ineligible
         };
         updateBranchSuggestions();
 
@@ -519,19 +526,24 @@ document.addEventListener('DOMContentLoaded', () => {
             igst = parseFloat(document.getElementById('mb-igst').value) || 0;
         }
 
+        const itcBlocked = document.getElementById('mb-itc-blocked').checked;
+        const totalGst = cgst + sgst + igst;
+
         const newInvoice = {
             id: null,
             branch: document.getElementById('mb-branch').value.trim() || 'Unassigned',
             gstin: document.getElementById('mb-gstin').value.trim() || 'N/A',
-            invoice_number: 'N/A',
+            invoice_number: document.getElementById('mb-invoice-number').value.trim() || 'N/A',
             invoice_date: document.getElementById('mb-date').value.trim() || 'N/A',
+            payment_date: document.getElementById('mb-payment-date').value.trim() || null,
             vendor_name: document.getElementById('mb-party').value.trim() || 'Unknown Vendor',
             taxable_value: taxable,
             cgst: cgst,
             sgst: sgst,
             igst: igst,
-            eligible_itc: (cgst + sgst + igst) * 0.5,
-            ineligible_itc: (cgst + sgst + igst) * 0.5
+            itc_blocked: itcBlocked,
+            eligible_itc: itcBlocked ? 0 : totalGst * 0.5,
+            ineligible_itc: itcBlocked ? totalGst : totalGst * 0.5
         };
 
         const saveBtn = document.getElementById('manual-bill-save');
