@@ -802,6 +802,10 @@ def save_invoice():
         cur.close()
         conn.close()
 
+        if not db_id:
+            desc = f'Added bill from {vendor or "Unknown Vendor"}' + (f' (Invoice #{inv_num})' if inv_num else '')
+            log_activity(user_id, 'bill_added', desc, fy, m, 1)
+
         return jsonify({
             "success": True,
             "id": ret_id,
