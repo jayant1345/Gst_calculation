@@ -1049,7 +1049,7 @@ def process_invoices():
             conn.commit()
             cur.close()
             conn.close()
-                
+
         except Exception as e:
             print(f"Error processing file {filename}: {e}")
             results.append({
@@ -1070,6 +1070,12 @@ def process_invoices():
                 "ineligible_itc": 0.0,
                 "filename": filename
             })
+
+    success_count = sum(1 for r in results if r["id"] is not None)
+    if success_count > 0:
+        scan_mode = "High Accuracy Scan" if high_accuracy else "AI Scan"
+        desc = f'Uploaded {success_count} bill(s) via {scan_mode}' + (f' for branch {batch_branch}' if batch_branch else '')
+        log_activity(user_id, 'bill_upload', desc, record_count=success_count)
 
     return jsonify({"invoices": results})
 

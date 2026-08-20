@@ -13,6 +13,7 @@
 
     var ACTION_LABELS = {
         bill_added: { label: 'Bill Added', badge: 'badge-blue', icon: 'fa-receipt' },
+        bill_upload: { label: 'Bill Upload', badge: 'badge-blue', icon: 'fa-file-arrow-up' },
         gstr2b_upload: { label: 'GSTR-2B Import', badge: 'badge-blue', icon: 'fa-file-arrow-up' },
         export_excel: { label: 'Excel Export', badge: 'badge-green', icon: 'fa-file-excel' },
         export_annual_report: { label: 'Annual Report Export', badge: 'badge-green', icon: 'fa-file-excel' },
