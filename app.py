@@ -6,6 +6,7 @@ import ssl
 from flask import Flask, request, jsonify, render_template, send_file, redirect, url_for, session, flash
 import pandas as pd
 from pypdf import PdfReader
+import pymupdf
 from dotenv import load_dotenv
 import io
 import psycopg2
@@ -27,6 +28,25 @@ ctx.verify_mode = ssl.CERT_NONE
 # Read API Key
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 AI_MODEL_NAME = "claude-sonnet-4-6"
+# Used for anything that requires actually reading pixels (scanned images,
+# image-only PDFs, or filling gaps a text-based pass missed -- e.g. a
+# handwritten/stamped payment date or a GSTIN rendered as a header image).
+# Compared head-to-head against claude-sonnet-4-6 and OpenAI gpt-4o/gpt-5 on a
+# real hard-to-read bill: Opus was the only one that got every printed field
+# right (invoice number, GSTIN) and correctly left the illegible handwritten
+# date blank instead of guessing wrong.
+AI_VISION_MODEL_NAME = "claude-opus-5"
+
+def render_pdf_page_to_png_base64(file_bytes, page_index=0, dpi=250):
+    """Renders one PDF page to a base64 PNG at a resolution high enough for
+    small/handwritten text, rather than relying on whatever internal
+    resolution the Anthropic API's own PDF-to-image handling defaults to."""
+    doc = pymupdf.open(stream=file_bytes, filetype="pdf")
+    page = doc[page_index]
+    pix = page.get_pixmap(dpi=dpi)
+    png_bytes = pix.tobytes("png")
+    doc.close()
+    return base64.b64encode(png_bytes).decode("utf-8")
 
 # PostgreSQL Connection Helper
 def get_db_connection():
@@ -263,7 +283,13 @@ def call_claude_api(payload):
     try:
         with urllib.request.urlopen(req, context=ctx) as res:
             response = json.loads(res.read().decode("utf-8"))
-            return response["content"][0]["text"]
+            # Extended-thinking models (e.g. claude-opus-5) return a leading
+            # "thinking" block before the actual "text" block, so the text
+            # response isn't reliably at a fixed index -- find it by type.
+            for block in response["content"]:
+                if block.get("type") == "text":
+                    return block["text"]
+            raise ValueError(f"No text block in response content: {response['content']}")
     except Exception as e:
         print(f"Error calling Anthropic API: {e}")
         raise e
@@ -353,8 +379,8 @@ def extract_from_image(base64_data, mime_type):
     )
 
     payload = {
-        "model": AI_MODEL_NAME,
-        "max_tokens": 1000,
+        "model": AI_VISION_MODEL_NAME,
+        "max_tokens": 1500,
         "system": system_prompt,
         "messages": [
             {
@@ -376,7 +402,7 @@ def extract_from_image(base64_data, mime_type):
             }
         ]
     }
-    
+
     result = call_claude_api(payload)
     if "```json" in result:
         result = result.split("```json")[1].split("```")[0].strip()
@@ -384,14 +410,17 @@ def extract_from_image(base64_data, mime_type):
         result = result.split("```")[1].split("```")[0].strip()
     return json.loads(result)
 
-def extract_from_pdf_binary(base64_pdf):
-    """Sends a base64 encoded PDF directly to Claude using the PDF beta feature."""
+def extract_from_pdf_binary(file_bytes):
+    """Renders the PDF's first page to a high-resolution PNG and sends that
+    image to Claude, rather than the raw PDF -- gives more control over
+    resolution than the API's own internal PDF rendering, which matters for
+    small/handwritten text (see AI_VISION_MODEL_NAME comment)."""
     system_prompt = (
-        "You are an expert financial OCR assistant. Analyze the invoice PDF document "
+        "You are an expert financial OCR assistant. Analyze the invoice image "
         "and extract the key values. You must respond with ONLY a valid JSON object. "
         "Do not include any explanation or markdown formatting outside the JSON."
     )
-    
+
     user_prompt = (
         "Extract invoice details: invoice_number, invoice_date, "
         "payment_date (the date the bill was actually PAID - usually a HANDWRITTEN note or "
@@ -405,20 +434,22 @@ def extract_from_pdf_binary(base64_pdf):
         "taxable_value, cgst, sgst, igst."
     )
 
+    base64_png = render_pdf_page_to_png_base64(file_bytes)
+
     payload = {
-        "model": AI_MODEL_NAME,
-        "max_tokens": 1000,
+        "model": AI_VISION_MODEL_NAME,
+        "max_tokens": 1500,
         "system": system_prompt,
         "messages": [
             {
                 "role": "user",
                 "content": [
                     {
-                        "type": "document",
+                        "type": "image",
                         "source": {
                             "type": "base64",
-                            "media_type": "application/pdf",
-                            "data": base64_pdf
+                            "media_type": "image/png",
+                            "data": base64_png
                         }
                     },
                     {
@@ -429,7 +460,7 @@ def extract_from_pdf_binary(base64_pdf):
             }
         ]
     }
-    
+
     result = call_claude_api(payload)
     if "```json" in result:
         result = result.split("```json")[1].split("```")[0].strip()
@@ -879,8 +910,7 @@ def process_invoices():
                     needs_payment_date = not inv.get('payment_date') or inv.get('payment_date') == inv.get('invoice_date')
                     if needs_gstin or needs_payment_date:
                         try:
-                            base64_pdf = base64.b64encode(file_bytes).decode('utf-8')
-                            vision_inv = extract_from_pdf_binary(base64_pdf)
+                            vision_inv = extract_from_pdf_binary(file_bytes)
                             if needs_payment_date and vision_inv.get('payment_date'):
                                 inv['payment_date'] = vision_inv['payment_date']
                             if needs_gstin and vision_inv.get('gstin'):
@@ -888,8 +918,7 @@ def process_invoices():
                         except Exception as ex:
                             print(f"Vision fallback failed for {filename}: {ex}")
                 else:
-                    base64_pdf = base64.b64encode(file_bytes).decode('utf-8')
-                    inv = extract_from_pdf_binary(base64_pdf)
+                    inv = extract_from_pdf_binary(file_bytes)
                 parsed_list = [inv]
                 store_file_bytes = file_bytes
                 store_mime_type = "application/pdf"
