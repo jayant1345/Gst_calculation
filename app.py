@@ -347,6 +347,13 @@ def extract_from_text(text):
       which is often printed next to the "M/s" or "Bill To" / customer name-and-address block -
       that number belongs to the customer, not the vendor. If only a buyer GSTIN is visible and no
       distinct seller GSTIN appears anywhere on the invoice, leave this blank rather than guessing.
+      IMPORTANT: a GSTIN always follows a fixed 15-character pattern: 2 DIGITS (state code),
+      5 LETTERS, 4 DIGITS, 1 LETTER, 1 DIGIT, the LETTER 'Z', then 1 final alphanumeric checksum
+      character. Use this pattern to resolve ambiguous characters - e.g. if position 3 looks like
+      it could be "O" or "0", the pattern says it must be a LETTER, so it is "O". Pay close
+      attention to these commonly-confused pairs in both the gstin and invoice_number: letter O vs
+      digit 0, letter I/L vs digit 1, letter S vs digit 5, letter B vs digit 8, letter G vs digit 6,
+      letter Z vs digit 2.
     - Taxable Value (taxable_value) - The value before taxes
     - CGST Amount (cgst)
     - SGST Amount (sgst)
@@ -405,7 +412,14 @@ def extract_from_image(base64_data, mime_type):
         "gstin (the SELLER/SUPPLIER's own GST registration number - usually near the letterhead "
         "or signature/footer; do NOT use the buyer/recipient's GSTIN, often printed next to the "
         "'M/s' or 'Bill To' customer block - leave blank if no distinct seller GSTIN is visible), "
-        "taxable_value, cgst, sgst, igst."
+        "taxable_value, cgst, sgst, igst. "
+        "IMPORTANT for accuracy: a GSTIN always follows a fixed 15-character pattern - 2 DIGITS "
+        "(state code), 5 LETTERS, 4 DIGITS, 1 LETTER, 1 DIGIT, the LETTER 'Z', then 1 final "
+        "alphanumeric checksum character. Use this pattern to resolve ambiguous characters (e.g. "
+        "position 3 must be a LETTER, so an ambiguous glyph there is 'O' not '0'). Look closely at "
+        "the actual pixels for these commonly-confused pairs in both gstin and invoice_number: "
+        "letter O vs digit 0, letter I/L vs digit 1, letter S vs digit 5, letter B vs digit 8, "
+        "letter G vs digit 6, letter Z vs digit 2 - do not just guess the visually 'nicer' option."
     )
 
     payload = {
@@ -461,7 +475,14 @@ def extract_from_pdf_binary(file_bytes):
         "gstin (the SELLER/SUPPLIER's own GST registration number - usually near the letterhead "
         "or signature/footer; do NOT use the buyer/recipient's GSTIN, often printed next to the "
         "'M/s' or 'Bill To' customer block - leave blank if no distinct seller GSTIN is visible), "
-        "taxable_value, cgst, sgst, igst."
+        "taxable_value, cgst, sgst, igst. "
+        "IMPORTANT for accuracy: a GSTIN always follows a fixed 15-character pattern - 2 DIGITS "
+        "(state code), 5 LETTERS, 4 DIGITS, 1 LETTER, 1 DIGIT, the LETTER 'Z', then 1 final "
+        "alphanumeric checksum character. Use this pattern to resolve ambiguous characters (e.g. "
+        "position 3 must be a LETTER, so an ambiguous glyph there is 'O' not '0'). Look closely at "
+        "the actual pixels for these commonly-confused pairs in both gstin and invoice_number: "
+        "letter O vs digit 0, letter I/L vs digit 1, letter S vs digit 5, letter B vs digit 8, "
+        "letter G vs digit 6, letter Z vs digit 2 - do not just guess the visually 'nicer' option."
     )
 
     base64_png = render_pdf_page_to_png_base64(file_bytes)
@@ -746,7 +767,7 @@ def save_invoice():
     inv_date = inv.get('invoice_date', '')
     payment_date = inv.get('payment_date') or None
     vendor = inv.get('vendor_name', '')
-    gstin = inv.get('gstin', '') or 'N/A'
+    gstin = normalize_gstin(inv.get('gstin', '') or 'N/A')
     branch = inv.get('branch', '') or 'Unassigned'
     taxable = float(inv.get('taxable_value', 0.0))
     cgst = float(inv.get('cgst', 0.0))
@@ -927,7 +948,7 @@ def rescan_invoice():
         invoice_date = inv.get("invoice_date") or "N/A"
         payment_date = inv.get("payment_date") or None
         vendor_name = inv.get("vendor_name") or "Unknown Vendor"
-        gstin = inv.get("gstin") or "N/A"
+        gstin = normalize_gstin(inv.get("gstin") or "N/A")
         taxable_value = float(inv.get("taxable_value") or 0.0)
         cgst = float(inv.get("cgst") or 0.0)
         sgst = float(inv.get("sgst") or 0.0)
@@ -1133,7 +1154,7 @@ def process_invoices():
                 inv["invoice_date"] = inv.get("invoice_date") or "N/A"
                 inv["payment_date"] = inv.get("payment_date") or None
                 inv["vendor_name"] = inv.get("vendor_name") or "Unknown Vendor"
-                inv["gstin"] = inv.get("gstin") or "N/A"
+                inv["gstin"] = normalize_gstin(inv.get("gstin") or "N/A")
                 # A bulk manual-bill sheet may carry its own Branch column per row (multiple
                 # branches combined in one file); otherwise fall back to the single branch
                 # entered for this upload batch.
@@ -1406,6 +1427,36 @@ def clean_invoice_number(num):
         return ''
     cleaned = re.sub(r'[^a-zA-Z0-9]', '', str(num)).lower()
     return cleaned.lstrip('0')
+
+# GSTIN is a fixed 15-character format: 2 digits (state code), 5 letters +
+# 4 digits + 1 letter (PAN), 1 digit (entity code), the constant letter
+# 'Z', then 1 alphanumeric checksum (left untouched -- genuinely
+# ambiguous). Unlike invoice numbers, this positional structure is rigid
+# and public knowledge, so a character that violates the expected
+# digit/letter class at its position can be deterministically corrected
+# to the one visually-similar character that actually fits -- with near
+# zero risk of "fixing" an already-correct GSTIN, since a valid one never
+# trips these checks in the first place.
+_GSTIN_EXPECT_DIGIT = {0, 1, 7, 8, 9, 10, 12}
+_GSTIN_EXPECT_LETTER = {2, 3, 4, 5, 6, 11, 13}
+_GSTIN_TO_DIGIT = {'O': '0', 'I': '1', 'L': '1', 'S': '5', 'B': '8', 'G': '6', 'Z': '2'}
+_GSTIN_TO_LETTER = {'0': 'O', '1': 'I', '5': 'S', '8': 'B', '6': 'G', '2': 'Z'}
+
+def normalize_gstin(raw):
+    """Corrects OCR letter/digit confusions (O/0, I or L/1, S/5, B/8, G/6,
+    Z/2) in a GSTIN by position, using the fixed format above."""
+    if not raw or len(raw) != 15:
+        return raw
+    chars = list(raw.strip().upper())
+    for i in _GSTIN_EXPECT_DIGIT:
+        c = chars[i]
+        if not c.isdigit() and c in _GSTIN_TO_DIGIT:
+            chars[i] = _GSTIN_TO_DIGIT[c]
+    for i in _GSTIN_EXPECT_LETTER:
+        c = chars[i]
+        if not c.isalpha() and c in _GSTIN_TO_LETTER:
+            chars[i] = _GSTIN_TO_LETTER[c]
+    return ''.join(chars)
 
 def levenshtein(a, b):
     """Edit distance between two strings, used to spot a likely OCR misread
