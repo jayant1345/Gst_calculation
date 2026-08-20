@@ -38,6 +38,59 @@ def get_db_connection():
     )
     return conn
 
+import datetime
+
+FY_MONTH_ORDER = ['April', 'May', 'June', 'July', 'August', 'September',
+                   'October', 'November', 'December', 'January', 'February', 'March']
+
+def month_sort_key(month_name):
+    """Sorts month names in financial-year order (April..March) instead of alphabetically."""
+    try:
+        return FY_MONTH_ORDER.index(month_name)
+    except ValueError:
+        return len(FY_MONTH_ORDER)
+
+def _dt_to_fy_and_month(dt):
+    if dt.month in (1, 2, 3):
+        fy = f"{dt.year - 1}-{str(dt.year)[2:]}"
+    else:
+        fy = f"{dt.year}-{str(dt.year + 1)[2:]}"
+    return fy, dt.strftime('%B')
+
+def parse_date_to_fy_and_month(date_str):
+    """
+    Parses date strings in a range of formats commonly seen in scanned
+    invoices, AI-extracted text, and GSTR-2B exports (e.g. '2026-08-20',
+    '20-08-2026', '20 Aug 2026', '2026-08-20T00:00:00Z').
+    Returns (financial_year_str, month_str) or (None, None) if invalid.
+    Financial Year runs from April 1 to March 31.
+    """
+    if not date_str or date_str in ('N/A', '-', 'None'):
+        return None, None
+
+    raw = date_str.strip()
+    # Strip a trailing time-of-day component, whether space- or T-separated
+    date_only = raw.split(' ')[0].split('T')[0]
+
+    numeric_formats = ('%Y-%m-%d', '%d-%m-%Y', '%Y/%m/%d', '%d/%m/%Y', '%d.%m.%Y')
+    for fmt in numeric_formats:
+        try:
+            dt = datetime.datetime.strptime(date_only, fmt)
+            return _dt_to_fy_and_month(dt)
+        except ValueError:
+            continue
+
+    # Formats with a textual month need the full string (may contain spaces)
+    textual_formats = ('%d %B %Y', '%d %b %Y', '%d-%b-%Y', '%d-%B-%Y', '%B %d, %Y', '%b %d, %Y')
+    for fmt in textual_formats:
+        try:
+            dt = datetime.datetime.strptime(raw, fmt)
+            return _dt_to_fy_and_month(dt)
+        except ValueError:
+            continue
+
+    return None, None
+
 # Database Tables Initialization
 def init_db():
     try:
@@ -88,7 +141,27 @@ def init_db():
         # Migrate existing installs that predate the branch/GSTIN columns
         cur.execute('ALTER TABLE invoices ADD COLUMN IF NOT EXISTS branch VARCHAR(100);')
         cur.execute('ALTER TABLE invoices ADD COLUMN IF NOT EXISTS gstin VARCHAR(20);')
+        cur.execute('ALTER TABLE invoices ADD COLUMN IF NOT EXISTS financial_year VARCHAR(10);')
+        cur.execute('ALTER TABLE invoices ADD COLUMN IF NOT EXISTS month VARCHAR(20);')
 
+        # Create GSTR-2B table
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS gstr2b_entries (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                financial_year VARCHAR(10) NOT NULL,
+                month VARCHAR(20) NOT NULL,
+                supplier_gstin VARCHAR(20) NOT NULL,
+                supplier_name VARCHAR(150),
+                invoice_number VARCHAR(50) NOT NULL,
+                invoice_date VARCHAR(20),
+                taxable_value NUMERIC(15,2),
+                cgst NUMERIC(15,2),
+                sgst NUMERIC(15,2),
+                igst NUMERIC(15,2),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        ''')
 
         conn.commit()
         
@@ -121,6 +194,16 @@ def init_db():
         cur.execute("UPDATE invoices SET ineligible_itc = 0 WHERE ineligible_itc IS NULL;")
         cur.execute("UPDATE invoices SET branch = 'Unassigned' WHERE branch IS NULL OR branch = '';")
         cur.execute("UPDATE invoices SET gstin = 'N/A' WHERE gstin IS NULL OR gstin = '';")
+        conn.commit()
+
+        # Backfill financial_year and month for old invoices
+        cur.execute("SELECT id, invoice_date FROM invoices WHERE financial_year IS NULL OR month IS NULL;")
+        old_invoices = cur.fetchall()
+        for row in old_invoices:
+            inv_id, inv_date = row
+            fy, m = parse_date_to_fy_and_month(inv_date)
+            if fy and m:
+                cur.execute("UPDATE invoices SET financial_year = %s, month = %s WHERE id = %s;", (fy, m, inv_id))
         conn.commit()
 
         cur.close()
@@ -338,7 +421,7 @@ def parse_excel_register(file_bytes):
     
     # Clean column names
     orig_cols = list(df.columns)
-    clean_cols = [str(c).strip().lower().replace("_", "").replace(" ", "").replace(".", "") for c in df.columns]
+    clean_cols = [re.sub(r'[^a-z0-9]', '', str(c).strip().lower()) for c in df.columns]
     
     col_mapping = {}
     for orig, clean in zip(orig_cols, clean_cols):
@@ -412,7 +495,7 @@ def parse_excel_register(file_bytes):
 @app.route('/')
 @login_required
 def home():
-    return render_template('index.html', is_admin=is_admin_user())
+    return render_template('index.html', is_admin=is_admin_user(), api_key_configured=bool(ANTHROPIC_API_KEY))
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -521,7 +604,7 @@ def settings():
             except Exception as e:
                 error = f"Database connection error: {e}"
 
-    return render_template('settings.html', error=error)
+    return render_template('settings.html', error=error, api_key_configured=bool(ANTHROPIC_API_KEY))
 
 # API Endpoints
 @app.route('/api/get-invoices', methods=['GET'])
@@ -581,6 +664,8 @@ def save_invoice():
     eligible = round(total_gst * 0.5, 2)
     ineligible = round(total_gst * 0.5, 2)
 
+    fy, m = parse_date_to_fy_and_month(inv_date)
+
     is_admin = is_admin_user()
 
     try:
@@ -594,24 +679,24 @@ def save_invoice():
                     UPDATE invoices
                     SET invoice_number = %s, invoice_date = %s, vendor_name = %s, gstin = %s, branch = %s,
                         taxable_value = %s, cgst = %s, sgst = %s, igst = %s,
-                        eligible_itc = %s, ineligible_itc = %s
+                        eligible_itc = %s, ineligible_itc = %s, financial_year = %s, month = %s
                     WHERE id = %s
-                ''', (inv_num, inv_date, vendor, gstin, branch, taxable, cgst, sgst, igst, eligible, ineligible, db_id))
+                ''', (inv_num, inv_date, vendor, gstin, branch, taxable, cgst, sgst, igst, eligible, ineligible, fy, m, db_id))
             else:
                 cur.execute('''
                     UPDATE invoices
                     SET invoice_number = %s, invoice_date = %s, vendor_name = %s, gstin = %s, branch = %s,
                         taxable_value = %s, cgst = %s, sgst = %s, igst = %s,
-                        eligible_itc = %s, ineligible_itc = %s
+                        eligible_itc = %s, ineligible_itc = %s, financial_year = %s, month = %s
                     WHERE id = %s AND user_id = %s
-                ''', (inv_num, inv_date, vendor, gstin, branch, taxable, cgst, sgst, igst, eligible, ineligible, db_id, user_id))
+                ''', (inv_num, inv_date, vendor, gstin, branch, taxable, cgst, sgst, igst, eligible, ineligible, fy, m, db_id, user_id))
             ret_id = db_id
         else:
             # Insert new invoice
             cur.execute('''
-                INSERT INTO invoices (user_id, invoice_number, invoice_date, vendor_name, gstin, branch, taxable_value, cgst, sgst, igst, eligible_itc, ineligible_itc)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
-            ''', (user_id, inv_num, inv_date, vendor, gstin, branch, taxable, cgst, sgst, igst, eligible, ineligible))
+                INSERT INTO invoices (user_id, invoice_number, invoice_date, vendor_name, gstin, branch, taxable_value, cgst, sgst, igst, eligible_itc, ineligible_itc, financial_year, month)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
+            ''', (user_id, inv_num, inv_date, vendor, gstin, branch, taxable, cgst, sgst, igst, eligible, ineligible, fy, m))
             ret_id = cur.fetchone()[0]
             
         conn.commit()
@@ -782,14 +867,16 @@ def process_invoices():
                 eligible = round(total_gst * 0.5, 2)
                 ineligible = round(total_gst * 0.5, 2)
 
+                fy, m = parse_date_to_fy_and_month(inv["invoice_date"])
+
                 cur.execute('''
-                    INSERT INTO invoices (user_id, invoice_number, invoice_date, vendor_name, gstin, branch, taxable_value, cgst, sgst, igst, eligible_itc, ineligible_itc, file_data, file_mime_type, file_name)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
+                    INSERT INTO invoices (user_id, invoice_number, invoice_date, vendor_name, gstin, branch, taxable_value, cgst, sgst, igst, eligible_itc, ineligible_itc, file_data, file_mime_type, file_name, financial_year, month)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
                 ''', (user_id, inv["invoice_number"], inv["invoice_date"], inv["vendor_name"], inv["gstin"], inv["branch"],
                       inv["taxable_value"], inv["cgst"], inv["sgst"], inv["igst"],
                       eligible, ineligible,
                       psycopg2.Binary(store_file_bytes) if store_file_bytes else None,
-                      store_mime_type, store_file_name))
+                      store_mime_type, store_file_name, fy, m))
 
                 db_id = cur.fetchone()[0]
                 results.append({
@@ -1008,6 +1095,492 @@ def export_excel():
         download_name="GST_ITC_Reconciled_Sheet.xlsx",
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
+import re
+import collections
+
+def clean_invoice_number(num):
+    """Fuzzy invoice number cleaner for Indian GST matching. Strips leading zeros, spaces, and non-alphanumeric chars."""
+    if not num or num == 'N/A' or num == '-' or num == 'None':
+        return ''
+    cleaned = re.sub(r'[^a-zA-Z0-9]', '', str(num)).lower()
+    return cleaned.lstrip('0')
+
+def parse_gstr2b_excel(file_bytes):
+    """
+    Parses GSTR-2B Excel file downloaded from GST Portal.
+    Reads the 'B2B' sheet if present, else fallback to active sheet.
+    Finds header row dynamically.
+    """
+    excel_file = pd.ExcelFile(io.BytesIO(file_bytes))
+    
+    # Target 'B2B' sheet (case-insensitive)
+    target_sheet = None
+    for sheet in excel_file.sheet_names:
+        if sheet.strip().upper() == 'B2B':
+            target_sheet = sheet
+            break
+            
+    df = pd.read_excel(excel_file, sheet_name=target_sheet if target_sheet else 0)
+    
+    # Find column headers dynamically
+    header_row_idx = 0
+    found = False
+    for idx, row in df.iterrows():
+        row_vals = [str(v).strip().lower() for v in row.values if pd.notna(v)]
+        has_gstin = any('gstin' in v or 'gst no' in v for v in row_vals)
+        has_inv = any('invoice' in v or 'document' in v or 'bill' in v for v in row_vals)
+        if has_gstin and has_inv:
+            header_row_idx = idx
+            found = True
+            break
+            
+    if found:
+        df.columns = df.iloc[header_row_idx]
+        df = df.iloc[header_row_idx + 1:].reset_index(drop=True)
+        
+    orig_cols = list(df.columns)
+    clean_cols = [re.sub(r'[^a-z0-9]', '', str(c).strip().lower()) for c in df.columns]
+    
+    col_mapping = {clean: orig for orig, clean in zip(orig_cols, clean_cols)}
+    
+    def find_column(options):
+        for opt in options:
+            if opt in col_mapping:
+                return col_mapping[opt]
+        return None
+
+    inv_num_cols = ["invoicenumber", "invoiceno", "invno", "documentnumber", "docno", "billnumber", "billno"]
+    inv_date_cols = ["invoicedate", "invdate", "documentdate", "docdate", "date", "billdate"]
+    vendor_cols = ["tradelegalnameofthesupplier", "tradelegalname", "suppliername", "partyname", "vendorname", "vendor", "supplier"]
+    taxable_cols = ["taxablevalue", "taxableamt", "taxableamount", "assessablevalue", "taxablevalueinr"]
+    cgst_cols = ["centraltax", "cgst", "cgstamount", "cgstamt", "centraltaxinr"]
+    sgst_cols = ["stateuttax", "sgst", "sgstamount", "sgstamt", "statetax", "stateuttaxinr"]
+    igst_cols = ["integratedtax", "igst", "igstamount", "igstamt", "integratedtaxinr"]
+    gstin_cols = ["gstinofsupplier", "gstin", "gstno", "gstnumber", "suppliergstin"]
+
+    col_num = find_column(inv_num_cols)
+    col_date = find_column(inv_date_cols)
+    col_vendor = find_column(vendor_cols)
+    col_taxable = find_column(taxable_cols)
+    col_cgst = find_column(cgst_cols)
+    col_sgst = find_column(sgst_cols)
+    col_igst = find_column(igst_cols)
+    col_gstin = find_column(gstin_cols)
+
+    if not col_gstin or not col_num:
+        print("Required columns (GSTIN or Invoice No) not found in GSTR-2B file.")
+        return []
+
+    def safe_float(val):
+        """Handles comma thousands-separators (e.g. '1,234.56') from portal
+        exports. Never raises -- a malformed numeric cell shouldn't discard
+        an otherwise-valid row."""
+        if val is None or pd.isna(val):
+            return 0.0
+        try:
+            return float(str(val).replace(',', '').strip())
+        except (TypeError, ValueError):
+            return 0.0
+
+    entries = []
+    for _, row in df.iterrows():
+        try:
+            gstin = str(row[col_gstin]).strip() if pd.notna(row[col_gstin]) else None
+            if not gstin or gstin.lower() in ['nan', 'null', 'n/a', '']:
+                continue
+
+            inv_no = str(row[col_num]).strip() if pd.notna(row[col_num]) else "N/A"
+            inv_date = str(row[col_date]).split(" ")[0].strip() if col_date and pd.notna(row[col_date]) else "N/A"
+            vendor = str(row[col_vendor]).strip() if col_vendor and pd.notna(row[col_vendor]) else "Unknown Vendor"
+
+            taxable = safe_float(row[col_taxable]) if col_taxable else 0.0
+            cgst = safe_float(row[col_cgst]) if col_cgst else 0.0
+            sgst = safe_float(row[col_sgst]) if col_sgst else 0.0
+            igst = safe_float(row[col_igst]) if col_igst else 0.0
+
+            entries.append({
+                "invoice_number": inv_no,
+                "invoice_date": inv_date,
+                "vendor_name": vendor,
+                "gstin": gstin,
+                "taxable_value": taxable,
+                "cgst": cgst,
+                "sgst": sgst,
+                "igst": igst
+            })
+        except Exception as ex:
+            print(f"Error parsing GSTR-2B row: {ex}")
+            continue
+    return entries
+
+@app.route('/reconciliation')
+@login_required
+def reconciliation():
+    return render_template('reconciliation.html', api_key_configured=bool(ANTHROPIC_API_KEY))
+
+@app.route('/api/export-annual-report', methods=['GET'])
+@login_required
+def export_annual_report():
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+
+    user_id = session['user_id']
+    is_admin = is_admin_user()
+    fy = request.args.get('financial_year', '').strip()
+    if not fy:
+        return jsonify({"error": "Financial Year is required"}), 400
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+        # 1. Fetch all books invoices for this FY (all users' if admin, since
+        # GST is filed at the company level across every branch/user)
+        if is_admin:
+            cur.execute('''
+                SELECT id, invoice_number, invoice_date, vendor_name, gstin, branch,
+                       taxable_value::float, cgst::float, sgst::float, igst::float,
+                       eligible_itc::float, ineligible_itc::float, month
+                FROM invoices
+                WHERE financial_year = %s
+                ORDER BY branch, created_at
+            ''', (fy,))
+        else:
+            cur.execute('''
+                SELECT id, invoice_number, invoice_date, vendor_name, gstin, branch,
+                       taxable_value::float, cgst::float, sgst::float, igst::float,
+                       eligible_itc::float, ineligible_itc::float, month
+                FROM invoices
+                WHERE user_id = %s AND financial_year = %s
+                ORDER BY branch, created_at
+            ''', (user_id, fy))
+        books = cur.fetchall()
+        books = sorted(books, key=lambda r: (r['branch'] or '', month_sort_key(r['month'])))
+
+        # 2. Fetch all portal GSTR-2B entries for this FY
+        if is_admin:
+            cur.execute('''
+                SELECT id, invoice_number, invoice_date, supplier_name as vendor_name, supplier_gstin as gstin,
+                       taxable_value::float, cgst::float, sgst::float, igst::float, month
+                FROM gstr2b_entries
+                WHERE financial_year = %s
+                ORDER BY created_at
+            ''', (fy,))
+        else:
+            cur.execute('''
+                SELECT id, invoice_number, invoice_date, supplier_name as vendor_name, supplier_gstin as gstin,
+                       taxable_value::float, cgst::float, sgst::float, igst::float, month
+                FROM gstr2b_entries
+                WHERE user_id = %s AND financial_year = %s
+                ORDER BY created_at
+            ''', (user_id, fy))
+        portal = cur.fetchall()
+        portal = sorted(portal, key=lambda r: month_sort_key(r['month']))
+
+        cur.close()
+        conn.close()
+
+        # Generate workbook with 2 sheets
+        wb = Workbook()
+        
+        # Sheet 1: Purchase Register (Books)
+        ws_books = wb.active
+        ws_books.title = "Annual Purchase Book"
+        
+        # Style Definitions
+        header_fill = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
+        white_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+        bold_font = Font(name="Calibri", size=11, bold=True)
+        regular_font = Font(name="Calibri", size=10)
+        border_thin = Border(left=Side(style='thin', color='DDDDDD'), right=Side(style='thin', color='DDDDDD'),
+                             top=Side(style='thin', color='DDDDDD'), bottom=Side(style='thin', color='DDDDDD'))
+        
+        # Header Row
+        headers_books = ["Month", "Branch", "Supplier GSTIN", "Vendor Name", "Invoice No", "Date", "Taxable Value (₹)", "CGST (₹)", "SGST (₹)", "IGST (₹)", "Eligible ITC (50%)", "Ineligible ITC (50%)"]
+        ws_books.append(headers_books)
+        for col_idx in range(1, len(headers_books) + 1):
+            cell = ws_books.cell(row=1, column=col_idx)
+            cell.fill = header_fill
+            cell.font = white_font
+            cell.alignment = Alignment(horizontal="center")
+            
+        for r in books:
+            row_vals = [
+                r["month"], r["branch"], r["gstin"], r["vendor_name"], r["invoice_number"], r["invoice_date"],
+                r["taxable_value"], r["cgst"], r["sgst"], r["igst"], r["eligible_itc"], r["ineligible_itc"]
+            ]
+            ws_books.append(row_vals)
+            curr_row = ws_books.max_row
+            for col_idx in range(1, len(headers_books) + 1):
+                cell = ws_books.cell(row=curr_row, column=col_idx)
+                cell.font = regular_font
+                cell.border = border_thin
+                if col_idx >= 7:
+                    cell.alignment = Alignment(horizontal="right")
+                    cell.number_format = '#,##0.00'
+                    
+        # Autofit columns
+        for col in ws_books.columns:
+            max_len = 0
+            for cell in col:
+                val = str(cell.value or '')
+                if isinstance(cell.value, float):
+                    val = f"{cell.value:,.2f}"
+                max_len = max(max_len, len(val))
+            col_letter = get_column_letter(col[0].column)
+            ws_books.column_dimensions[col_letter].width = max(max_len + 3, 12)
+            
+        # Sheet 2: Portal Entries
+        ws_portal = wb.create_sheet("Annual Portal GSTR-2B")
+        headers_portal = ["Month", "Supplier GSTIN", "Vendor Name", "Invoice No", "Date", "Taxable Value (₹)", "CGST (₹)", "SGST (₹)", "IGST (₹)"]
+        ws_portal.append(headers_portal)
+        for col_idx in range(1, len(headers_portal) + 1):
+            cell = ws_portal.cell(row=1, column=col_idx)
+            cell.fill = header_fill
+            cell.font = white_font
+            cell.alignment = Alignment(horizontal="center")
+            
+        for r in portal:
+            row_vals = [
+                r["month"], r["gstin"], r["vendor_name"], r["invoice_number"], r["invoice_date"],
+                r["taxable_value"], r["cgst"], r["sgst"], r["igst"]
+            ]
+            ws_portal.append(row_vals)
+            curr_row = ws_portal.max_row
+            for col_idx in range(1, len(headers_portal) + 1):
+                cell = ws_portal.cell(row=curr_row, column=col_idx)
+                cell.font = regular_font
+                cell.border = border_thin
+                if col_idx >= 6:
+                    cell.alignment = Alignment(horizontal="right")
+                    cell.number_format = '#,##0.00'
+                    
+        for col in ws_portal.columns:
+            max_len = 0
+            for cell in col:
+                val = str(cell.value or '')
+                if isinstance(cell.value, float):
+                    val = f"{cell.value:,.2f}"
+                max_len = max(max_len, len(val))
+            col_letter = get_column_letter(col[0].column)
+            ws_portal.column_dimensions[col_letter].width = max(max_len + 3, 12)
+
+        output = io.BytesIO()
+        wb.save(output)
+        output.seek(0)
+        
+        return send_file(
+            output,
+            as_attachment=True,
+            download_name=f"Annual_GST_Report_{fy}.xlsx",
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+    except Exception as e:
+        print(f"Error exporting annual report: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/upload-gstr2b', methods=['POST'])
+@login_required
+def upload_gstr2b():
+    user_id = session['user_id']
+    if 'file' not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
+        
+    file = request.files['file']
+    fy = request.form.get('financial_year', '').strip()
+    month = request.form.get('month', '').strip()
+    
+    if not fy or not month:
+        return jsonify({"error": "Financial Year and Month are required"}), 400
+        
+    file_bytes = file.read()
+    
+    try:
+        entries = parse_gstr2b_excel(file_bytes)
+        if not entries:
+            return jsonify({"error": "No valid GSTR-2B entries found in sheet B2B. Check file headers."}), 400
+            
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        # Delete existing portal entries for this user/FY/Month to prevent duplicates on re-upload
+        cur.execute('''
+            DELETE FROM gstr2b_entries 
+            WHERE user_id = %s AND financial_year = %s AND month = %s
+        ''', (user_id, fy, month))
+        
+        inserted = 0
+        for ent in entries:
+            cur.execute('''
+                INSERT INTO gstr2b_entries (user_id, financial_year, month, supplier_gstin, supplier_name, invoice_number, invoice_date, taxable_value, cgst, sgst, igst)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ''', (user_id, fy, month, ent["gstin"], ent["vendor_name"], ent["invoice_number"], ent["invoice_date"],
+                  ent["taxable_value"], ent["cgst"], ent["sgst"], ent["igst"]))
+            inserted += 1
+            
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        return jsonify({"success": True, "count": inserted})
+    except Exception as e:
+        print(f"Error uploading GSTR-2B: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/reconcile-data', methods=['GET'])
+@login_required
+def reconcile_data():
+    user_id = session['user_id']
+    is_admin = is_admin_user()
+    fy = request.args.get('financial_year', '').strip()
+    months_str = request.args.get('months', '').strip()
+
+    if not fy or not months_str:
+        return jsonify({"error": "Financial Year and Month are required"}), 400
+
+    months = [m.strip() for m in months_str.split(',') if m.strip()]
+    if not months:
+        return jsonify({"error": "At least one month is required"}), 400
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+        # Fetch Books Invoices (eligible and ineligible split is present here).
+        # Admin reconciles across every branch/user, since GST is filed at
+        # the company level, not per individual login.
+        if is_admin:
+            cur.execute('''
+                SELECT id, invoice_number, invoice_date, vendor_name, gstin, branch,
+                       taxable_value::float, cgst::float, sgst::float, igst::float,
+                       (cgst::float + sgst::float + igst::float) as total_gst
+                FROM invoices
+                WHERE financial_year = %s AND month = ANY(%s)
+            ''', (fy, months))
+        else:
+            cur.execute('''
+                SELECT id, invoice_number, invoice_date, vendor_name, gstin, branch,
+                       taxable_value::float, cgst::float, sgst::float, igst::float,
+                       (cgst::float + sgst::float + igst::float) as total_gst
+                FROM invoices
+                WHERE user_id = %s AND financial_year = %s AND month = ANY(%s)
+            ''', (user_id, fy, months))
+        books_invoices = cur.fetchall()
+
+        # Fetch GSTR-2B Portal Entries
+        if is_admin:
+            cur.execute('''
+                SELECT id, invoice_number, invoice_date, supplier_name as vendor_name, supplier_gstin as gstin,
+                       taxable_value::float, cgst::float, sgst::float, igst::float,
+                       (cgst::float + sgst::float + igst::float) as total_gst
+                FROM gstr2b_entries
+                WHERE financial_year = %s AND month = ANY(%s)
+            ''', (fy, months))
+        else:
+            cur.execute('''
+                SELECT id, invoice_number, invoice_date, supplier_name as vendor_name, supplier_gstin as gstin,
+                       taxable_value::float, cgst::float, sgst::float, igst::float,
+                       (cgst::float + sgst::float + igst::float) as total_gst
+                FROM gstr2b_entries
+                WHERE user_id = %s AND financial_year = %s AND month = ANY(%s)
+            ''', (user_id, fy, months))
+        portal_entries = cur.fetchall()
+        
+        cur.close()
+        conn.close()
+        
+        # Match using Supplier GSTIN + Cleaned Invoice Number.
+        # Entries whose invoice number cleans to '' (missing/unusable, e.g.
+        # "N/A") are deliberately excluded from the match pool -- grouping
+        # them together would silently pair unrelated invoices that just
+        # happen to share a blank invoice number.
+        portal_pool = collections.defaultdict(list)
+        for pe in portal_entries:
+            gst = pe['gstin'].strip().upper()
+            num = clean_invoice_number(pe['invoice_number'])
+            if not num:
+                continue
+            portal_pool[(gst, num)].append(pe)
+
+        reconciled = []
+        matched_count = 0
+        mismatched_count = 0
+        missing_portal_count = 0
+
+        matched_portal_ids = set()
+
+        for bi in books_invoices:
+            bgst = bi['gstin'].strip().upper()
+            bnum = clean_invoice_number(bi['invoice_number'])
+
+            candidates = portal_pool.get((bgst, bnum), []) if bnum else []
+            candidates = [c for c in candidates if c['id'] not in matched_portal_ids]
+            
+            if not candidates:
+                reconciled.append({
+                    "status": "Missing in GSTR-2B",
+                    "book": bi,
+                    "portal": None
+                })
+                missing_portal_count += 1
+            else:
+                best_cand = candidates[0]
+                if len(candidates) > 1:
+                    # Select candidate with closest total GST
+                    for c in candidates:
+                        if abs(c['total_gst'] - bi['total_gst']) <= 10.0:
+                            best_cand = c
+                            break
+                            
+                matched_portal_ids.add(best_cand['id'])
+                
+                tax_diff = abs(best_cand['total_gst'] - bi['total_gst'])
+                taxable_diff = abs(best_cand['taxable_value'] - bi['taxable_value'])
+                
+                if tax_diff <= 10.0 and taxable_diff <= 10.0:
+                    reconciled.append({
+                        "status": "Matched",
+                        "book": bi,
+                        "portal": best_cand
+                    })
+                    matched_count += 1
+                else:
+                    reconciled.append({
+                        "status": "Value Mismatched",
+                        "book": bi,
+                        "portal": best_cand
+                    })
+                    mismatched_count += 1
+                    
+        # Leftover portal entries are Missing in Books
+        missing_books_count = 0
+        for pe in portal_entries:
+            if pe['id'] not in matched_portal_ids:
+                reconciled.append({
+                    "status": "Missing in Books",
+                    "book": None,
+                    "portal": pe
+                })
+                missing_books_count += 1
+                
+        summary = {
+            "total_books": len(books_invoices),
+            "total_portal": len(portal_entries),
+            "matched": matched_count,
+            "mismatched": mismatched_count,
+            "missing_in_portal": missing_portal_count,
+            "missing_in_books": missing_books_count
+        }
+        
+        return jsonify({
+            "summary": summary,
+            "items": reconciled
+        })
+    except Exception as e:
+        print(f"Error executing reconciliation: {e}")
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
     # Ensure static and template folders exist

@@ -117,10 +117,17 @@
             </nav>
 
             <div class="sidebar-footer">
+                {% if api_key_configured %}
                 <span class="badge-status">
                     <span class="pulse-indicator"></span>
                     API Connected
                 </span>
+                {% else %}
+                <span class="badge-status error" title="ANTHROPIC_API_KEY is not set on the server">
+                    <span class="pulse-indicator error"></span>
+                    API Key Missing
+                </span>
+                {% endif %}
             </div>
         </aside>
 

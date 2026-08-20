@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GSTR-2B Reconciliation | Nutan Nagrik Bank</title>
+    
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- Custom Style Sheet -->
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="light-mode">
+    <div class="app-container">
+        <!-- Sidebar Navigation -->
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-brand">
+                <i class="fa-solid fa-building-columns brand-icon"></i>
+                <div class="brand-text">
+                    <h2>Nutan Nagrik</h2>
+                    <span class="sub-text">SAHAKARI BANK LTD.</span>
+                </div>
+            </div>
+            
+            <nav class="sidebar-nav">
+                <a href="/" class="nav-item">
+                    <i class="fa-solid fa-chart-line"></i>
+                    <span>ITC Dashboard</span>
+                </a>
+                <a href="/reconciliation" class="nav-item active">
+                    <i class="fa-solid fa-file-invoice"></i>
+                    <span>Reconciliation</span>
+                </a>
+                <a href="/settings" class="nav-item">
+                    <i class="fa-solid fa-gears"></i>
+                    <span>Portal Settings</span>
+                </a>
+                <a href="/logout" class="nav-item">
+                    <i class="fa-solid fa-right-from-bracket"></i>
+                    <span>Logout</span>
+                </a>
+            </nav>
+            
+            <div class="sidebar-footer">
+                {% if api_key_configured %}
+                <span class="badge-status">
+                    <span class="pulse-indicator"></span>
+                    API Connected
+                </span>
+                {% else %}
+                <span class="badge-status error" title="ANTHROPIC_API_KEY is not set on the server">
+                    <span class="pulse-indicator error"></span>
+                    API Key Missing
+                </span>
+                {% endif %}
+            </div>
+        </aside>
+
+        <div class="sidebar-backdrop" id="sidebar-backdrop"></div>
+
+        <!-- Main Content Area -->
+        <main class="main-content">
+            <!-- Header -->
+            <header class="top-header">
+                <button class="mobile-menu-toggle" id="mobile-menu-toggle" aria-label="Open menu">
+                    <i class="fa-solid fa-bars"></i>
+                </button>
+                <div class="header-title">
+                    <h1>Stage 2: GSTR-2B Reconciliation</h1>
+                    <p class="section-desc">Fuzzy Matching Engine comparing Purchase Register against GST Portal GSTR-2B</p>
+                </div>
+                <div class="user-profile">
+                    <div class="profile-info">
+                        <span class="profile-name">{{ session['username'] }}</span>
+                        <span class="profile-role">Nutan Nagrik Bank</span>
+                    </div>
+                    <div class="profile-avatar">
+                        <i class="fa-solid fa-user-tie"></i>
+                    </div>
+                </div>
+            </header>
+
+            <!-- Swipeable/Scrollable KPI Row -->
+            <section class="metrics-grid kpi-scroll-container">
+                <div class="metric-card kpi-matched">
+                    <div class="card-icon green"><i class="fa-solid fa-circle-check"></i></div>
+                    <div class="card-data">
+                        <h3>Fully Matched</h3>
+                        <span class="metric-value text-green" id="kpi-matched">0 Invoices</span>
+                    </div>
+                </div>
+                
+                <div class="metric-card kpi-mismatched">
+                    <div class="card-icon yellow"><i class="fa-solid fa-triangle-exclamation"></i></div>
+                    <div class="card-data">
+                        <h3>Value Mismatched</h3>
+                        <span class="metric-value text-yellow" id="kpi-mismatched">0 Invoices</span>
+                    </div>
+                </div>
+                
+                <div class="metric-card kpi-missing-portal">
+                    <div class="card-icon red"><i class="fa-solid fa-circle-xmark"></i></div>
+                    <div class="card-data">
+                        <h3>Missing in Portal</h3>
+                        <span class="metric-value text-red" id="kpi-missing-portal">0 Invoices</span>
+                    </div>
+                </div>
+                
+                <div class="metric-card kpi-missing-books">
+                    <div class="card-icon blue"><i class="fa-solid fa-circle-question"></i></div>
+                    <div class="card-data">
+                        <h3>Missing in Books</h3>
+                        <span class="metric-value text-blue" id="kpi-missing-books">0 Invoices</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Dashboard Control Center -->
+            <div class="control-center-grid">
+                <!-- Parameters Card -->
+                <section class="dashboard-panel filter-panel">
+                    <div class="panel-header">
+                        <h2><i class="fa-solid fa-sliders"></i> Filter Parameters</h2>
+                    </div>
+                    <div class="filter-row">
+                        <div class="filter-group">
+                            <label for="fy-select">Financial Year</label>
+                            <select id="fy-select" class="form-control">
+                                <option value="2025-26" selected>FY 2025-26</option>
+                                <option value="2026-27">FY 2026-27</option>
+                                <option value="2024-25">FY 2024-25</option>
+                            </select>
+                        </div>
+                        <div class="filter-group">
+                            <label>Months selection</label>
+                            <div class="month-pill-grid">
+                                <label class="month-pill"><input type="checkbox" name="months" value="April" checked><span>Apr</span></label>
+                                <label class="month-pill"><input type="checkbox" name="months" value="May" checked><span>May</span></label>
+                                <label class="month-pill"><input type="checkbox" name="months" value="June" checked><span>Jun</span></label>
+                                <label class="month-pill"><input type="checkbox" name="months" value="July" checked><span>Jul</span></label>
+                                <label class="month-pill"><input type="checkbox" name="months" value="August" checked><span>Aug</span></label>
+                                <label class="month-pill"><input type="checkbox" name="months" value="September" checked><span>Sep</span></label>
+                                <label class="month-pill"><input type="checkbox" name="months" value="October" checked><span>Oct</span></label>
+                                <label class="month-pill"><input type="checkbox" name="months" value="November" checked><span>Nov</span></label>
+                                <label class="month-pill"><input type="checkbox" name="months" value="December" checked><span>Dec</span></label>
+                                <label class="month-pill"><input type="checkbox" name="months" value="January" checked><span>Jan</span></label>
+                                <label class="month-pill"><input type="checkbox" name="months" value="February" checked><span>Feb</span></label>
+                                <label class="month-pill"><input type="checkbox" name="months" value="March" checked><span>Mar</span></label>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Portal GSTR-2B Upload -->
+                <section class="dashboard-panel upload-gstr2b-panel">
+                    <div class="panel-header">
+                        <h2><i class="fa-solid fa-file-arrow-up"></i> Upload GSTR-2B Excel</h2>
+                        <p class="panel-subtitle">Select matching month to import Portal GSTR-2B B2B sheet details.</p>
+                    </div>
+                    
+                    <div class="gstr2b-upload-row">
+                        <select id="upload-month" class="form-control">
+                            <option value="">-- Select Month --</option>
+                            <option value="April">April</option>
+                            <option value="May">May</option>
+                            <option value="June">June</option>
+                            <option value="July">July</option>
+                            <option value="August">August</option>
+                            <option value="September">September</option>
+                            <option value="October">October</option>
+                            <option value="November">November</option>
+                            <option value="December">December</option>
+                            <option value="January">January</option>
+                            <option value="February">February</option>
+                            <option value="March">March</option>
+                        </select>
+                        
+                        <div class="gstr2b-drop-zone" id="gstr2b-drop-zone">
+                            <input type="file" id="gstr2b-file-input" accept=".xlsx,.xls" style="display:none;">
+                            <label for="gstr2b-file-input" class="gstr2b-upload-label">
+                                <i class="fa-solid fa-cloud-arrow-up"></i>
+                                <span>Choose GSTR-2B Excel File</span>
+                            </label>
+                        </div>
+                    </div>
+                    
+                    <div id="gstr2b-upload-status" class="upload-status-message" style="display:none;"></div>
+                </section>
+            </div>
+
+            <!-- Reconciliation ledger -->
+            <section class="dashboard-panel table-panel">
+                <div class="panel-toolbar">
+                    <div class="toolbar-left">
+                        <h2><i class="fa-solid fa-list-check"></i> Reconciliation ledger</h2>
+                        <span class="row-count" id="recon-count">0 items found</span>
+                    </div>
+                    
+                    <div class="toolbar-right">
+                        <div class="search-box">
+                            <i class="fa-solid fa-magnifying-glass"></i>
+                            <input type="text" id="recon-search" placeholder="Search GSTIN, invoice no...">
+                        </div>
+                        <button class="btn btn-gold" id="btn-export-annual">
+                            <i class="fa-solid fa-file-excel"></i> Export Annual Report
+                        </button>
+                        <div class="status-filters">
+                            <button class="filter-status-btn active" data-status="all">All</button>
+                            <button class="filter-status-btn" data-status="Matched">Matched</button>
+                            <button class="filter-status-btn" data-status="Value Mismatched">Mismatched</button>
+                            <button class="filter-status-btn" data-status="Missing in GSTR-2B">Missing in Portal</button>
+                            <button class="filter-status-btn" data-status="Missing in Books">Missing in Books</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Desktop Ledger Layout -->
+                <div class="table-container desktop-only">
+                    <table class="invoice-table recon-table">
+                        <thead>
+                            <tr class="header-main">
+                                <th rowspan="2" width="15%">Supplier / GSTIN</th>
+                                <th colspan="4" class="th-books">Our Books Data (Stage 1)</th>
+                                <th colspan="4" class="th-portal">Portal GSTR-2B Data (Stage 2)</th>
+                                <th rowspan="2" width="10%">Match Status</th>
+                                <th rowspan="2" width="9%">Actions</th>
+                            </tr>
+                            <tr class="header-sub">
+                                <th class="th-books-sub">Branch</th>
+                                <th class="th-books-sub">Inv No</th>
+                                <th class="th-books-sub">Date</th>
+                                <th class="th-books-sub">GST Amt (₹)</th>
+                                
+                                <th class="th-portal-sub">Inv No</th>
+                                <th class="th-portal-sub">Date</th>
+                                <th class="th-portal-sub">GST Amt (₹)</th>
+                                <th class="th-portal-sub">Taxable (₹)</th>
+                            </tr>
+                        </thead>
+                        <tbody id="recon-table-body">
+                            <tr class="empty-state-row">
+                                <td colspan="11">
+                                    <div class="empty-state">
+                                        <i class="fa-solid fa-scale-balanced"></i>
+                                        <p>No reconciliation records loaded. Select financial year & months, or upload a GSTR-2B Excel to trigger matching.</p>
+                                    </div>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Mobile Ledger Layout (Comparison Card List) -->
+                <div class="mobile-only mobile-card-list" id="recon-card-list">
+                    <div class="empty-state">
+                        <i class="fa-solid fa-scale-balanced"></i>
+                        <p>No reconciliation records loaded.</p>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Scripts -->
+    <script src="/static/nav.js"></script>
+    <script src="/static/reconciliation.js"></script>
+</body>
+</html>
