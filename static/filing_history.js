@@ -21,12 +21,18 @@
 
     function formatDateTime(iso) {
         if (!iso) return '-';
-        var d = new Date(iso);
+        // created_at is stored/serialized as a naive UTC timestamp (no 'Z' or
+        // offset), so without this the browser misreads it as already-local
+        // time. Mark it UTC explicitly, then render in IST regardless of the
+        // viewer's own device timezone.
+        var hasTz = /Z$|[+-]\d{2}:?\d{2}$/.test(iso);
+        var d = new Date(hasTz ? iso : iso + 'Z');
         if (isNaN(d.getTime())) return iso;
         return d.toLocaleString('en-IN', {
+            timeZone: 'Asia/Kolkata',
             day: '2-digit', month: 'short', year: 'numeric',
             hour: '2-digit', minute: '2-digit'
-        });
+        }) + ' IST';
     }
 
     function renderRows(history, isAdmin) {
