@@ -711,6 +711,7 @@ def get_invoices():
                 SELECT invoices.id, invoice_number, invoice_date, payment_date, vendor_name, gstin, branch,
                        taxable_value::float, cgst::float, sgst::float, igst::float, itc_blocked,
                        eligible_itc::float, ineligible_itc::float, users.username,
+                       financial_year, month,
                        (file_data IS NOT NULL) AS has_file
                 FROM invoices
                 JOIN users ON users.id = invoices.user_id
@@ -721,6 +722,7 @@ def get_invoices():
                 SELECT id, invoice_number, invoice_date, payment_date, vendor_name, gstin, branch,
                        taxable_value::float, cgst::float, sgst::float, igst::float, itc_blocked,
                        eligible_itc::float, ineligible_itc::float,
+                       financial_year, month,
                        (file_data IS NOT NULL) AS has_file
                 FROM invoices
                 WHERE user_id = %s
@@ -810,7 +812,9 @@ def save_invoice():
             "success": True,
             "id": ret_id,
             "eligible_itc": eligible,
-            "ineligible_itc": ineligible
+            "ineligible_itc": ineligible,
+            "financial_year": fy,
+            "month": m
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -1044,6 +1048,8 @@ def process_invoices():
                     "has_file": store_file_bytes is not None,
                     "eligible_itc": eligible,
                     "ineligible_itc": ineligible,
+                    "financial_year": fy,
+                    "month": m,
                     "filename": filename
                 })
             conn.commit()
