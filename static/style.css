@@ -705,9 +705,29 @@ body {
 /* Table Design */
 .table-container {
     overflow-x: auto;
+    max-width: 100%;
     border-radius: 12px;
     border: 1px solid var(--border-color);
     box-shadow: var(--shadow-soft);
+    /* Chrome/Edge on Windows use a hover-only "overlay" scrollbar by
+       default, so a wide table's horizontal scrollbar is invisible until
+       the mouse is over it -- easy to miss entirely. Force a slim,
+       always-visible bar instead so it's obvious the table scrolls. */
+    scrollbar-width: thin;
+    scrollbar-color: var(--accent-blue) var(--bg-color);
+}
+
+.table-container::-webkit-scrollbar {
+    height: 10px;
+}
+
+.table-container::-webkit-scrollbar-track {
+    background: var(--bg-color);
+}
+
+.table-container::-webkit-scrollbar-thumb {
+    background-color: var(--accent-blue);
+    border-radius: 6px;
 }
 
 .invoice-table {
