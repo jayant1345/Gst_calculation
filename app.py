@@ -1574,6 +1574,128 @@ def upload_gstr2b():
         print(f"Error uploading GSTR-2B: {e}")
         return jsonify({"error": str(e)}), 500
 
+def execute_reconciliation(fy, months, user_id, is_admin):
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+    if is_admin:
+        cur.execute('''
+            SELECT id, invoice_number, invoice_date, vendor_name, gstin, branch,
+                   taxable_value::float, cgst::float, sgst::float, igst::float,
+                   eligible_itc::float, ineligible_itc::float,
+                   (cgst::float + sgst::float + igst::float) as total_gst
+            FROM invoices
+            WHERE financial_year = %s AND month = ANY(%s)
+        ''', (fy, months))
+    else:
+        cur.execute('''
+            SELECT id, invoice_number, invoice_date, vendor_name, gstin, branch,
+                   taxable_value::float, cgst::float, sgst::float, igst::float,
+                   eligible_itc::float, ineligible_itc::float,
+                   (cgst::float + sgst::float + igst::float) as total_gst
+            FROM invoices
+            WHERE user_id = %s AND financial_year = %s AND month = ANY(%s)
+        ''', (user_id, fy, months))
+    books_invoices = cur.fetchall()
+
+    if is_admin:
+        cur.execute('''
+            SELECT id, invoice_number, invoice_date, supplier_name as vendor_name, supplier_gstin as gstin,
+                   taxable_value::float, cgst::float, sgst::float, igst::float,
+                   (cgst::float + sgst::float + igst::float) as total_gst
+            FROM gstr2b_entries
+            WHERE financial_year = %s AND month = ANY(%s)
+        ''', (fy, months))
+    else:
+        cur.execute('''
+            SELECT id, invoice_number, invoice_date, supplier_name as vendor_name, supplier_gstin as gstin,
+                   taxable_value::float, cgst::float, sgst::float, igst::float,
+                   (cgst::float + sgst::float + igst::float) as total_gst
+            FROM gstr2b_entries
+            WHERE user_id = %s AND financial_year = %s AND month = ANY(%s)
+        ''', (user_id, fy, months))
+    portal_entries = cur.fetchall()
+
+    cur.close()
+    conn.close()
+
+    portal_pool = collections.defaultdict(list)
+    for pe in portal_entries:
+        gst = pe['gstin'].strip().upper()
+        num = clean_invoice_number(pe['invoice_number'])
+        if not num:
+            continue
+        portal_pool[(gst, num)].append(pe)
+
+    reconciled = []
+    matched_count = 0
+    mismatched_count = 0
+    missing_portal_count = 0
+    matched_portal_ids = set()
+
+    for bi in books_invoices:
+        bgst = bi['gstin'].strip().upper()
+        bnum = clean_invoice_number(bi['invoice_number'])
+
+        candidates = portal_pool.get((bgst, bnum), []) if bnum else []
+        candidates = [c for c in candidates if c['id'] not in matched_portal_ids]
+
+        if not candidates:
+            reconciled.append({
+                "status": "Missing in GSTR-2B",
+                "book": bi,
+                "portal": None
+            })
+            missing_portal_count += 1
+        else:
+            best_cand = candidates[0]
+            if len(candidates) > 1:
+                for c in candidates:
+                    if abs(c['total_gst'] - bi['total_gst']) <= 10.0:
+                        best_cand = c
+                        break
+
+            matched_portal_ids.add(best_cand['id'])
+            tax_diff = abs(best_cand['total_gst'] - bi['total_gst'])
+            taxable_diff = abs(best_cand['taxable_value'] - bi['taxable_value'])
+
+            if tax_diff <= 10.0 and taxable_diff <= 10.0:
+                reconciled.append({
+                    "status": "Matched",
+                    "book": bi,
+                    "portal": best_cand
+                })
+                matched_count += 1
+            else:
+                reconciled.append({
+                    "status": "Value Mismatched",
+                    "book": bi,
+                    "portal": best_cand
+                })
+                mismatched_count += 1
+
+    missing_books_count = 0
+    for pe in portal_entries:
+        if pe['id'] not in matched_portal_ids:
+            reconciled.append({
+                "status": "Missing in Books",
+                "book": None,
+                "portal": pe
+            })
+            missing_books_count += 1
+
+    summary = {
+        "total_books": len(books_invoices),
+        "total_portal": len(portal_entries),
+        "matched": matched_count,
+        "mismatched": mismatched_count,
+        "missing_in_portal": missing_portal_count,
+        "missing_in_books": missing_books_count
+    }
+
+    return summary, reconciled, books_invoices, portal_entries
+
+
 @app.route('/api/reconcile-data', methods=['GET'])
 @login_required
 def reconcile_data():
@@ -1590,135 +1712,7 @@ def reconcile_data():
         return jsonify({"error": "At least one month is required"}), 400
 
     try:
-        conn = get_db_connection()
-        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-
-        # Fetch Books Invoices (eligible and ineligible split is present here).
-        # Admin reconciles across every branch/user, since GST is filed at
-        # the company level, not per individual login.
-        if is_admin:
-            cur.execute('''
-                SELECT id, invoice_number, invoice_date, vendor_name, gstin, branch,
-                       taxable_value::float, cgst::float, sgst::float, igst::float,
-                       (cgst::float + sgst::float + igst::float) as total_gst
-                FROM invoices
-                WHERE financial_year = %s AND month = ANY(%s)
-            ''', (fy, months))
-        else:
-            cur.execute('''
-                SELECT id, invoice_number, invoice_date, vendor_name, gstin, branch,
-                       taxable_value::float, cgst::float, sgst::float, igst::float,
-                       (cgst::float + sgst::float + igst::float) as total_gst
-                FROM invoices
-                WHERE user_id = %s AND financial_year = %s AND month = ANY(%s)
-            ''', (user_id, fy, months))
-        books_invoices = cur.fetchall()
-
-        # Fetch GSTR-2B Portal Entries
-        if is_admin:
-            cur.execute('''
-                SELECT id, invoice_number, invoice_date, supplier_name as vendor_name, supplier_gstin as gstin,
-                       taxable_value::float, cgst::float, sgst::float, igst::float,
-                       (cgst::float + sgst::float + igst::float) as total_gst
-                FROM gstr2b_entries
-                WHERE financial_year = %s AND month = ANY(%s)
-            ''', (fy, months))
-        else:
-            cur.execute('''
-                SELECT id, invoice_number, invoice_date, supplier_name as vendor_name, supplier_gstin as gstin,
-                       taxable_value::float, cgst::float, sgst::float, igst::float,
-                       (cgst::float + sgst::float + igst::float) as total_gst
-                FROM gstr2b_entries
-                WHERE user_id = %s AND financial_year = %s AND month = ANY(%s)
-            ''', (user_id, fy, months))
-        portal_entries = cur.fetchall()
-        
-        cur.close()
-        conn.close()
-        
-        # Match using Supplier GSTIN + Cleaned Invoice Number.
-        # Entries whose invoice number cleans to '' (missing/unusable, e.g.
-        # "N/A") are deliberately excluded from the match pool -- grouping
-        # them together would silently pair unrelated invoices that just
-        # happen to share a blank invoice number.
-        portal_pool = collections.defaultdict(list)
-        for pe in portal_entries:
-            gst = pe['gstin'].strip().upper()
-            num = clean_invoice_number(pe['invoice_number'])
-            if not num:
-                continue
-            portal_pool[(gst, num)].append(pe)
-
-        reconciled = []
-        matched_count = 0
-        mismatched_count = 0
-        missing_portal_count = 0
-
-        matched_portal_ids = set()
-
-        for bi in books_invoices:
-            bgst = bi['gstin'].strip().upper()
-            bnum = clean_invoice_number(bi['invoice_number'])
-
-            candidates = portal_pool.get((bgst, bnum), []) if bnum else []
-            candidates = [c for c in candidates if c['id'] not in matched_portal_ids]
-            
-            if not candidates:
-                reconciled.append({
-                    "status": "Missing in GSTR-2B",
-                    "book": bi,
-                    "portal": None
-                })
-                missing_portal_count += 1
-            else:
-                best_cand = candidates[0]
-                if len(candidates) > 1:
-                    # Select candidate with closest total GST
-                    for c in candidates:
-                        if abs(c['total_gst'] - bi['total_gst']) <= 10.0:
-                            best_cand = c
-                            break
-                            
-                matched_portal_ids.add(best_cand['id'])
-                
-                tax_diff = abs(best_cand['total_gst'] - bi['total_gst'])
-                taxable_diff = abs(best_cand['taxable_value'] - bi['taxable_value'])
-                
-                if tax_diff <= 10.0 and taxable_diff <= 10.0:
-                    reconciled.append({
-                        "status": "Matched",
-                        "book": bi,
-                        "portal": best_cand
-                    })
-                    matched_count += 1
-                else:
-                    reconciled.append({
-                        "status": "Value Mismatched",
-                        "book": bi,
-                        "portal": best_cand
-                    })
-                    mismatched_count += 1
-                    
-        # Leftover portal entries are Missing in Books
-        missing_books_count = 0
-        for pe in portal_entries:
-            if pe['id'] not in matched_portal_ids:
-                reconciled.append({
-                    "status": "Missing in Books",
-                    "book": None,
-                    "portal": pe
-                })
-                missing_books_count += 1
-                
-        summary = {
-            "total_books": len(books_invoices),
-            "total_portal": len(portal_entries),
-            "matched": matched_count,
-            "mismatched": mismatched_count,
-            "missing_in_portal": missing_portal_count,
-            "missing_in_books": missing_books_count
-        }
-        
+        summary, reconciled, _, _ = execute_reconciliation(fy, months, user_id, is_admin)
         return jsonify({
             "summary": summary,
             "items": reconciled
@@ -1726,6 +1720,355 @@ def reconcile_data():
     except Exception as e:
         print(f"Error executing reconciliation: {e}")
         return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/vendor-discrepancies', methods=['GET'])
+@login_required
+def get_vendor_discrepancies():
+    user_id = session['user_id']
+    is_admin = is_admin_user()
+    fy = request.args.get('financial_year', '').strip()
+    months_str = request.args.get('months', '').strip()
+
+    if not fy or not months_str:
+        return jsonify({"error": "Financial Year and Month are required"}), 400
+    months = [m.strip() for m in months_str.split(',') if m.strip()]
+
+    try:
+        summary, reconciled, _, _ = execute_reconciliation(fy, months, user_id, is_admin)
+
+        vendors_dict = collections.defaultdict(lambda: {
+            "gstin": "",
+            "vendor_name": "",
+            "missing_invoices": [],
+            "mismatched_invoices": [],
+            "total_tax_on_hold": 0.0
+        })
+
+        for item in reconciled:
+            status = item["status"]
+            if status in ["Missing in GSTR-2B", "Value Mismatched"]:
+                book = item["book"]
+                if not book:
+                    continue
+                gstin = book["gstin"].strip().upper()
+                vname = book["vendor_name"].strip()
+                key = (gstin, vname)
+
+                entry = vendors_dict[key]
+                entry["gstin"] = gstin
+                entry["vendor_name"] = vname
+
+                if status == "Missing in GSTR-2B":
+                    entry["missing_invoices"].append({
+                        "invoice_number": book["invoice_number"],
+                        "invoice_date": book["invoice_date"],
+                        "taxable_value": book["taxable_value"],
+                        "cgst": book["cgst"],
+                        "sgst": book["sgst"],
+                        "igst": book["igst"],
+                        "total_gst": book["total_gst"]
+                    })
+                    entry["total_tax_on_hold"] += book["total_gst"]
+                elif status == "Value Mismatched":
+                    portal = item["portal"]
+                    tax_diff = abs((portal["total_gst"] if portal else 0.0) - book["total_gst"])
+                    entry["mismatched_invoices"].append({
+                        "invoice_number": book["invoice_number"],
+                        "invoice_date": book["invoice_date"],
+                        "book_taxable": book["taxable_value"],
+                        "book_gst": book["total_gst"],
+                        "portal_taxable": portal["taxable_value"] if portal else 0.0,
+                        "portal_gst": portal["total_gst"] if portal else 0.0,
+                        "tax_diff": tax_diff
+                    })
+                    entry["total_tax_on_hold"] += book["total_gst"]
+
+        vendor_list = sorted(list(vendors_dict.values()), key=lambda x: x["total_tax_on_hold"], reverse=True)
+
+        return jsonify({
+            "success": True,
+            "financial_year": fy,
+            "months": months,
+            "total_vendors": len(vendor_list),
+            "vendors": vendor_list
+        })
+    except Exception as e:
+        print(f"Error fetching vendor discrepancies: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/generate-vendor-notice', methods=['POST'])
+@login_required
+def generate_vendor_notice():
+    data = request.json or {}
+    gstin = data.get('gstin', '').strip().upper()
+    vname = data.get('vendor_name', '').strip()
+    fy = data.get('financial_year', '').strip()
+    months = data.get('months', [])
+
+    if isinstance(months, str):
+        months = [m.strip() for m in months.split(',') if m.strip()]
+
+    if not gstin or not fy or not months:
+        return jsonify({"error": "GSTIN, Financial Year, and Months are required"}), 400
+
+    user_id = session['user_id']
+    is_admin = is_admin_user()
+
+    try:
+        _, reconciled, _, _ = execute_reconciliation(fy, months, user_id, is_admin)
+
+        missing_list = []
+        mismatched_list = []
+        total_tax_hold = 0.0
+
+        for item in reconciled:
+            status = item["status"]
+            if status in ["Missing in GSTR-2B", "Value Mismatched"]:
+                book = item["book"]
+                if not book or book["gstin"].strip().upper() != gstin:
+                    continue
+                vname = vname or book["vendor_name"]
+
+                if status == "Missing in GSTR-2B":
+                    missing_list.append(book)
+                    total_tax_hold += book["total_gst"]
+                elif status == "Value Mismatched":
+                    portal = item["portal"]
+                    mismatched_list.append({"book": book, "portal": portal})
+                    total_tax_hold += book["total_gst"]
+
+        if not missing_list and not mismatched_list:
+            return jsonify({"error": "No discrepancies found for this vendor in selected period."}), 404
+
+        email_subject = f"URGENT: GST ITC Reconciliation Discrepancy Notice - {vname} (GSTIN: {gstin})"
+
+        email_body = f"To,\n{vname}\nGSTIN: {gstin}\n\n"
+        email_body += f"Subject: Request to upload/correct purchase invoices in GSTR-1 for {fy} ({', '.join(months)})\n\n"
+        email_body += f"Dear Accounts Team,\n\n"
+        email_body += f"During our monthly GST Input Tax Credit (ITC) reconciliation for Nutan Nagrik Sahakari Bank Ltd., we identified discrepancies regarding purchase invoices issued by your organization. As per current GST guidelines, ITC cannot be claimed by us until these invoices accurately reflect in GSTR-2B.\n\n"
+
+        if missing_list:
+            email_body += "--- MISSING INVOICES IN GSTR-2B ---\n"
+            email_body += "The following invoices recorded in our books were NOT found in GSTR-2B statement:\n\n"
+            email_body += f"{'Inv No':<18} | {'Inv Date':<12} | {'Taxable (₹)':<12} | {'CGST (₹)':<10} | {'SGST (₹)':<10} | {'IGST (₹)':<10} | {'Total GST (₹)':<12}\n"
+            email_body += "-" * 90 + "\n"
+            for b in missing_list:
+                email_body += f"{b['invoice_number']:<18} | {b['invoice_date']:<12} | {b['taxable_value']:<12.2f} | {b['cgst']:<10.2f} | {b['sgst']:<10.2f} | {b['igst']:<10.2f} | {b['total_gst']:<12.2f}\n"
+            email_body += "\n"
+
+        if mismatched_list:
+            email_body += "--- VALUE MISMATCHED INVOICES ---\n"
+            email_body += "The following invoices have tax/taxable value discrepancies between our books and GSTR-2B:\n\n"
+            for m in mismatched_list:
+                b = m["book"]
+                p = m["portal"]
+                email_body += f"Invoice No: {b['invoice_number']} | Date: {b['invoice_date']}\n"
+                email_body += f"  - Our Books    : Taxable ₹{b['taxable_value']:,.2f}, Total GST ₹{b['total_gst']:,.2f}\n"
+                email_body += f"  - GSTR-2B Portal: Taxable ₹{p['taxable_value']:,.2f}, Total GST ₹{p['total_gst']:,.2f}\n"
+                email_body += f"  - Difference   : Tax Diff ₹{abs(p['total_gst'] - b['total_gst']):,.2f}\n\n"
+
+        email_body += f"Total ITC Currently Put On Hold: ₹{total_tax_hold:,.2f}\n\n"
+        email_body += "We kindly request you to upload the missing invoices or amend the mismatched details in your upcoming GSTR-1 return filing at the earliest so we can claim the eligible ITC.\n\n"
+        email_body += "Thank you for your cooperation.\n\nBest regards,\nAccounts & Tax Department\nNutan Nagrik Sahakari Bank Ltd."
+
+        wa_text = f"*GST Reconciliation Alert - Nutan Nagrik Bank*\n"
+        wa_text += f"Vendor: {vname} ({gstin})\n"
+        wa_text += f"Period: {fy} ({', '.join(months)})\n"
+        wa_text += f"Discrepancy: {len(missing_list)} Missing, {len(mismatched_list)} Mismatched\n"
+        wa_text += f"Total Tax Credit On Hold: ₹{total_tax_hold:,.2f}\n\n"
+        wa_text += f"Please check your email or contact us to resolve invoice filings in GSTR-1. Thank you!"
+
+        return jsonify({
+            "success": True,
+            "vendor_name": vname,
+            "gstin": gstin,
+            "email_subject": email_subject,
+            "email_body": email_body,
+            "whatsapp_text": wa_text,
+            "total_tax_on_hold": total_tax_hold
+        })
+    except Exception as e:
+        print(f"Error generating vendor notice: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/gstr3b-summary', methods=['GET'])
+@login_required
+def get_gstr3b_summary():
+    user_id = session['user_id']
+    is_admin = is_admin_user()
+    fy = request.args.get('financial_year', '').strip()
+    months_str = request.args.get('months', '').strip()
+
+    if not fy or not months_str:
+        return jsonify({"error": "Financial Year and Month are required"}), 400
+    months = [m.strip() for m in months_str.split(',') if m.strip()]
+
+    try:
+        summary, reconciled, books_invoices, _ = execute_reconciliation(fy, months, user_id, is_admin)
+
+        itc_4a5_matched = {"taxable": 0.0, "cgst": 0.0, "sgst": 0.0, "igst": 0.0, "total": 0.0}
+        itc_4b2_ineligible = {"taxable": 0.0, "cgst": 0.0, "sgst": 0.0, "igst": 0.0, "total": 0.0}
+        itc_4d1_pending = {"taxable": 0.0, "cgst": 0.0, "sgst": 0.0, "igst": 0.0, "total": 0.0}
+
+        for bi in books_invoices:
+            cgst = bi.get("cgst", 0.0)
+            sgst = bi.get("sgst", 0.0)
+            igst = bi.get("igst", 0.0)
+            taxable = bi.get("taxable_value", 0.0)
+            total_gst = cgst + sgst + igst
+            inelig = bi.get("ineligible_itc", 0.0)
+            # Was hardcoded to a flat 50%, which silently halved the breakdown
+            # for ITC-blocked invoices (100% ineligible) -- the total column
+            # used the real stored value while cgst/sgst/igst/taxable didn't,
+            # so they no longer summed to the total for any blocked invoice.
+            inelig_ratio = inelig / total_gst if total_gst > 0 else 0.0
+
+            itc_4b2_ineligible["taxable"] += taxable * inelig_ratio
+            itc_4b2_ineligible["cgst"] += cgst * inelig_ratio
+            itc_4b2_ineligible["sgst"] += sgst * inelig_ratio
+            itc_4b2_ineligible["igst"] += igst * inelig_ratio
+            itc_4b2_ineligible["total"] += inelig
+
+        for item in reconciled:
+            status = item["status"]
+            book = item.get("book")
+            if not book:
+                continue
+
+            cgst = book.get("cgst", 0.0)
+            sgst = book.get("sgst", 0.0)
+            igst = book.get("igst", 0.0)
+            taxable = book.get("taxable_value", 0.0)
+            total_gst = book.get("total_gst", 0.0)
+            elig_gst = book.get("eligible_itc", total_gst * 0.5)
+            elig_ratio = elig_gst / total_gst if total_gst > 0 else 0.5
+
+            if status == "Matched":
+                itc_4a5_matched["taxable"] += taxable * elig_ratio
+                itc_4a5_matched["cgst"] += cgst * elig_ratio
+                itc_4a5_matched["sgst"] += sgst * elig_ratio
+                itc_4a5_matched["igst"] += igst * elig_ratio
+                itc_4a5_matched["total"] += elig_gst
+            elif status in ["Missing in GSTR-2B", "Value Mismatched"]:
+                itc_4d1_pending["taxable"] += taxable * elig_ratio
+                itc_4d1_pending["cgst"] += cgst * elig_ratio
+                itc_4d1_pending["sgst"] += sgst * elig_ratio
+                itc_4d1_pending["igst"] += igst * elig_ratio
+                itc_4d1_pending["total"] += elig_gst
+
+        return jsonify({
+            "success": True,
+            "financial_year": fy,
+            "months": months,
+            "gstr3b": {
+                "table_4a5_all_other_itc": itc_4a5_matched,
+                "table_4b2_ineligible_itc": itc_4b2_ineligible,
+                "table_4d1_pending_itc": itc_4d1_pending
+            }
+        })
+    except Exception as e:
+        print(f"Error computing GSTR-3B summary: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/export-vendor-discrepancies', methods=['GET'])
+@login_required
+def export_vendor_discrepancies():
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+
+    user_id = session['user_id']
+    is_admin = is_admin_user()
+    fy = request.args.get('financial_year', '').strip()
+    months_str = request.args.get('months', '').strip()
+
+    if not fy or not months_str:
+        return jsonify({"error": "Financial Year and Month are required"}), 400
+    months = [m.strip() for m in months_str.split(',') if m.strip()]
+
+    try:
+        _, reconciled, _, _ = execute_reconciliation(fy, months, user_id, is_admin)
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Vendor Discrepancy Report"
+
+        header_fill = PatternFill(start_color="3525CD", end_color="3525CD", fill_type="solid")
+        white_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+        regular_font = Font(name="Calibri", size=10)
+        border_thin = Border(left=Side(style='thin', color='DDDDDD'), right=Side(style='thin', color='DDDDDD'),
+                             top=Side(style='thin', color='DDDDDD'), bottom=Side(style='thin', color='DDDDDD'))
+
+        red_fill = PatternFill(start_color="FFDAD6", end_color="FFDAD6", fill_type="solid")
+        yellow_fill = PatternFill(start_color="FFF3CD", end_color="FFF3CD", fill_type="solid")
+
+        headers = ["Supplier GSTIN", "Vendor Name", "Discrepancy Status", "Invoice No", "Date", "Book Taxable (₹)", "Book GST (₹)", "Portal Taxable (₹)", "Portal GST (₹)", "Tax Difference (₹)", "Action Required"]
+        ws.append(headers)
+        for col_idx in range(1, len(headers) + 1):
+            cell = ws.cell(row=1, column=col_idx)
+            cell.fill = header_fill
+            cell.font = white_font
+            cell.alignment = Alignment(horizontal="center")
+
+        for item in reconciled:
+            status = item["status"]
+            if status not in ["Missing in GSTR-2B", "Value Mismatched"]:
+                continue
+
+            book = item["book"]
+            portal = item["portal"]
+
+            gstin = book["gstin"] if book else portal["gstin"]
+            vendor = book["vendor_name"] if book else portal["vendor_name"]
+            inv_no = book["invoice_number"] if book else portal["invoice_number"]
+            inv_date = book["invoice_date"] if book else portal["invoice_date"]
+
+            b_taxable = book["taxable_value"] if book else 0.0
+            b_gst = book["total_gst"] if book else 0.0
+            p_taxable = portal["taxable_value"] if portal else 0.0
+            p_gst = portal["total_gst"] if portal else 0.0
+
+            tax_diff = abs(p_gst - b_gst)
+            action = "Upload in GSTR-1" if status == "Missing in GSTR-2B" else "Amend Tax Amount in GSTR-1"
+
+            row_vals = [gstin, vendor, status, inv_no, inv_date, b_taxable, b_gst, p_taxable, p_gst, tax_diff, action]
+            ws.append(row_vals)
+
+            curr_row = ws.max_row
+            fill_color = red_fill if status == "Missing in GSTR-2B" else yellow_fill
+            for col_idx in range(1, len(headers) + 1):
+                cell = ws.cell(row=curr_row, column=col_idx)
+                cell.font = regular_font
+                cell.border = border_thin
+                if col_idx in [3, 11]:
+                    cell.fill = fill_color
+                if col_idx in [6, 7, 8, 9, 10]:
+                    cell.alignment = Alignment(horizontal="right")
+                    cell.number_format = '#,##0.00'
+
+        for col in ws.columns:
+            max_len = max(len(str(cell.value or '')) for cell in col)
+            col_letter = get_column_letter(col[0].column)
+            ws.column_dimensions[col_letter].width = max(max_len + 3, 12)
+
+        output = io.BytesIO()
+        wb.save(output)
+        output.seek(0)
+
+        return send_file(
+            output,
+            as_attachment=True,
+            download_name=f"Vendor_Discrepancy_Report_{fy}.xlsx",
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+    except Exception as e:
+        print(f"Error exporting vendor discrepancy excel: {e}")
+        return jsonify({"error": str(e)}), 500
+
 
 if __name__ == '__main__':
     # Ensure static and template folders exist

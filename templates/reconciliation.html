@@ -78,8 +78,8 @@
                     <i class="fa-solid fa-bars"></i>
                 </button>
                 <div class="header-title">
-                    <h1>Stage 2: GSTR-2B Reconciliation</h1>
-                    <p class="section-desc">Fuzzy Matching Engine comparing Purchase Register against GST Portal GSTR-2B</p>
+                    <h1>GST Compliance & Reconciliation Center</h1>
+                    <p class="section-desc">Stage 2 GSTR-2B Matching Engine & Stage 3 Vendor Discrepancy Action Center</p>
                 </div>
                 <div class="user-profile">
                     <div class="profile-info">
@@ -92,44 +92,18 @@
                 </div>
             </header>
 
-            <!-- Swipeable/Scrollable KPI Row -->
-            <section class="metrics-grid kpi-scroll-container">
-                <div class="metric-card kpi-matched">
-                    <div class="card-icon green"><i class="fa-solid fa-circle-check"></i></div>
-                    <div class="card-data">
-                        <h3>Fully Matched</h3>
-                        <span class="metric-value text-green" id="kpi-matched">0 Invoices</span>
-                    </div>
-                </div>
-                
-                <div class="metric-card kpi-mismatched">
-                    <div class="card-icon yellow"><i class="fa-solid fa-triangle-exclamation"></i></div>
-                    <div class="card-data">
-                        <h3>Value Mismatched</h3>
-                        <span class="metric-value text-yellow" id="kpi-mismatched">0 Invoices</span>
-                    </div>
-                </div>
-                
-                <div class="metric-card kpi-missing-portal">
-                    <div class="card-icon red"><i class="fa-solid fa-circle-xmark"></i></div>
-                    <div class="card-data">
-                        <h3>Missing in Portal</h3>
-                        <span class="metric-value text-red" id="kpi-missing-portal">0 Invoices</span>
-                    </div>
-                </div>
-                
-                <div class="metric-card kpi-missing-books">
-                    <div class="card-icon blue"><i class="fa-solid fa-circle-question"></i></div>
-                    <div class="card-data">
-                        <h3>Missing in Books</h3>
-                        <span class="metric-value text-blue" id="kpi-missing-books">0 Invoices</span>
-                    </div>
-                </div>
-            </section>
+            <!-- Stage View Switcher Tabs -->
+            <div class="stage-nav-tabs">
+                <button class="stage-tab-btn active" id="tab-btn-stage2">
+                    <i class="fa-solid fa-scale-balanced"></i> Stage 2: GSTR-2B Matching Ledger
+                </button>
+                <button class="stage-tab-btn" id="tab-btn-stage3">
+                    <i class="fa-solid fa-bullhorn"></i> Stage 3: Vendor Action Center & GSTR-3B Helper
+                </button>
+            </div>
 
-            <!-- Dashboard Control Center -->
-            <div class="control-center-grid">
-                <!-- Parameters Card -->
+            <!-- Parameters Filter Panel (Shared across Stage 2 & 3) -->
+            <div class="control-center-grid" style="margin-top: 1rem;">
                 <section class="dashboard-panel filter-panel">
                     <div class="panel-header">
                         <h2><i class="fa-solid fa-sliders"></i> Filter Parameters</h2>
@@ -200,77 +174,289 @@
                 </section>
             </div>
 
-            <!-- Reconciliation ledger -->
-            <section class="dashboard-panel table-panel">
-                <div class="panel-toolbar">
-                    <div class="toolbar-left">
-                        <h2><i class="fa-solid fa-list-check"></i> Reconciliation ledger</h2>
-                        <span class="row-count" id="recon-count">0 items found</span>
+            <!-- VIEW STAGE 2: RECONCILIATION LEDGER -->
+            <div id="view-stage2">
+                <!-- Swipeable/Scrollable KPI Row -->
+                <section class="metrics-grid kpi-scroll-container" style="margin-top: 1.5rem;">
+                    <div class="metric-card kpi-matched">
+                        <div class="card-icon green"><i class="fa-solid fa-circle-check"></i></div>
+                        <div class="card-data">
+                            <h3>Fully Matched</h3>
+                            <span class="metric-value text-green" id="kpi-matched">0 Invoices</span>
+                        </div>
                     </div>
                     
-                    <div class="toolbar-right">
-                        <div class="search-box">
-                            <i class="fa-solid fa-magnifying-glass"></i>
-                            <input type="text" id="recon-search" placeholder="Search GSTIN, invoice no...">
-                        </div>
-                        <button class="btn btn-gold" id="btn-export-annual">
-                            <i class="fa-solid fa-file-excel"></i> Export Annual Report
-                        </button>
-                        <div class="status-filters">
-                            <button class="filter-status-btn active" data-status="all">All</button>
-                            <button class="filter-status-btn" data-status="Matched">Matched</button>
-                            <button class="filter-status-btn" data-status="Value Mismatched">Mismatched</button>
-                            <button class="filter-status-btn" data-status="Missing in GSTR-2B">Missing in Portal</button>
-                            <button class="filter-status-btn" data-status="Missing in Books">Missing in Books</button>
+                    <div class="metric-card kpi-mismatched">
+                        <div class="card-icon yellow"><i class="fa-solid fa-triangle-exclamation"></i></div>
+                        <div class="card-data">
+                            <h3>Value Mismatched</h3>
+                            <span class="metric-value text-yellow" id="kpi-mismatched">0 Invoices</span>
                         </div>
                     </div>
-                </div>
-
-                <!-- Desktop Ledger Layout -->
-                <div class="table-container desktop-only">
-                    <table class="invoice-table recon-table">
-                        <thead>
-                            <tr class="header-main">
-                                <th rowspan="2" width="15%">Supplier / GSTIN</th>
-                                <th colspan="4" class="th-books">Our Books Data (Stage 1)</th>
-                                <th colspan="4" class="th-portal">Portal GSTR-2B Data (Stage 2)</th>
-                                <th rowspan="2" width="10%">Match Status</th>
-                                <th rowspan="2" width="9%">Actions</th>
-                            </tr>
-                            <tr class="header-sub">
-                                <th class="th-books-sub">Branch</th>
-                                <th class="th-books-sub">Inv No</th>
-                                <th class="th-books-sub">Date</th>
-                                <th class="th-books-sub">GST Amt (₹)</th>
-                                
-                                <th class="th-portal-sub">Inv No</th>
-                                <th class="th-portal-sub">Date</th>
-                                <th class="th-portal-sub">GST Amt (₹)</th>
-                                <th class="th-portal-sub">Taxable (₹)</th>
-                            </tr>
-                        </thead>
-                        <tbody id="recon-table-body">
-                            <tr class="empty-state-row">
-                                <td colspan="11">
-                                    <div class="empty-state">
-                                        <i class="fa-solid fa-scale-balanced"></i>
-                                        <p>No reconciliation records loaded. Select financial year & months, or upload a GSTR-2B Excel to trigger matching.</p>
-                                    </div>
-                                </td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-
-                <!-- Mobile Ledger Layout (Comparison Card List) -->
-                <div class="mobile-only mobile-card-list" id="recon-card-list">
-                    <div class="empty-state">
-                        <i class="fa-solid fa-scale-balanced"></i>
-                        <p>No reconciliation records loaded.</p>
+                    
+                    <div class="metric-card kpi-missing-portal">
+                        <div class="card-icon red"><i class="fa-solid fa-circle-xmark"></i></div>
+                        <div class="card-data">
+                            <h3>Missing in Portal</h3>
+                            <span class="metric-value text-red" id="kpi-missing-portal">0 Invoices</span>
+                        </div>
                     </div>
-                </div>
-            </section>
+                    
+                    <div class="metric-card kpi-missing-books">
+                        <div class="card-icon blue"><i class="fa-solid fa-circle-question"></i></div>
+                        <div class="card-data">
+                            <h3>Missing in Books</h3>
+                            <span class="metric-value text-blue" id="kpi-missing-books">0 Invoices</span>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Reconciliation ledger -->
+                <section class="dashboard-panel table-panel" style="margin-top: 1.5rem;">
+                    <div class="panel-toolbar">
+                        <div class="toolbar-left">
+                            <h2><i class="fa-solid fa-list-check"></i> Reconciliation ledger</h2>
+                            <span class="row-count" id="recon-count">0 items found</span>
+                        </div>
+                        
+                        <div class="toolbar-right">
+                            <div class="search-box">
+                                <i class="fa-solid fa-magnifying-glass"></i>
+                                <input type="text" id="recon-search" placeholder="Search GSTIN, invoice no...">
+                            </div>
+                            <button class="btn btn-gold" id="btn-export-annual">
+                                <i class="fa-solid fa-file-excel"></i> Export Annual Report
+                            </button>
+                            <div class="status-filters">
+                                <button class="filter-status-btn active" data-status="all">All</button>
+                                <button class="filter-status-btn" data-status="Matched">Matched</button>
+                                <button class="filter-status-btn" data-status="Value Mismatched">Mismatched</button>
+                                <button class="filter-status-btn" data-status="Missing in GSTR-2B">Missing in Portal</button>
+                                <button class="filter-status-btn" data-status="Missing in Books">Missing in Books</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Desktop Ledger Layout -->
+                    <div class="table-container desktop-only">
+                        <table class="invoice-table recon-table">
+                            <thead>
+                                <tr class="header-main">
+                                    <th rowspan="2" width="15%">Supplier / GSTIN</th>
+                                    <th colspan="4" class="th-books">Our Books Data (Stage 1)</th>
+                                    <th colspan="4" class="th-portal">Portal GSTR-2B Data (Stage 2)</th>
+                                    <th rowspan="2" width="10%">Match Status</th>
+                                    <th rowspan="2" width="9%">Actions</th>
+                                </tr>
+                                <tr class="header-sub">
+                                    <th class="th-books-sub">Branch</th>
+                                    <th class="th-books-sub">Inv No</th>
+                                    <th class="th-books-sub">Date</th>
+                                    <th class="th-books-sub">GST Amt (₹)</th>
+                                    
+                                    <th class="th-portal-sub">Inv No</th>
+                                    <th class="th-portal-sub">Date</th>
+                                    <th class="th-portal-sub">GST Amt (₹)</th>
+                                    <th class="th-portal-sub">Taxable (₹)</th>
+                                </tr>
+                            </thead>
+                            <tbody id="recon-table-body">
+                                <tr class="empty-state-row">
+                                    <td colspan="11">
+                                        <div class="empty-state">
+                                            <i class="fa-solid fa-scale-balanced"></i>
+                                            <p>No reconciliation records loaded. Select financial year & months, or upload a GSTR-2B Excel to trigger matching.</p>
+                                        </div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <!-- Mobile Ledger Layout (Comparison Card List) -->
+                    <div class="mobile-only mobile-card-list" id="recon-card-list">
+                        <div class="empty-state">
+                            <i class="fa-solid fa-scale-balanced"></i>
+                            <p>No reconciliation records loaded.</p>
+                        </div>
+                    </div>
+                </section>
+            </div>
+
+            <!-- VIEW STAGE 3: VENDOR ACTION CENTER & GSTR-3B HELPER -->
+            <div id="view-stage3" style="display: none;">
+                <!-- Stage 3 KPI Metrics Grid -->
+                <section class="metrics-grid kpi-scroll-container" style="margin-top: 1.5rem;">
+                    <div class="metric-card">
+                        <div class="card-icon blue"><i class="fa-solid fa-file-invoice-dollar"></i></div>
+                        <div class="card-data">
+                            <h3>Total Invoices</h3>
+                            <span class="metric-value text-blue" id="stg3-kpi-total">0 Invoices</span>
+                        </div>
+                    </div>
+
+                    <div class="metric-card">
+                        <div class="card-icon green"><i class="fa-solid fa-shield-check"></i></div>
+                        <div class="card-data">
+                            <h3>Claimable GSTR-3B ITC</h3>
+                            <span class="metric-value text-green" id="stg3-kpi-claimable">₹0.00</span>
+                        </div>
+                    </div>
+
+                    <div class="metric-card">
+                        <div class="card-icon yellow"><i class="fa-solid fa-hand-holding-dollar"></i></div>
+                        <div class="card-data">
+                            <h3>Mismatched ITC (Hold)</h3>
+                            <span class="metric-value text-yellow" id="stg3-kpi-mismatched">₹0.00</span>
+                        </div>
+                    </div>
+
+                    <div class="metric-card">
+                        <div class="card-icon red"><i class="fa-solid fa-user-clock"></i></div>
+                        <div class="card-data">
+                            <h3>Missing ITC (Pending)</h3>
+                            <span class="metric-value text-red" id="stg3-kpi-missing">₹0.00</span>
+                        </div>
+                    </div>
+
+                    <div class="metric-card">
+                        <div class="card-icon slate"><i class="fa-solid fa-ban"></i></div>
+                        <div class="card-data">
+                            <h3>Blocked Credit Sec 17(5)</h3>
+                            <span class="metric-value text-slate" id="stg3-kpi-blocked">₹0.00</span>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Stage 3 Vendor Action Center Table -->
+                <section class="dashboard-panel table-panel" style="margin-top: 1.5rem;">
+                    <div class="panel-toolbar">
+                        <div class="toolbar-left">
+                            <h2><i class="fa-solid fa-users-gear"></i> Vendor Discrepancy & Follow-Up Manager</h2>
+                            <span class="row-count" id="vendor-count">0 Vendors Need Action</span>
+                        </div>
+                        <div class="toolbar-right">
+                            <button class="btn btn-primary" id="btn-export-vendor-discrepancies">
+                                <i class="fa-solid fa-file-excel"></i> Export Vendor Discrepancy Sheet
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="table-container">
+                        <table class="invoice-table">
+                            <thead>
+                                <tr>
+                                    <th>Supplier GSTIN</th>
+                                    <th>Vendor Name</th>
+                                    <th>Missing Bills</th>
+                                    <th>Mismatched Bills</th>
+                                    <th class="text-right">Total Tax Credit On Hold (₹)</th>
+                                    <th class="text-center">Follow-Up Action</th>
+                                </tr>
+                            </thead>
+                            <tbody id="vendor-table-body">
+                                <tr class="empty-state-row">
+                                    <td colspan="6">
+                                        <div class="empty-state">
+                                            <i class="fa-solid fa-circle-check"></i>
+                                            <p>No vendor discrepancies found! All invoices are matched.</p>
+                                        </div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <!-- GSTR-3B Table 4 Return Filing Summary Card -->
+                <section class="dashboard-panel" style="margin-top: 1.5rem;">
+                    <div class="panel-header">
+                        <h2><i class="fa-solid fa-calculator"></i> GSTR-3B Return Filing Table 4 Helper</h2>
+                        <p class="panel-subtitle">Automated breakdown for filing Table 4 in GSTR-3B monthly return.</p>
+                    </div>
+
+                    <div class="table-container" style="margin-top: 1rem;">
+                        <table class="invoice-table gstr3b-table">
+                            <thead>
+                                <tr>
+                                    <th>GSTR-3B Table 4 Head</th>
+                                    <th class="text-right">Taxable Value (₹)</th>
+                                    <th class="text-right">CGST (₹)</th>
+                                    <th class="text-right">SGST (₹)</th>
+                                    <th class="text-right">IGST (₹)</th>
+                                    <th class="text-right">Total Eligible / Claim (₹)</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td><strong>4A(5) All Other ITC (Claimable)</strong><br><small class="text-muted">Matched purchase invoices in GSTR-2B</small></td>
+                                    <td class="text-right" id="gstr3b-4a5-taxable">₹0.00</td>
+                                    <td class="text-right" id="gstr3b-4a5-cgst">₹0.00</td>
+                                    <td class="text-right" id="gstr3b-4a5-sgst">₹0.00</td>
+                                    <td class="text-right" id="gstr3b-4a5-igst">₹0.00</td>
+                                    <td class="text-right text-green" id="gstr3b-4a5-total"><strong>₹0.00</strong></td>
+                                </tr>
+                                <tr>
+                                    <td><strong>4B(2) Ineligible ITC (Section 17(5))</strong><br><small class="text-muted">Blocked credit (motor vehicles, catering, employee welfare, flat 50% split)</small></td>
+                                    <td class="text-right" id="gstr3b-4b2-taxable">₹0.00</td>
+                                    <td class="text-right" id="gstr3b-4b2-cgst">₹0.00</td>
+                                    <td class="text-right" id="gstr3b-4b2-sgst">₹0.00</td>
+                                    <td class="text-right" id="gstr3b-4b2-igst">₹0.00</td>
+                                    <td class="text-right text-slate" id="gstr3b-4b2-total"><strong>₹0.00</strong></td>
+                                </tr>
+                                <tr>
+                                    <td><strong>4D(1) ITC Pending / Put On Hold</strong><br><small class="text-muted">Missing in GSTR-2B or tax difference - claim in future return</small></td>
+                                    <td class="text-right" id="gstr3b-4d1-taxable">₹0.00</td>
+                                    <td class="text-right" id="gstr3b-4d1-cgst">₹0.00</td>
+                                    <td class="text-right" id="gstr3b-4d1-sgst">₹0.00</td>
+                                    <td class="text-right" id="gstr3b-4d1-igst">₹0.00</td>
+                                    <td class="text-right text-red" id="gstr3b-4d1-total"><strong>₹0.00</strong></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+            </div>
         </main>
+    </div>
+
+    <!-- Vendor Compliance Notice Modal Popup -->
+    <div class="modal-backdrop" id="notice-modal" style="display: none;">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3><i class="fa-solid fa-paper-plane"></i> Vendor Discrepancy Notice Draft</h3>
+                <button class="modal-close-btn" id="modal-close-btn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="notice-vendor-details">
+                    <strong id="modal-vendor-name">Supplier Name</strong>
+                    <span id="modal-vendor-gstin" class="gstin-sub">GSTIN: 24AAAAA0000A1Z5</span>
+                </div>
+
+                <div class="modal-tab-bar">
+                    <button class="modal-tab active" id="modal-tab-email">Email Draft</button>
+                    <button class="modal-tab" id="modal-tab-wa">WhatsApp Message</button>
+                </div>
+
+                <div id="modal-email-view">
+                    <label style="font-weight:600; font-size:13px; margin-top:8px; display:block;">Email Subject:</label>
+                    <input type="text" id="modal-email-subject" class="form-control" readonly style="margin-bottom: 10px; font-weight:600;">
+                    
+                    <label style="font-weight:600; font-size:13px; display:block;">Email Body:</label>
+                    <textarea id="modal-email-body" class="form-control" rows="12" style="font-family: monospace; font-size: 13px;"></textarea>
+                </div>
+
+                <div id="modal-wa-view" style="display: none;">
+                    <label style="font-weight:600; font-size:13px; margin-top:8px; display:block;">WhatsApp Message Text:</label>
+                    <textarea id="modal-wa-body" class="form-control" rows="8" style="font-family: monospace; font-size: 13px;"></textarea>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="modal-btn-copy"><i class="fa-solid fa-copy"></i> Copy to Clipboard</button>
+                <a href="#" target="_blank" class="btn btn-primary" id="modal-btn-wa-link" style="display:none;"><i class="fa-brands fa-whatsapp"></i> Open in WhatsApp</a>
+                <button class="btn btn-dark" id="modal-btn-close">Close</button>
+            </div>
+        </div>
     </div>
 
     <!-- Scripts -->

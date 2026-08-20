@@ -1615,3 +1615,188 @@ body {
 .mobile-action-btn.approve { background-color: var(--accent-green); }
 .mobile-action-btn.notify { background-color: var(--accent-blue); }
 
+/* STAGE 3 UI & DESIGN SYSTEM EXTENSIONS */
+.stage-nav-tabs {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+    background: #e2e8f0;
+    padding: 6px;
+    border-radius: 12px;
+    width: fit-content;
+}
+
+.stage-tab-btn {
+    border: none;
+    background: transparent;
+    padding: 10px 20px;
+    font-weight: 600;
+    font-size: 13.5px;
+    border-radius: 8px;
+    color: #64748b;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.stage-tab-btn:hover {
+    color: #1e293b;
+}
+
+.stage-tab-btn.active {
+    background: #ffffff;
+    color: #3525cd;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.06);
+}
+
+.card-icon.slate {
+    background-color: #f1f5f9;
+    color: #64748b;
+}
+
+.text-slate {
+    color: #64748b !important;
+}
+
+.gstr3b-table td {
+    padding: 14px 16px;
+    vertical-align: middle;
+}
+
+/* Modal Popup Styles */
+.modal-backdrop {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background: rgba(15, 23, 42, 0.55);
+    backdrop-filter: blur(4px);
+    z-index: 9999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+}
+
+.modal-card {
+    background: #ffffff;
+    border-radius: 16px;
+    width: 100%;
+    max-width: 720px;
+    max-height: 90vh;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+    overflow: hidden;
+    animation: modalSlideUp 0.25s ease-out;
+}
+
+@keyframes modalSlideUp {
+    from { transform: translateY(20px); opacity: 0; }
+    to { transform: translateY(0); opacity: 1; }
+}
+
+.modal-header {
+    padding: 18px 24px;
+    border-bottom: 1px solid #e2e8f0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: #f8fafc;
+}
+
+.modal-header h3 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 700;
+    color: #1e293b;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.modal-close-btn {
+    border: none;
+    background: transparent;
+    font-size: 24px;
+    color: #64748b;
+    cursor: pointer;
+    line-height: 1;
+}
+
+.modal-close-btn:hover {
+    color: #0f172a;
+}
+
+.modal-body {
+    padding: 20px 24px;
+    overflow-y: auto;
+    flex: 1;
+}
+
+.notice-vendor-details {
+    background: #eff6ff;
+    border: 1px solid #bfdbfe;
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin-bottom: 16px;
+    display: flex;
+    flex-direction: column;
+}
+
+.notice-vendor-details strong {
+    color: #1e3a8a;
+    font-size: 15px;
+}
+
+.modal-tab-bar {
+    display: flex;
+    gap: 8px;
+    border-bottom: 2px solid #e2e8f0;
+    margin-bottom: 16px;
+}
+
+.modal-tab {
+    border: none;
+    background: transparent;
+    padding: 8px 16px;
+    font-weight: 600;
+    font-size: 13px;
+    color: #64748b;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -2px;
+}
+
+.modal-tab.active {
+    color: #3525cd;
+    border-bottom-color: #3525cd;
+}
+
+.modal-footer {
+    padding: 16px 24px;
+    border-top: 1px solid #e2e8f0;
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    background: #f8fafc;
+}
+
+.btn-dark {
+    background-color: #334155;
+    color: #ffffff;
+}
+
+.btn-dark:hover {
+    background-color: #1e293b;
+}
+
+.btn-action-small.wa {
+    background-color: #10b981;
+    color: #ffffff;
+}
+
+
