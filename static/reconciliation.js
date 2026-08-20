@@ -231,6 +231,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 actionBtn = `<button class="btn-action-small approve" data-action="approve" title="Approve ITC"><i class="fa-solid fa-check"></i></button>`;
             } else if (item.status === 'Possible Match') {
                 actionBtn = `<button class="btn-action-small approve" data-action="confirm-match" title="Confirm this is the same invoice"><i class="fa-solid fa-code-compare"></i></button>`;
+                if (item.book && item.book.has_file) {
+                    actionBtn += `<button class="btn-action-small hold" data-action="rescan" title="Re-scan original bill with AI"><i class="fa-solid fa-arrows-rotate"></i></button>`;
+                }
             } else if (item.status === 'Missing in GSTR-2B' || item.status === 'Value Mismatched') {
                 actionBtn = `<button class="btn-action-small notify" data-action="notify" title="Notify Vendor"><i class="fa-solid fa-envelope"></i></button>`;
             } else {
@@ -260,16 +263,16 @@ document.addEventListener('DOMContentLoaded', function() {
                 <td><div class="action-btn-cell">${actionBtn}</div></td>
             `;
 
-            const actionEl = tr.querySelector('[data-action]');
-            if (actionEl) {
+            tr.querySelectorAll('[data-action]').forEach(actionEl => {
                 actionEl.addEventListener('click', () => {
                     const kind = actionEl.dataset.action;
                     if (kind === 'approve') alert('ITC Approved!');
                     else if (kind === 'confirm-match') confirmPossibleMatch(item.book.id, item.portal.invoice_number, item.portal.gstin, supplier);
+                    else if (kind === 'rescan') rescanInvoice(item.book.id, actionEl);
                     else if (kind === 'notify') alert(`Sending follow-up to vendor: ${supplier}`);
                     else alert('Put invoice on hold.');
                 });
-            }
+            });
 
             reconTableBody.appendChild(tr);
         });
@@ -302,6 +305,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 actionHtml = `<button class="mobile-action-btn approve" data-action="approve"><i class="fa-solid fa-check"></i> Approve</button>`;
             } else if (isPossibleMatch) {
                 actionHtml = `<button class="mobile-action-btn approve" data-action="confirm-match"><i class="fa-solid fa-code-compare"></i> Confirm Match</button>`;
+                if (item.book && item.book.has_file) {
+                    actionHtml += `<button class="mobile-action-btn notify" data-action="rescan"><i class="fa-solid fa-arrows-rotate"></i> Re-scan Bill</button>`;
+                }
             } else {
                 actionHtml = `<button class="mobile-action-btn notify" data-action="notify"><i class="fa-solid fa-envelope"></i> Send Notice</button>`;
             }
@@ -336,15 +342,15 @@ document.addEventListener('DOMContentLoaded', function() {
                 </div>
             `;
 
-            const cardActionEl = card.querySelector('[data-action]');
-            if (cardActionEl) {
+            card.querySelectorAll('[data-action]').forEach(cardActionEl => {
                 cardActionEl.addEventListener('click', () => {
                     const kind = cardActionEl.dataset.action;
                     if (kind === 'approve') alert('ITC Approved!');
                     else if (kind === 'confirm-match') confirmPossibleMatch(item.book.id, item.portal.invoice_number, item.portal.gstin, supplier);
+                    else if (kind === 'rescan') rescanInvoice(item.book.id, cardActionEl);
                     else alert(`Notifying vendor: ${supplier}`);
                 });
-            }
+            });
 
             reconCardList.appendChild(card);
         });
@@ -384,6 +390,43 @@ document.addEventListener('DOMContentLoaded', function() {
         .catch(err => {
             alert('Network error while applying correction.');
             console.error(err);
+        });
+    }
+
+    // Alternative to confirmPossibleMatch: instead of trusting the portal's
+    // values outright, re-run AI vision extraction on the bill's originally
+    // stored file for a fresh, careful read. Manual/on-demand -- this calls
+    // the paid vision API, so it only runs when a human explicitly asks.
+    function rescanInvoice(bookId, btnEl) {
+        if (!confirm('Re-scan the original bill with AI? This re-reads the stored file and may take a few seconds.')) {
+            return;
+        }
+        const originalHtml = btnEl.innerHTML;
+        btnEl.disabled = true;
+        btnEl.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
+
+        fetch('/api/rescan-invoice', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ book_id: bookId })
+        })
+        .then(res => res.json())
+        .then(data => {
+            if (data.success) {
+                alert(`Re-scan complete.\n\nInvoice #: ${data.invoice_number}\nGSTIN: ${data.gstin}`);
+                fetchReconciliationData();
+                if (activeStage === 3) loadStage3Data();
+            } else {
+                alert(data.error || 'Failed to re-scan bill.');
+                btnEl.disabled = false;
+                btnEl.innerHTML = originalHtml;
+            }
+        })
+        .catch(err => {
+            alert('Network error while re-scanning bill.');
+            console.error(err);
+            btnEl.disabled = false;
+            btnEl.innerHTML = originalHtml;
         });
     }
 

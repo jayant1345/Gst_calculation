@@ -847,11 +847,11 @@ def delete_invoice():
 @app.route('/api/apply-book-correction', methods=['POST'])
 @login_required
 def apply_book_correction():
-    """Used from the Stage 3 'Possible Match - Verify' review flow: once a
-    human confirms a near-match is really the same invoice (identical
-    amounts, one OCR-misread character), overwrite the book entry's
-    GSTIN/invoice number with the portal's government-verified values so
-    the next reconciliation run matches it exactly."""
+    """Used from the Stage 3 'Possible Match' review flow: once a human
+    confirms a near-match is really the same invoice (identical amounts,
+    one OCR-misread character), overwrite the book entry's GSTIN/invoice
+    number with the portal's government-verified values so the next
+    reconciliation run matches it exactly."""
     user_id = session['user_id']
     is_admin = is_admin_user()
     data = request.json or {}
@@ -880,6 +880,101 @@ def apply_book_correction():
         log_activity(user_id, 'bill_corrected', f'Corrected invoice #{invoice_number} to match GSTR-2B (Stage 3 review)', record_count=1)
         return jsonify({"success": True})
     except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/rescan-invoice', methods=['POST'])
+@login_required
+def rescan_invoice():
+    """Used from the Stage 3 'Possible Match' review flow as an alternative
+    to blindly trusting the portal's values: re-runs AI vision extraction
+    on the bill's originally stored file (always the vision model directly,
+    since the whole point is a more careful re-read, not the cheap
+    text-extraction path). Manual/on-demand rather than automatic -- an
+    auto-trigger on every reconciliation view would fire a paid API call
+    on every page load for every unresolved near-match, which isn't
+    something to do silently."""
+    user_id = session['user_id']
+    is_admin = is_admin_user()
+    data = request.json or {}
+    book_id = data.get('book_id')
+    if not book_id:
+        return jsonify({"error": "book_id is required"}), 400
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        if is_admin:
+            cur.execute('SELECT file_data, file_mime_type, itc_blocked FROM invoices WHERE id = %s', (book_id,))
+        else:
+            cur.execute('SELECT file_data, file_mime_type, itc_blocked FROM invoices WHERE id = %s AND user_id = %s', (book_id, user_id))
+        row = cur.fetchone()
+
+        if not row or row[0] is None:
+            cur.close()
+            conn.close()
+            return jsonify({"error": "No original bill file stored for this invoice"}), 404
+
+        file_data, mime_type, itc_blocked = row
+        file_bytes = bytes(file_data)
+
+        if mime_type == "application/pdf":
+            inv = extract_from_pdf_binary(file_bytes)
+        else:
+            base64_img = base64.b64encode(file_bytes).decode('utf-8')
+            inv = extract_from_image(base64_img, mime_type)
+
+        invoice_number = inv.get("invoice_number") or "N/A"
+        invoice_date = inv.get("invoice_date") or "N/A"
+        payment_date = inv.get("payment_date") or None
+        vendor_name = inv.get("vendor_name") or "Unknown Vendor"
+        gstin = inv.get("gstin") or "N/A"
+        taxable_value = float(inv.get("taxable_value") or 0.0)
+        cgst = float(inv.get("cgst") or 0.0)
+        sgst = float(inv.get("sgst") or 0.0)
+        igst = float(inv.get("igst") or 0.0)
+
+        total_gst = cgst + sgst + igst
+        if itc_blocked:
+            eligible = 0.0
+            ineligible = round(total_gst, 2)
+        else:
+            eligible = round(total_gst * 0.5, 2)
+            ineligible = round(total_gst * 0.5, 2)
+
+        fy, m = parse_date_to_fy_and_month(invoice_date)
+
+        cur.execute('''
+            UPDATE invoices
+            SET invoice_number = %s, invoice_date = %s, payment_date = %s, vendor_name = %s, gstin = %s,
+                taxable_value = %s, cgst = %s, sgst = %s, igst = %s,
+                eligible_itc = %s, ineligible_itc = %s, financial_year = %s, month = %s
+            WHERE id = %s
+        ''', (invoice_number, invoice_date, payment_date, vendor_name, gstin, taxable_value, cgst, sgst, igst,
+              eligible, ineligible, fy, m, book_id))
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        log_activity(user_id, 'bill_rescanned', f'Re-scanned bill with AI vision (Stage 3 review): {vendor_name} #{invoice_number}', fy, m, 1)
+
+        return jsonify({
+            "success": True,
+            "invoice_number": invoice_number,
+            "invoice_date": invoice_date,
+            "payment_date": payment_date,
+            "vendor_name": vendor_name,
+            "gstin": gstin,
+            "taxable_value": taxable_value,
+            "cgst": cgst,
+            "sgst": sgst,
+            "igst": igst,
+            "eligible_itc": eligible,
+            "ineligible_itc": ineligible,
+            "financial_year": fy,
+            "month": m
+        })
+    except Exception as e:
+        print(f"Error rescanning invoice: {e}")
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/invoice-file/<int:invoice_id>', methods=['GET'])
@@ -1692,7 +1787,8 @@ def execute_reconciliation(fy, months, user_id, is_admin):
             SELECT id, invoice_number, invoice_date, vendor_name, gstin, branch,
                    taxable_value::float, cgst::float, sgst::float, igst::float,
                    eligible_itc::float, ineligible_itc::float,
-                   (cgst::float + sgst::float + igst::float) as total_gst
+                   (cgst::float + sgst::float + igst::float) as total_gst,
+                   (file_data IS NOT NULL) AS has_file
             FROM invoices
             WHERE financial_year = %s AND month = ANY(%s)
         ''', (fy, months))
@@ -1701,7 +1797,8 @@ def execute_reconciliation(fy, months, user_id, is_admin):
             SELECT id, invoice_number, invoice_date, vendor_name, gstin, branch,
                    taxable_value::float, cgst::float, sgst::float, igst::float,
                    eligible_itc::float, ineligible_itc::float,
-                   (cgst::float + sgst::float + igst::float) as total_gst
+                   (cgst::float + sgst::float + igst::float) as total_gst,
+                   (file_data IS NOT NULL) AS has_file
             FROM invoices
             WHERE user_id = %s AND financial_year = %s AND month = ANY(%s)
         ''', (user_id, fy, months))
