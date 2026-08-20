@@ -195,12 +195,15 @@
                     </div>
                     
                     <div class="toolbar-right">
-                        <select id="month-filter" class="form-control" style="width: auto; padding: 8px 12px;" title="Filter by financial year & month">
+                        <select id="fy-filter" class="form-control" style="width: auto; padding: 8px 12px;" title="Filter by financial year">
+                            <option value="">All Years</option>
+                        </select>
+                        <select id="month-filter" class="form-control" style="width: auto; padding: 8px 12px;" title="Filter by month">
                             <option value="">All Months</option>
                         </select>
                         <div class="search-box">
                             <i class="fa-solid fa-magnifying-glass"></i>
-                            <input type="text" id="table-search" placeholder="Search vendor, invoice no...">
+                            <input type="text" id="table-search" placeholder="Search vendor, invoice no, GSTIN...">
                         </div>
                         <button class="btn btn-secondary" id="btn-add-manual">
                             <i class="fa-solid fa-pen-to-square"></i> Add Manual Bill

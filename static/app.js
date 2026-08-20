@@ -10,6 +10,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const progressList = document.getElementById('progress-list');
     const tableBody = document.getElementById('invoice-table-body');
     const searchInput = document.getElementById('table-search');
+    const fyFilter = document.getElementById('fy-filter');
     const monthFilter = document.getElementById('month-filter');
     const invoiceCountText = document.getElementById('invoice-count');
     const branchInput = document.getElementById('branch-input');
@@ -60,7 +61,7 @@ document.addEventListener('DOMContentLoaded', () => {
             .then(data => {
                 if (data.invoices) {
                     invoices = data.invoices;
-                    populateMonthFilter();
+                    populateFilters();
                     renderTable();
                     updateMetrics();
                     updateBranchSuggestions();
@@ -76,26 +77,36 @@ document.addEventListener('DOMContentLoaded', () => {
     const FY_MONTH_ORDER = ['April', 'May', 'June', 'July', 'August', 'September',
         'October', 'November', 'December', 'January', 'February', 'March'];
 
-    // Rebuild the "Filter by month" dropdown from whatever FY/month combos
-    // are actually present in the currently loaded invoices, so it always
-    // reflects real data (no bills entered in a month = no entry shown).
-    function populateMonthFilter() {
-        const combos = new Map();
-        invoices.forEach(inv => {
-            if (inv.financial_year && inv.month) {
-                combos.set(`${inv.financial_year}|${inv.month}`, { fy: inv.financial_year, month: inv.month });
-            }
-        });
-        const list = Array.from(combos.values()).sort((a, b) => {
-            if (a.fy !== b.fy) return b.fy.localeCompare(a.fy);
-            return FY_MONTH_ORDER.indexOf(a.month) - FY_MONTH_ORDER.indexOf(b.month);
-        });
+    // Rebuild the FY and Month filter dropdowns from whatever financial
+    // years/months are actually present in the currently loaded invoices,
+    // so they always reflect real data. Month options are scoped to
+    // whichever FY is currently selected (or every month across all years
+    // when "All Years" is picked), like the FY -> month drill-down on the
+    // Reconciliation page.
+    function populateFilters() {
+        const years = [...new Set(invoices.map(inv => inv.financial_year).filter(Boolean))]
+            .sort((a, b) => b.localeCompare(a));
 
-        const currentValue = monthFilter.value;
+        const currentFy = fyFilter.value;
+        fyFilter.innerHTML = '<option value="">All Years</option>' +
+            years.map(fy => `<option value="${fy}">FY ${fy}</option>`).join('');
+        if (years.includes(currentFy)) {
+            fyFilter.value = currentFy;
+        }
+
+        const selectedFy = fyFilter.value;
+        const months = [...new Set(
+            invoices
+                .filter(inv => !selectedFy || inv.financial_year === selectedFy)
+                .map(inv => inv.month)
+                .filter(Boolean)
+        )].sort((a, b) => FY_MONTH_ORDER.indexOf(a) - FY_MONTH_ORDER.indexOf(b));
+
+        const currentMonth = monthFilter.value;
         monthFilter.innerHTML = '<option value="">All Months</option>' +
-            list.map(item => `<option value="${item.fy}|${item.month}">${item.month} ${item.fy}</option>`).join('');
-        if (Array.from(monthFilter.options).some(o => o.value === currentValue)) {
-            monthFilter.value = currentValue;
+            months.map(m => `<option value="${m}">${m}</option>`).join('');
+        if (months.includes(currentMonth)) {
+            monthFilter.value = currentMonth;
         }
     }
 
@@ -259,7 +270,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Filter out any errored rows from merging into invoices list
                 const validInvoices = data.invoices.filter(inv => inv.id !== null);
                 invoices = [...validInvoices, ...invoices];
-                populateMonthFilter();
+                populateFilters();
                 renderTable();
                 updateMetrics();
                 updateBranchSuggestions();
@@ -294,14 +305,17 @@ document.addEventListener('DOMContentLoaded', () => {
     // Render Invoices Table
     function renderTable() {
         const query = searchInput.value.toLowerCase().trim();
+        const fyValue = fyFilter.value;
         const monthValue = monthFilter.value;
         const filteredInvoices = invoices.filter(inv => {
             const matchesSearch = (
                 (inv.vendor_name || '').toLowerCase().includes(query) ||
-                (inv.invoice_number || '').toLowerCase().includes(query)
+                (inv.invoice_number || '').toLowerCase().includes(query) ||
+                (inv.gstin || '').toLowerCase().includes(query)
             );
-            const matchesMonth = !monthValue || `${inv.financial_year}|${inv.month}` === monthValue;
-            return matchesSearch && matchesMonth;
+            const matchesFy = !fyValue || inv.financial_year === fyValue;
+            const matchesMonth = !monthValue || inv.month === monthValue;
+            return matchesSearch && matchesFy && matchesMonth;
         });
 
         const colCount = window.IS_ADMIN ? 15 : 14;
@@ -438,7 +452,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 document.getElementById(`row-eligible-${index}`).textContent = `₹${data.eligible_itc.toFixed(2)}`;
                 document.getElementById(`row-ineligible-${index}`).textContent = `₹${data.ineligible_itc.toFixed(2)}`;
 
-                populateMonthFilter();
+                populateFilters();
                 updateMetrics();
             }
         })
@@ -520,6 +534,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Search bar functionality
     searchInput.addEventListener('input', () => {
+        renderTable();
+    });
+
+    // FY filter dropdown -- changing the year narrows the month dropdown to
+    // just the months present within that year, then re-renders.
+    fyFilter.addEventListener('change', () => {
+        monthFilter.value = '';
+        populateFilters();
         renderTable();
     });
 
@@ -692,7 +714,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 newInvoice.financial_year = data.financial_year;
                 newInvoice.month = data.month;
                 invoices = [newInvoice, ...invoices];
-                populateMonthFilter();
+                populateFilters();
                 renderTable();
                 updateMetrics();
                 updateBranchSuggestions();
