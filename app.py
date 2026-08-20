@@ -189,8 +189,22 @@ def init_db():
             );
         ''')
 
+        # Create Filing History / activity log table
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS activity_log (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                action VARCHAR(50) NOT NULL,
+                description VARCHAR(255),
+                financial_year VARCHAR(10),
+                month VARCHAR(20),
+                record_count INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        ''')
+
         conn.commit()
-        
+
         # Auto-seed a default user 'admin' if the users table is empty
         cur.execute('SELECT COUNT(*) FROM users;')
         count = cur.fetchone()[0]
@@ -263,6 +277,22 @@ def is_admin_user():
         return bool(row[0]) if row else False
     except Exception:
         return False
+
+def log_activity(user_id, action, description=None, fy=None, month=None, record_count=None):
+    """Best-effort audit-trail entry for Filing History. Never raises -- a
+    logging failure shouldn't block the export/upload it's recording."""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute('''
+            INSERT INTO activity_log (user_id, action, description, financial_year, month, record_count)
+            VALUES (%s, %s, %s, %s, %s, %s)
+        ''', (user_id, action, description, fy, month, record_count))
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print(f"Error logging activity: {e}")
 
 def call_claude_api(payload):
     """Utility to make direct HTTP requests to the Anthropic Claude API."""
@@ -1209,6 +1239,8 @@ def export_excel():
     workbook.save(output)
     output.seek(0)
 
+    log_activity(session['user_id'], 'export_excel', 'Exported reconciled ITC Excel sheet', record_count=len(rows))
+
     return send_file(
         output,
         as_attachment=True,
@@ -1515,7 +1547,9 @@ def export_annual_report():
         output = io.BytesIO()
         wb.save(output)
         output.seek(0)
-        
+
+        log_activity(user_id, 'export_annual_report', f'Exported annual GST report ({len(books)} book + {len(portal)} portal entries)', fy, record_count=len(books))
+
         return send_file(
             output,
             as_attachment=True,
@@ -1568,7 +1602,9 @@ def upload_gstr2b():
         conn.commit()
         cur.close()
         conn.close()
-        
+
+        log_activity(user_id, 'gstr2b_upload', f'Imported {inserted} GSTR-2B entries', fy, month, inserted)
+
         return jsonify({"success": True, "count": inserted})
     except Exception as e:
         print(f"Error uploading GSTR-2B: {e}")
@@ -2074,6 +2110,8 @@ def export_vendor_discrepancies():
         wb.save(output)
         output.seek(0)
 
+        log_activity(user_id, 'export_vendor_discrepancy', 'Exported vendor discrepancy report', fy, ','.join(months), ws.max_row - 1)
+
         return send_file(
             output,
             as_attachment=True,
@@ -2082,6 +2120,47 @@ def export_vendor_discrepancies():
         )
     except Exception as e:
         print(f"Error exporting vendor discrepancy excel: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/filing-history')
+@login_required
+def filing_history():
+    return render_template('filing_history.html', is_admin=is_admin_user(), api_key_configured=bool(ANTHROPIC_API_KEY), ai_model_name=AI_MODEL_NAME)
+
+@app.route('/api/filing-history', methods=['GET'])
+@login_required
+def get_filing_history():
+    user_id = session['user_id']
+    is_admin = is_admin_user()
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        if is_admin:
+            cur.execute('''
+                SELECT activity_log.id, action, description, financial_year, month, record_count,
+                       activity_log.created_at, users.username
+                FROM activity_log
+                JOIN users ON users.id = activity_log.user_id
+                ORDER BY activity_log.created_at DESC
+                LIMIT 200
+            ''')
+        else:
+            cur.execute('''
+                SELECT id, action, description, financial_year, month, record_count, created_at
+                FROM activity_log
+                WHERE user_id = %s
+                ORDER BY created_at DESC
+                LIMIT 200
+            ''', (user_id,))
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        for r in rows:
+            if r.get('created_at'):
+                r['created_at'] = r['created_at'].isoformat()
+        return jsonify({"success": True, "history": rows})
+    except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 

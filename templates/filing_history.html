@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Filing History | GST ITC Reconciliation Portal</title>
+
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <!-- Custom Style Sheet -->
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="light-mode">
+    <div class="app-container">
+        <!-- Sidebar Navigation -->
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-brand">
+                <i class="fa-solid fa-building-columns brand-icon"></i>
+                <div class="brand-text">
+                    <h2>Nutan Nagrik</h2>
+                    <span class="sub-text">SAHAKARI BANK LTD.</span>
+                </div>
+            </div>
+
+            <nav class="sidebar-nav">
+                <a href="/" class="nav-item">
+                    <i class="fa-solid fa-chart-line"></i>
+                    <span>ITC Dashboard</span>
+                </a>
+                <a href="/filing-history" class="nav-item active">
+                    <i class="fa-solid fa-clock-rotate-left"></i>
+                    <span>Filing History</span>
+                </a>
+                <a href="/reconciliation" class="nav-item">
+                    <i class="fa-solid fa-file-invoice"></i>
+                    <span>Reconciliation</span>
+                </a>
+                <a href="/settings" class="nav-item">
+                    <i class="fa-solid fa-gears"></i>
+                    <span>Portal Settings</span>
+                </a>
+                <a href="/logout" class="nav-item">
+                    <i class="fa-solid fa-right-from-bracket"></i>
+                    <span>Logout</span>
+                </a>
+            </nav>
+
+            <div class="sidebar-footer">
+                {% if api_key_configured %}
+                <span class="badge-status">
+                    <span class="pulse-indicator"></span>
+                    <span class="badge-status-text">
+                        API Connected
+                        <small>{{ ai_model_name }}</small>
+                    </span>
+                </span>
+                {% else %}
+                <span class="badge-status error" title="ANTHROPIC_API_KEY is not set on the server">
+                    <span class="pulse-indicator error"></span>
+                    <span class="badge-status-text">
+                        API Key Missing
+                        <small>set ANTHROPIC_API_KEY</small>
+                    </span>
+                </span>
+                {% endif %}
+            </div>
+        </aside>
+
+        <div class="sidebar-backdrop" id="sidebar-backdrop"></div>
+
+        <!-- Main Content Area -->
+        <main class="main-content">
+            <!-- Header -->
+            <header class="top-header">
+                <button class="mobile-menu-toggle" id="mobile-menu-toggle" aria-label="Open menu">
+                    <i class="fa-solid fa-bars"></i>
+                </button>
+                <div class="header-title">
+                    <h1>Filing History</h1>
+                    <p class="section-desc">
+                        {% if is_admin %}
+                        Chronological audit log of GSTR-2B imports and report exports across all users
+                        {% else %}
+                        Chronological audit log of your GSTR-2B imports and report exports
+                        {% endif %}
+                    </p>
+                </div>
+                <div class="user-profile">
+                    <div class="profile-info">
+                        <span class="profile-name">{{ session['username'] }}</span>
+                        <span class="profile-role">Nutan Nagrik Bank</span>
+                    </div>
+                    <div class="profile-avatar">
+                        <i class="fa-solid fa-user-tie"></i>
+                    </div>
+                </div>
+            </header>
+
+            <section class="dashboard-panel">
+                <div class="panel-header">
+                    <h2><i class="fa-solid fa-clock-rotate-left"></i> Activity Log</h2>
+                    <p class="panel-subtitle">Last 200 actions{% if is_admin %} across all users{% endif %}</p>
+                </div>
+
+                <div id="history-status" class="section-desc" style="padding: 12px 0;">Loading activity log&hellip;</div>
+
+                <div class="table-container" style="display:none;" id="history-table-wrapper">
+                    <table class="invoice-table" id="history-table">
+                        <thead>
+                            <tr>
+                                <th>Date &amp; Time</th>
+                                <th>Action</th>
+                                <th>Description</th>
+                                <th>FY</th>
+                                <th>Month</th>
+                                <th class="text-right">Records</th>
+                                {% if is_admin %}
+                                <th>User</th>
+                                {% endif %}
+                            </tr>
+                        </thead>
+                        <tbody id="history-table-body"></tbody>
+                    </table>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script src="/static/nav.js"></script>
+    <script src="/static/filing_history.js"></script>
+</body>
+</html>
