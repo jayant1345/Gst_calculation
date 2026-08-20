@@ -1021,6 +1021,23 @@ body {
     overflow-y: auto;
 }
 
+.modal-card-small {
+    max-width: 420px;
+}
+
+.ha-password-hint {
+    font-size: 13px;
+    color: var(--text-muted);
+    line-height: 1.5;
+    margin-bottom: 16px;
+}
+
+.ha-password-error {
+    color: var(--accent-red);
+    font-size: 13px;
+    margin-top: 10px;
+}
+
 .modal-header {
     display: flex;
     align-items: center;
@@ -1102,6 +1119,14 @@ body {
     font-size: 13px;
     color: #7f1d1d;
     cursor: pointer;
+}
+
+.checkbox-field.high-accuracy-toggle {
+    background: rgba(37, 99, 235, 0.06);
+    border-color: rgba(37, 99, 235, 0.2);
+    color: #1e3a8a;
+    margin-top: 0;
+    margin-bottom: 20px;
 }
 
 .checkbox-field input[type="checkbox"] {

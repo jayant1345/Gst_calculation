@@ -155,6 +155,11 @@
                     <span class="branch-input-hint">Applied to all files uploaded together below</span>
                 </div>
 
+                <label class="checkbox-field high-accuracy-toggle">
+                    <input type="checkbox" id="high-accuracy-toggle">
+                    <span><i class="fa-solid fa-magnifying-glass-chart"></i> High Accuracy Scan &mdash; forces a full AI vision pass on every field for maximum accuracy on hard-to-read scans (handwriting, stamps). Slower than the default scan. Requires your password to confirm.</span>
+                </label>
+
                 <div class="drop-zone" id="drop-zone">
                     <div class="drop-zone-content">
                         <i class="fa-solid fa-cloud-arrow-up cloud-icon"></i>
@@ -357,6 +362,34 @@
                     <button type="button" class="btn btn-secondary" id="manual-bill-cancel">Cancel</button>
                     <button type="submit" class="btn btn-primary" id="manual-bill-save">
                         <i class="fa-solid fa-floppy-disk"></i> Save Bill
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- High Accuracy Scan Password Confirmation Modal -->
+    <div class="modal-overlay" id="ha-password-overlay" style="display: none;">
+        <div class="modal-card modal-card-small">
+            <div class="modal-header">
+                <h3><i class="fa-solid fa-magnifying-glass-chart"></i> Confirm High Accuracy Scan</h3>
+                <button type="button" class="modal-close" id="ha-password-close" aria-label="Close">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+
+            <form id="ha-password-form" class="modal-body">
+                <p class="ha-password-hint">This uses a slower, more thorough AI pass to maximize accuracy on hard-to-read scans. Enter your password to confirm.</p>
+                <div class="form-field">
+                    <label for="ha-password-input">Password</label>
+                    <input type="password" id="ha-password-input" placeholder="Your account password" autocomplete="current-password" required>
+                </div>
+                <p class="ha-password-error" id="ha-password-error" style="display: none;"></p>
+
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" id="ha-password-cancel">Cancel</button>
+                    <button type="submit" class="btn btn-primary" id="ha-password-confirm">
+                        <i class="fa-solid fa-check"></i> Confirm & Scan
                     </button>
                 </div>
             </form>

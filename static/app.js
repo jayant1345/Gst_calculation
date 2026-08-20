@@ -36,6 +36,17 @@ document.addEventListener('DOMContentLoaded', () => {
     const mbRate = document.getElementById('mb-rate');
     const mbCustomRateField = document.getElementById('mb-custom-rate-field');
 
+    // High Accuracy Scan Elements
+    const highAccuracyToggle = document.getElementById('high-accuracy-toggle');
+    const haPasswordOverlay = document.getElementById('ha-password-overlay');
+    const haPasswordForm = document.getElementById('ha-password-form');
+    const haPasswordInput = document.getElementById('ha-password-input');
+    const haPasswordError = document.getElementById('ha-password-error');
+    const haPasswordClose = document.getElementById('ha-password-close');
+    const haPasswordCancel = document.getElementById('ha-password-cancel');
+    const haPasswordConfirmBtn = document.getElementById('ha-password-confirm');
+    let pendingHighAccuracyFiles = null;
+
     // Load saved invoices from PostgreSQL on initial load
     loadInvoices();
 
@@ -79,7 +90,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const dt = e.dataTransfer;
         const files = dt.files;
         if (files.length > 0) {
-            handleFileUpload(files);
+            triggerUpload(files);
         }
     });
 
@@ -90,28 +101,92 @@ document.addEventListener('DOMContentLoaded', () => {
 
     fileInput.addEventListener('change', () => {
         if (fileInput.files.length > 0) {
-            handleFileUpload(fileInput.files);
+            triggerUpload(fileInput.files);
         }
     });
 
     cameraInput.addEventListener('change', () => {
         if (cameraInput.files.length > 0) {
-            handleFileUpload(cameraInput.files);
+            triggerUpload(cameraInput.files);
         }
         cameraInput.value = '';
     });
 
-    // File Upload handling
-    function handleFileUpload(files) {
+    // Routes uploads through a password-confirm gate when High Accuracy Scan
+    // is enabled (slower, forces a full AI vision pass on every field).
+    function triggerUpload(files) {
+        if (highAccuracyToggle.checked) {
+            pendingHighAccuracyFiles = files;
+            haPasswordInput.value = '';
+            haPasswordError.style.display = 'none';
+            haPasswordOverlay.style.display = 'flex';
+            haPasswordInput.focus();
+        } else {
+            handleFileUpload(files);
+        }
+    }
+
+    function closeHaPasswordModal() {
+        haPasswordOverlay.style.display = 'none';
+        pendingHighAccuracyFiles = null;
+    }
+
+    haPasswordClose.addEventListener('click', closeHaPasswordModal);
+    haPasswordCancel.addEventListener('click', closeHaPasswordModal);
+    haPasswordOverlay.addEventListener('click', (e) => {
+        if (e.target === haPasswordOverlay) closeHaPasswordModal();
+    });
+
+    haPasswordForm.addEventListener('submit', (e) => {
+        e.preventDefault();
+        if (!pendingHighAccuracyFiles) return;
+
+        const password = haPasswordInput.value;
+        const filesToUpload = pendingHighAccuracyFiles;
+
+        haPasswordError.style.display = 'none';
+        haPasswordConfirmBtn.disabled = true;
+        haPasswordConfirmBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Verifying...';
+
+        handleFileUpload(filesToUpload, {
+            highAccuracy: true,
+            password: password,
+            onSuccess: () => {
+                haPasswordConfirmBtn.disabled = false;
+                haPasswordConfirmBtn.innerHTML = '<i class="fa-solid fa-check"></i> Confirm & Scan';
+                closeHaPasswordModal();
+            },
+            onError: (err) => {
+                haPasswordConfirmBtn.disabled = false;
+                haPasswordConfirmBtn.innerHTML = '<i class="fa-solid fa-check"></i> Confirm & Scan';
+                haPasswordError.textContent = err.message || 'Failed to verify password.';
+                haPasswordError.style.display = 'block';
+            }
+        });
+    });
+
+    // File Upload handling. `options.highAccuracy` + `options.password` route
+    // the batch through the slower full-vision scan; `onSuccess`/`onError`
+    // let callers (e.g. the password modal) react without changing the
+    // normal drag-and-drop/browse callers, which don't pass them.
+    function handleFileUpload(files, options = {}) {
         progressContainer.style.display = 'block';
         progressList.innerHTML = '';
-        
+
         const formData = new FormData();
         formData.append('branch', branchInput.value.trim());
+        if (options.highAccuracy) {
+            formData.append('high_accuracy', 'true');
+            formData.append('confirm_password', options.password || '');
+        }
+
+        const statusLabel = options.highAccuracy
+            ? 'High accuracy scanning (this can take a while)...'
+            : 'Extracting & saving...';
 
         Array.from(files).forEach((file, index) => {
             formData.append('files[]', file);
-            
+
             const progressItem = document.createElement('div');
             progressItem.className = 'progress-item';
             progressItem.id = `upload-item-${index}`;
@@ -121,7 +196,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     <span class="progress-filename">${file.name}</span>
                 </div>
                 <span class="progress-status" id="upload-status-${index}">
-                    <i class="fa-solid fa-spinner fa-spin"></i> Extracting & saving...
+                    <i class="fa-solid fa-spinner fa-spin"></i> ${statusLabel}
                 </span>
             `;
             progressList.appendChild(progressItem);
@@ -133,7 +208,11 @@ document.addEventListener('DOMContentLoaded', () => {
             body: formData
         })
         .then(response => {
-            if (!response.ok) throw new Error('Failed to process documents');
+            if (!response.ok) {
+                return response.json().catch(() => ({})).then(errData => {
+                    throw new Error(errData.error || 'Failed to process documents');
+                });
+            }
             return response.json();
         })
         .then(data => {
@@ -144,7 +223,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     statusSpan.innerHTML = '<i class="fa-solid fa-circle-check"></i> Processed';
                 }
             });
-            
+
             // Add newly saved invoices to state
             if (data.invoices && data.invoices.length > 0) {
                 // Filter out any errored rows from merging into invoices list
@@ -154,10 +233,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 updateMetrics();
                 updateBranchSuggestions();
             }
-            
+
             setTimeout(() => {
                 progressContainer.style.display = 'none';
             }, 3000);
+
+            if (options.onSuccess) options.onSuccess();
         })
         .catch(error => {
             console.error('Error uploading invoices:', error);
@@ -168,6 +249,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     statusSpan.innerHTML = '<i class="fa-solid fa-circle-xmark"></i> Failed';
                 }
             });
+
+            if (options.onError) options.onError(error);
         });
     }
 

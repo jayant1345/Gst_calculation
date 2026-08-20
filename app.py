@@ -859,6 +859,23 @@ def process_invoices():
 
     files = request.files.getlist('files[]')
     batch_branch = request.form.get('branch', '').strip()
+    high_accuracy = request.form.get('high_accuracy', '').lower() in ('1', 'true', 'yes')
+
+    if high_accuracy:
+        confirm_password = request.form.get('confirm_password', '')
+        try:
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute('SELECT password_hash FROM users WHERE id = %s', (user_id,))
+            row = cur.fetchone()
+            cur.close()
+            conn.close()
+        except Exception as e:
+            return jsonify({"error": f"Database connection error: {e}"}), 500
+
+        if not row or not confirm_password or not check_password_hash(row[0], confirm_password):
+            return jsonify({"error": "Incorrect password"}), 403
+
     results = []
     
     for file in files:
@@ -893,7 +910,7 @@ def process_invoices():
                 for page in reader.pages:
                     text += page.extract_text() or ""
 
-                if len(text.strip()) > 100:
+                if not high_accuracy and len(text.strip()) > 100:
                     inv = extract_from_text(text)
                     # Some fields -- a handwritten/rubber-stamped payment date, or a
                     # seller GSTIN rendered as a logo/header image -- live in the scan
@@ -918,6 +935,8 @@ def process_invoices():
                         except Exception as ex:
                             print(f"Vision fallback failed for {filename}: {ex}")
                 else:
+                    # High Accuracy Scan requests a full vision pass on every field
+                    # (not just gap-filling), or there's no usable text layer at all.
                     inv = extract_from_pdf_binary(file_bytes)
                 parsed_list = [inv]
                 store_file_bytes = file_bytes
