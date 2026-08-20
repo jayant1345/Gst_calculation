@@ -864,6 +864,29 @@ def process_invoices():
 
                 if len(text.strip()) > 100:
                     inv = extract_from_text(text)
+                    # Some fields -- a handwritten/rubber-stamped payment date, or a
+                    # seller GSTIN rendered as a logo/header image -- live in the scan
+                    # image itself, not in the PDF's text layer, so they can come back
+                    # blank here even when every other field extracted fine from text.
+                    # Fall back to a vision pass on the actual PDF just to look for
+                    # those specific gaps, without discarding the (usually more
+                    # reliable) text-based extraction for the rest.
+                    needs_gstin = not inv.get('gstin') or inv.get('gstin') == 'N/A'
+                    # If the text pass returned a payment_date identical to the
+                    # invoice_date, that's a strong sign it echoed the printed date
+                    # rather than finding a genuinely distinct handwritten/stamped
+                    # one (which the garbled OCR text layer often loses entirely).
+                    needs_payment_date = not inv.get('payment_date') or inv.get('payment_date') == inv.get('invoice_date')
+                    if needs_gstin or needs_payment_date:
+                        try:
+                            base64_pdf = base64.b64encode(file_bytes).decode('utf-8')
+                            vision_inv = extract_from_pdf_binary(base64_pdf)
+                            if needs_payment_date and vision_inv.get('payment_date'):
+                                inv['payment_date'] = vision_inv['payment_date']
+                            if needs_gstin and vision_inv.get('gstin'):
+                                inv['gstin'] = vision_inv['gstin']
+                        except Exception as ex:
+                            print(f"Vision fallback failed for {filename}: {ex}")
                 else:
                     base64_pdf = base64.b64encode(file_bytes).decode('utf-8')
                     inv = extract_from_pdf_binary(base64_pdf)
