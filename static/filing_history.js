@@ -86,5 +86,101 @@
             });
     }
 
-    document.addEventListener('DOMContentLoaded', loadHistory);
+    function renderSummaryRows(summary, isAdmin) {
+        var tbody = document.getElementById('summary-table-body');
+        if (!summary.length) {
+            var colspan = isAdmin ? 4 : 3;
+            tbody.innerHTML = '<tr class="empty-state-row"><td colspan="' + colspan + '">' +
+                '<div class="empty-state"><i class="fa-solid fa-circle-check"></i>' +
+                '<p>No bills entered yet.</p></div></td></tr>';
+            return;
+        }
+
+        var rows = summary.map(function (entry) {
+            var userCell = isAdmin ? '<td>' + escapeHtml(entry.username) + '</td>' : '';
+            return '<tr>' +
+                '<td>' + escapeHtml(entry.financial_year || '-') + '</td>' +
+                '<td>' + escapeHtml(entry.month || '-') + '</td>' +
+                userCell +
+                '<td class="text-right">' + escapeHtml(entry.bill_count) + '</td>' +
+                '</tr>';
+        });
+
+        tbody.innerHTML = rows.join('');
+    }
+
+    function renderYearlyRows(summary, isAdmin) {
+        var tbody = document.getElementById('yearly-table-body');
+
+        // Roll the already-fetched monthly rows up to FY (+ user) totals
+        // client-side -- no separate endpoint needed, same source data.
+        var totals = {};
+        var order = [];
+        summary.forEach(function (entry) {
+            var key = entry.financial_year + '||' + (isAdmin ? entry.username : '');
+            if (!(key in totals)) {
+                totals[key] = { financial_year: entry.financial_year, username: entry.username, bill_count: 0 };
+                order.push(key);
+            }
+            totals[key].bill_count += Number(entry.bill_count) || 0;
+        });
+        var yearly = order.map(function (key) { return totals[key]; });
+
+        if (!yearly.length) {
+            var colspan = isAdmin ? 3 : 2;
+            tbody.innerHTML = '<tr class="empty-state-row"><td colspan="' + colspan + '">' +
+                '<div class="empty-state"><i class="fa-solid fa-circle-check"></i>' +
+                '<p>No bills entered yet.</p></div></td></tr>';
+            return;
+        }
+
+        var rows = yearly.map(function (entry) {
+            var userCell = isAdmin ? '<td>' + escapeHtml(entry.username) + '</td>' : '';
+            return '<tr>' +
+                '<td>' + escapeHtml(entry.financial_year || '-') + '</td>' +
+                userCell +
+                '<td class="text-right">' + escapeHtml(entry.bill_count) + '</td>' +
+                '</tr>';
+        });
+
+        tbody.innerHTML = rows.join('');
+    }
+
+    function loadMonthlySummary() {
+        var statusEl = document.getElementById('summary-status');
+        var wrapperEl = document.getElementById('summary-table-wrapper');
+        var table = document.getElementById('summary-table');
+        var isAdmin = table.querySelectorAll('thead th').length === 4;
+
+        var yearlyStatusEl = document.getElementById('yearly-status');
+        var yearlyWrapperEl = document.getElementById('yearly-table-wrapper');
+
+        fetch('/api/monthly-bill-summary')
+            .then(function (res) { return res.json(); })
+            .then(function (data) {
+                if (data.error) {
+                    statusEl.textContent = 'Failed to load monthly summary: ' + data.error;
+                    yearlyStatusEl.textContent = 'Failed to load yearly summary: ' + data.error;
+                    return;
+                }
+                var summary = data.summary || [];
+                renderSummaryRows(summary, isAdmin);
+                statusEl.style.display = 'none';
+                wrapperEl.style.display = '';
+
+                renderYearlyRows(summary, isAdmin);
+                yearlyStatusEl.style.display = 'none';
+                yearlyWrapperEl.style.display = '';
+            })
+            .catch(function (err) {
+                statusEl.textContent = 'Failed to load monthly summary. Please refresh the page.';
+                yearlyStatusEl.textContent = 'Failed to load yearly summary. Please refresh the page.';
+                console.error('Monthly summary load error:', err);
+            });
+    }
+
+    document.addEventListener('DOMContentLoaded', function () {
+        loadHistory();
+        loadMonthlySummary();
+    });
 })();

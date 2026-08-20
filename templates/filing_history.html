@@ -129,6 +129,67 @@
                     </table>
                 </div>
             </section>
+
+            <section class="dashboard-panel" style="margin-top: 1.5rem;">
+                <div class="panel-header">
+                    <h2><i class="fa-solid fa-calendar-days"></i> Monthly Bill Summary</h2>
+                    <p class="panel-subtitle">
+                        {% if is_admin %}
+                        How many bills were entered each month, and by whom
+                        {% else %}
+                        How many bills you entered each month
+                        {% endif %}
+                    </p>
+                </div>
+
+                <div id="summary-status" class="section-desc" style="padding: 12px 0;">Loading summary&hellip;</div>
+
+                <div class="table-container" style="display:none;" id="summary-table-wrapper">
+                    <table class="invoice-table" id="summary-table">
+                        <thead>
+                            <tr>
+                                <th>Financial Year</th>
+                                <th>Month</th>
+                                {% if is_admin %}
+                                <th>User</th>
+                                {% endif %}
+                                <th class="text-right">Bills Entered</th>
+                            </tr>
+                        </thead>
+                        <tbody id="summary-table-body"></tbody>
+                    </table>
+                </div>
+            </section>
+
+            <section class="dashboard-panel" style="margin-top: 1.5rem;">
+                <div class="panel-header">
+                    <h2><i class="fa-solid fa-calendar-check"></i> Yearly Bill Summary</h2>
+                    <p class="panel-subtitle">
+                        {% if is_admin %}
+                        Total bills entered per financial year, by whom
+                        {% else %}
+                        Total bills you entered per financial year
+                        {% endif %}
+                    </p>
+                </div>
+
+                <div id="yearly-status" class="section-desc" style="padding: 12px 0;">Loading summary&hellip;</div>
+
+                <div class="table-container" style="display:none;" id="yearly-table-wrapper">
+                    <table class="invoice-table" id="yearly-table">
+                        <thead>
+                            <tr>
+                                <th>Financial Year</th>
+                                {% if is_admin %}
+                                <th>User</th>
+                                {% endif %}
+                                <th class="text-right">Total Bills Entered</th>
+                            </tr>
+                        </thead>
+                        <tbody id="yearly-table-body"></tbody>
+                    </table>
+                </div>
+            </section>
         </main>
     </div>
 

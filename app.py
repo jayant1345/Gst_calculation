@@ -2173,6 +2173,47 @@ def get_filing_history():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route('/api/monthly-bill-summary', methods=['GET'])
+@login_required
+def get_monthly_bill_summary():
+    """Month-wise count of bills entered, broken down by user for admins.
+    Read directly from the invoices table (not activity_log) so a bulk
+    upload spanning several months is still attributed to the correct
+    month per bill rather than lumped into one aggregate entry."""
+    user_id = session['user_id']
+    is_admin = is_admin_user()
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        if is_admin:
+            cur.execute('''
+                SELECT invoices.financial_year, invoices.month, users.username, COUNT(*) AS bill_count
+                FROM invoices
+                JOIN users ON users.id = invoices.user_id
+                WHERE invoices.financial_year IS NOT NULL AND invoices.month IS NOT NULL
+                GROUP BY invoices.financial_year, invoices.month, users.username
+            ''')
+        else:
+            cur.execute('''
+                SELECT financial_year, month, COUNT(*) AS bill_count
+                FROM invoices
+                WHERE user_id = %s AND financial_year IS NOT NULL AND month IS NOT NULL
+                GROUP BY financial_year, month
+            ''', (user_id,))
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+
+        # Stable multi-key sort: FY descending (most recent first), then
+        # calendar month within the FY (April..March), then username.
+        rows.sort(key=lambda r: r.get('username') or '')
+        rows.sort(key=lambda r: month_sort_key(r['month']))
+        rows.sort(key=lambda r: r['financial_year'] or '', reverse=True)
+
+        return jsonify({"success": True, "summary": rows})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 
 if __name__ == '__main__':
     # Ensure static and template folders exist
