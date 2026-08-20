@@ -1256,9 +1256,34 @@ def parse_gstr2b_excel(file_bytes):
             break
             
     if found:
-        df.columns = df.iloc[header_row_idx]
-        df = df.iloc[header_row_idx + 1:].reset_index(drop=True)
-        
+        # The GST portal's real B2B export uses a two-row merged header: a
+        # vague top-level category row ("Invoice Details", "Tax Amount",
+        # merged across several columns) with the actual field names in the
+        # row directly below it ("Invoice number", "Invoice Date",
+        # "Central Tax", "State/UT Tax", ...). Reading only the top row (as
+        # before) loses every specific column name, so nothing past GSTIN
+        # ever matches. Detect a genuine second header row -- as opposed to
+        # data already starting there -- by checking whether its first cell
+        # looks like a GSTIN (15-char alphanumeric); if not, merge it in,
+        # letting the specific sub-column label win over the category above it.
+        top_row = df.iloc[header_row_idx].ffill()
+        combined_cols = list(top_row)
+        data_start_idx = header_row_idx + 1
+
+        if header_row_idx + 1 < len(df):
+            first_cell_below = str(df.iloc[header_row_idx + 1, 0]).strip()
+            looks_like_gstin = len(first_cell_below) == 15 and first_cell_below.isalnum()
+            if not looks_like_gstin:
+                sub_row = df.iloc[header_row_idx + 1]
+                combined_cols = [
+                    sub if pd.notna(sub) and str(sub).strip() else top
+                    for top, sub in zip(combined_cols, sub_row)
+                ]
+                data_start_idx = header_row_idx + 2
+
+        df.columns = combined_cols
+        df = df.iloc[data_start_idx:].reset_index(drop=True)
+
     orig_cols = list(df.columns)
     clean_cols = [re.sub(r'[^a-z0-9]', '', str(c).strip().lower()) for c in df.columns]
     
