@@ -51,12 +51,18 @@
                 {% if api_key_configured %}
                 <span class="badge-status">
                     <span class="pulse-indicator"></span>
-                    API Connected
+                    <span class="badge-status-text">
+                        API Connected
+                        <small>{{ ai_model_name }}</small>
+                    </span>
                 </span>
                 {% else %}
                 <span class="badge-status error" title="ANTHROPIC_API_KEY is not set on the server">
                     <span class="pulse-indicator error"></span>
-                    API Key Missing
+                    <span class="badge-status-text">
+                        API Key Missing
+                        <small>set ANTHROPIC_API_KEY</small>
+                    </span>
                 </span>
                 {% endif %}
             </div>

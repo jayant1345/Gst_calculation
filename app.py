@@ -26,6 +26,7 @@ ctx.verify_mode = ssl.CERT_NONE
 
 # Read API Key
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+AI_MODEL_NAME = "claude-sonnet-4-6"
 
 # PostgreSQL Connection Helper
 def get_db_connection():
@@ -304,7 +305,7 @@ def extract_from_text(text):
     """
     
     payload = {
-        "model": "claude-sonnet-4-6",
+        "model": AI_MODEL_NAME,
         "max_tokens": 1000,
         "system": system_prompt,
         "messages": [
@@ -336,7 +337,7 @@ def extract_from_image(base64_data, mime_type):
     )
 
     payload = {
-        "model": "claude-sonnet-4-6",
+        "model": AI_MODEL_NAME,
         "max_tokens": 1000,
         "system": system_prompt,
         "messages": [
@@ -384,7 +385,7 @@ def extract_from_pdf_binary(base64_pdf):
     )
 
     payload = {
-        "model": "claude-sonnet-4-6",
+        "model": AI_MODEL_NAME,
         "max_tokens": 1000,
         "system": system_prompt,
         "messages": [
@@ -495,7 +496,7 @@ def parse_excel_register(file_bytes):
 @app.route('/')
 @login_required
 def home():
-    return render_template('index.html', is_admin=is_admin_user(), api_key_configured=bool(ANTHROPIC_API_KEY))
+    return render_template('index.html', is_admin=is_admin_user(), api_key_configured=bool(ANTHROPIC_API_KEY), ai_model_name=AI_MODEL_NAME)
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -604,7 +605,7 @@ def settings():
             except Exception as e:
                 error = f"Database connection error: {e}"
 
-    return render_template('settings.html', error=error, api_key_configured=bool(ANTHROPIC_API_KEY))
+    return render_template('settings.html', error=error, api_key_configured=bool(ANTHROPIC_API_KEY), ai_model_name=AI_MODEL_NAME)
 
 # API Endpoints
 @app.route('/api/get-invoices', methods=['GET'])
@@ -1217,7 +1218,7 @@ def parse_gstr2b_excel(file_bytes):
 @app.route('/reconciliation')
 @login_required
 def reconciliation():
-    return render_template('reconciliation.html', api_key_configured=bool(ANTHROPIC_API_KEY))
+    return render_template('reconciliation.html', api_key_configured=bool(ANTHROPIC_API_KEY), ai_model_name=AI_MODEL_NAME)
 
 @app.route('/api/export-annual-report', methods=['GET'])
 @login_required
