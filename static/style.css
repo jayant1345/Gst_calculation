@@ -1398,6 +1398,31 @@ body {
     vertical-align: middle;
 }
 
+/* Pin Match Status + Actions to the right edge of the scroll area so the
+   Confirm Match / Rescan Bill buttons are always visible without relying
+   on the user finding and using the horizontal scrollbar first. Targets
+   the header-main row (5 <th> due to colspan) and body rows (11 flat
+   <td>) the same way, since :last-child / :nth-last-child(2) are
+   relative to each row regardless of how many cells it has. */
+.recon-table .header-main th:last-child,
+.recon-table tbody td:last-child {
+    position: sticky;
+    right: 0;
+    width: 100px;
+    min-width: 100px;
+    background: var(--card-bg);
+    z-index: 2;
+    box-shadow: -4px 0 6px -4px rgba(0, 0, 0, 0.15);
+}
+
+.recon-table .header-main th:nth-last-child(2),
+.recon-table tbody td:nth-last-child(2) {
+    position: sticky;
+    right: 100px;
+    background: var(--card-bg);
+    z-index: 2;
+}
+
 .header-main th {
     border-bottom: none !important;
 }
