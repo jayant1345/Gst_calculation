@@ -521,10 +521,14 @@ document.addEventListener('DOMContentLoaded', function() {
         document.getElementById('gstr3b-4d1-igst').innerText = `₹${(d1.igst||0).toFixed(2)}`;
         document.getElementById('gstr3b-4d1-total').innerHTML = `<strong>₹${(d1.total||0).toFixed(2)}</strong>`;
 
-        // Also update Stage 3 KPI cards
+        // Also update Stage 3 KPI cards. "Missing" and "Mismatched" are split
+        // apart here for actionability (different vendor follow-up needed),
+        // even though GSTR-3B Table 4D(1) above reports them combined, which
+        // is how the actual return works.
         document.getElementById('stg3-kpi-claimable').innerText = `₹${(a5.total||0).toFixed(2)}`;
         document.getElementById('stg3-kpi-blocked').innerText = `₹${(b2.total||0).toFixed(2)}`;
-        document.getElementById('stg3-kpi-missing').innerText = `₹${(d1.total||0).toFixed(2)}`;
+        document.getElementById('stg3-kpi-missing').innerText = `₹${(g3b.missing_only_total||0).toFixed(2)}`;
+        document.getElementById('stg3-kpi-mismatched').innerText = `₹${(g3b.mismatched_only_total||0).toFixed(2)}`;
     }
 
     // Also update total invoices in Stage 3 KPIs when recon data loads
@@ -533,7 +537,6 @@ document.addEventListener('DOMContentLoaded', function() {
         originalUpdateKPIs(summary);
         if (summary) {
             document.getElementById('stg3-kpi-total').innerText = `${summary.total_books} Invoices`;
-            document.getElementById('stg3-kpi-mismatched').innerText = `${summary.mismatched} Invoices`;
         }
     };
 

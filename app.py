@@ -1932,6 +1932,15 @@ def get_gstr3b_summary():
             itc_4b2_ineligible["igst"] += igst * inelig_ratio
             itc_4b2_ineligible["total"] += inelig
 
+        # GSTR-3B Table 4D(1) is reported as one combined "pending" figure
+        # (that's how the actual return works -- there's no separate line
+        # for missing vs. mismatched). But the Stage 3 KPI tiles above need
+        # missing and mismatched split apart, since they call for different
+        # vendor follow-up actions. Track both alongside the combined total
+        # rather than trying to re-derive one from the other.
+        missing_only_total = 0.0
+        mismatched_only_total = 0.0
+
         for item in reconciled:
             status = item["status"]
             book = item.get("book")
@@ -1958,6 +1967,10 @@ def get_gstr3b_summary():
                 itc_4d1_pending["sgst"] += sgst * elig_ratio
                 itc_4d1_pending["igst"] += igst * elig_ratio
                 itc_4d1_pending["total"] += elig_gst
+                if status == "Missing in GSTR-2B":
+                    missing_only_total += elig_gst
+                else:
+                    mismatched_only_total += elig_gst
 
         return jsonify({
             "success": True,
@@ -1966,7 +1979,9 @@ def get_gstr3b_summary():
             "gstr3b": {
                 "table_4a5_all_other_itc": itc_4a5_matched,
                 "table_4b2_ineligible_itc": itc_4b2_ineligible,
-                "table_4d1_pending_itc": itc_4d1_pending
+                "table_4d1_pending_itc": itc_4d1_pending,
+                "missing_only_total": missing_only_total,
+                "mismatched_only_total": mismatched_only_total
             }
         })
     except Exception as e:
