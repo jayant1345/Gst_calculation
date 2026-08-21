@@ -1034,15 +1034,30 @@ def get_invoice_file(invoice_id):
 @app.route('/api/clear-invoices', methods=['POST'])
 @login_required
 def clear_invoices():
+    """Deletes exactly the invoice ids the client sends -- the frontend
+    sends whatever's currently visible under its active FY/month/search
+    filter, so 'Clear All' means 'clear what's shown', not silently
+    wipe every bill this user has ever entered regardless of filter."""
     user_id = session['user_id']
+    is_admin = is_admin_user()
+    data = request.json or {}
+    ids = data.get('ids')
+    if not ids or not isinstance(ids, list):
+        return jsonify({"error": "ids is required"}), 400
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute('DELETE FROM invoices WHERE user_id = %s', (user_id,))
+        if is_admin:
+            cur.execute('DELETE FROM invoices WHERE id = ANY(%s)', (ids,))
+        else:
+            cur.execute('DELETE FROM invoices WHERE id = ANY(%s) AND user_id = %s', (ids, user_id))
+        deleted = cur.rowcount
         conn.commit()
         cur.close()
         conn.close()
-        return jsonify({"success": True})
+
+        log_activity(user_id, 'bills_cleared', f'Cleared {deleted} bill(s) via Clear All', record_count=deleted)
+        return jsonify({"success": True, "count": deleted})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

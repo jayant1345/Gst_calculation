@@ -557,27 +557,62 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // Clear All records for user
+    // "Clear All" only deletes whatever the active FY/month/search filter
+    // is currently showing -- not silently every bill ever entered -- and
+    // requires typing DELETE rather than a single OK/Cancel popup, since
+    // it permanently removes the original file attachments too.
     btnClearAll.addEventListener('click', () => {
-        if (invoices.length > 0 && confirm('Are you sure you want to clear all invoices from the database? This cannot be undone.')) {
-            fetch('/api/clear-invoices', {
-                method: 'POST'
-            })
-            .then(response => {
-                if (!response.ok) throw new Error('Failed to clear invoices');
-                return response.json();
-            })
-            .then(data => {
-                if (data.success) {
-                    invoices = [];
-                    renderTable();
-                    updateMetrics();
-                }
-            })
-            .catch(error => {
-                console.error('Error clearing invoices:', error);
-                alert('Failed to clear invoices from database.');
-            });
+        if (invoices.length === 0) {
+            alert('No invoices loaded. Nothing to clear.');
+            return;
         }
+
+        const filteredInvoices = getFilteredInvoices();
+        if (filteredInvoices.length === 0) {
+            alert('No invoices match the current filter/search. Adjust the filters to select what to clear.');
+            return;
+        }
+
+        const isFiltered = filteredInvoices.length !== invoices.length;
+        const scopeNote = isFiltered ? ' matching your current filter/search' : '';
+        const typed = prompt(
+            `This will PERMANENTLY delete ${filteredInvoices.length} bill(s)${scopeNote}, ` +
+            `including their original file attachments. This cannot be undone.\n\n` +
+            `Type DELETE to confirm.`
+        );
+        if (typed === null) return;
+        if (typed.trim().toUpperCase() !== 'DELETE') {
+            alert('Confirmation text did not match "DELETE". Nothing was deleted.');
+            return;
+        }
+
+        const idsToDelete = filteredInvoices.map(inv => inv.id).filter(id => id != null);
+
+        fetch('/api/clear-invoices', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ids: idsToDelete })
+        })
+        .then(response => {
+            if (!response.ok) throw new Error('Failed to clear invoices');
+            return response.json();
+        })
+        .then(data => {
+            if (data.success) {
+                const deletedIds = new Set(idsToDelete);
+                invoices = invoices.filter(inv => !deletedIds.has(inv.id));
+                populateFilters();
+                renderTable();
+                updateMetrics();
+                updateBranchSuggestions();
+            } else {
+                alert(data.error || 'Failed to clear invoices.');
+            }
+        })
+        .catch(error => {
+            console.error('Error clearing invoices:', error);
+            alert('Failed to clear invoices from database.');
+        });
     });
 
     // ---- Manual Bill Entry (no physical/soft copy available) ----
