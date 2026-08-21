@@ -93,7 +93,8 @@ def parse_date_to_fy_and_month(date_str):
     # Strip a trailing time-of-day component, whether space- or T-separated
     date_only = raw.split(' ')[0].split('T')[0]
 
-    numeric_formats = ('%Y-%m-%d', '%d-%m-%Y', '%Y/%m/%d', '%d/%m/%Y', '%d.%m.%Y')
+    numeric_formats = ('%Y-%m-%d', '%d-%m-%Y', '%Y/%m/%d', '%d/%m/%Y', '%d.%m.%Y',
+                        '%d-%m-%y', '%d/%m/%y', '%d.%m.%y')
     for fmt in numeric_formats:
         try:
             dt = datetime.datetime.strptime(date_only, fmt)
@@ -101,8 +102,11 @@ def parse_date_to_fy_and_month(date_str):
         except ValueError:
             continue
 
-    # Formats with a textual month need the full string (may contain spaces)
-    textual_formats = ('%d %B %Y', '%d %b %Y', '%d-%b-%Y', '%d-%B-%Y', '%B %d, %Y', '%b %d, %Y')
+    # Formats with a textual month need the full string (may contain spaces).
+    # Two-digit-year variants (e.g. '06-MAR-26', a common scanned-invoice
+    # date stamp) are included alongside the 4-digit-year ones.
+    textual_formats = ('%d %B %Y', '%d %b %Y', '%d-%b-%Y', '%d-%B-%Y', '%B %d, %Y', '%b %d, %Y',
+                        '%d %b %y', '%d %B %y', '%d-%b-%y', '%d-%B-%y')
     for fmt in textual_formats:
         try:
             dt = datetime.datetime.strptime(raw, fmt)

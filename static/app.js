@@ -302,12 +302,14 @@ document.addEventListener('DOMContentLoaded', () => {
         branchSuggestions.innerHTML = branches.map(b => `<option value="${b}"></option>`).join('');
     }
 
-    // Render Invoices Table
-    function renderTable() {
+    // Shared by the table render and the Excel export, so "export" always
+    // means "export exactly what's currently shown", not everything ever
+    // uploaded.
+    function getFilteredInvoices() {
         const query = searchInput.value.toLowerCase().trim();
         const fyValue = fyFilter.value;
         const monthValue = monthFilter.value;
-        const filteredInvoices = invoices.filter(inv => {
+        return invoices.filter(inv => {
             const matchesSearch = (
                 (inv.vendor_name || '').toLowerCase().includes(query) ||
                 (inv.invoice_number || '').toLowerCase().includes(query) ||
@@ -317,7 +319,11 @@ document.addEventListener('DOMContentLoaded', () => {
             const matchesMonth = !monthValue || inv.month === monthValue;
             return matchesSearch && matchesFy && matchesMonth;
         });
+    }
 
+    // Render Invoices Table
+    function renderTable() {
+        const filteredInvoices = getFilteredInvoices();
         const colCount = window.IS_ADMIN ? 15 : 14;
 
         if (filteredInvoices.length === 0) {
@@ -733,8 +739,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Export to Excel
     btnExportExcel.addEventListener('click', () => {
-        if (invoices.length === 0) {
-            alert('No invoices loaded. Please upload invoices to export.');
+        const filteredInvoices = getFilteredInvoices();
+        if (filteredInvoices.length === 0) {
+            alert(invoices.length === 0
+                ? 'No invoices loaded. Please upload invoices to export.'
+                : 'No invoices match the current filter/search. Adjust the filters to export a report.');
             return;
         }
 
@@ -746,7 +755,7 @@ document.addEventListener('DOMContentLoaded', () => {
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({ invoices })
+            body: JSON.stringify({ invoices: filteredInvoices })
         })
         .then(response => {
             if (!response.ok) throw new Error('Excel generation failed');
