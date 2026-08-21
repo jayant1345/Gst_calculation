@@ -1876,6 +1876,39 @@ def upload_gstr2b():
         print(f"Error uploading GSTR-2B: {e}")
         return jsonify({"error": str(e)}), 500
 
+@app.route('/api/delete-gstr2b', methods=['POST'])
+@login_required
+def delete_gstr2b():
+    """Removes a wrongly-uploaded or duplicate GSTR-2B batch for a specific
+    FY+month. Re-uploading only replaces that exact same FY+month combo,
+    so there was previously no way to remove data imported under the
+    wrong month/FY short of uploading a blank replacement file."""
+    user_id = session['user_id']
+    is_admin = is_admin_user()
+    data = request.json or {}
+    fy = (data.get('financial_year') or '').strip()
+    month = (data.get('month') or '').strip()
+    if not fy or not month:
+        return jsonify({"error": "Financial Year and Month are required"}), 400
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        if is_admin:
+            cur.execute('DELETE FROM gstr2b_entries WHERE financial_year = %s AND month = %s', (fy, month))
+        else:
+            cur.execute('DELETE FROM gstr2b_entries WHERE user_id = %s AND financial_year = %s AND month = %s', (user_id, fy, month))
+        deleted = cur.rowcount
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        log_activity(user_id, 'gstr2b_deleted', f'Deleted {deleted} GSTR-2B entries for {month} ({fy})', fy, month, deleted)
+        return jsonify({"success": True, "count": deleted})
+    except Exception as e:
+        print(f"Error deleting GSTR-2B entries: {e}")
+        return jsonify({"error": str(e)}), 500
+
 def execute_reconciliation(fy, months, user_id, is_admin):
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)

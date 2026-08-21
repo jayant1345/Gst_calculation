@@ -27,6 +27,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const gstr2bDropZone = document.getElementById('gstr2b-drop-zone');
     const uploadMonthSelect = document.getElementById('upload-month');
     const uploadStatusDiv = document.getElementById('gstr2b-upload-status');
+    const btnDeleteGstr2b = document.getElementById('btn-delete-gstr2b');
 
     // Trigger reconciliation on filter parameter change
     fySelect.addEventListener('change', fetchReconciliationData);
@@ -121,6 +122,52 @@ document.addEventListener('DOMContentLoaded', function() {
         uploadStatusDiv.style.display = 'block';
         uploadStatusDiv.innerText = msg;
         uploadStatusDiv.className = `upload-status-message ${type}`;
+    }
+
+    // Removes a wrongly-uploaded or duplicate GSTR-2B batch for the FY +
+    // month currently selected. Re-uploading only replaces the exact same
+    // FY+month combo, so this is the only way to clear one imported under
+    // the wrong month/FY without a blank replacement file.
+    if (btnDeleteGstr2b) {
+        btnDeleteGstr2b.addEventListener('click', function() {
+            const fy = fySelect.value;
+            const month = uploadMonthSelect.value;
+
+            if (!month) {
+                showUploadStatus('Select a month above first, to know which GSTR-2B batch to delete.', 'error');
+                return;
+            }
+
+            const typed = prompt(
+                `This will PERMANENTLY delete all GSTR-2B entries imported for ${month} (FY ${fy}). ` +
+                `This cannot be undone.\n\nType DELETE to confirm.`
+            );
+            if (typed === null) return;
+            if (typed.trim().toUpperCase() !== 'DELETE') {
+                showUploadStatus('Confirmation text did not match "DELETE". Nothing was deleted.', 'error');
+                return;
+            }
+
+            fetch('/api/delete-gstr2b', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ financial_year: fy, month: month })
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.success) {
+                    showUploadStatus(`Deleted ${data.count} GSTR-2B entr${data.count === 1 ? 'y' : 'ies'} for ${month} (${fy}).`, 'success');
+                    fetchReconciliationData();
+                    if (activeStage === 3) loadStage3Data();
+                } else {
+                    showUploadStatus(data.error || 'Failed to delete GSTR-2B entries.', 'error');
+                }
+            })
+            .catch(err => {
+                showUploadStatus('Network error while deleting GSTR-2B entries.', 'error');
+                console.error(err);
+            });
+        });
     }
 
     // Fetch Reconciliation Data

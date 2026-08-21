@@ -18,6 +18,7 @@
         bill_rescanned: { label: 'Bill Re-scanned', badge: 'badge-purple', icon: 'fa-arrows-rotate' },
         bills_cleared: { label: 'Bills Cleared', badge: 'badge-red', icon: 'fa-trash-can' },
         gstr2b_upload: { label: 'GSTR-2B Import', badge: 'badge-blue', icon: 'fa-file-arrow-up' },
+        gstr2b_deleted: { label: 'GSTR-2B Deleted', badge: 'badge-red', icon: 'fa-trash-can' },
         export_excel: { label: 'Excel Export', badge: 'badge-green', icon: 'fa-file-excel' },
         export_annual_report: { label: 'Annual Report Export', badge: 'badge-green', icon: 'fa-file-excel' },
         export_vendor_discrepancy: { label: 'Vendor Discrepancy Export', badge: 'badge-yellow', icon: 'fa-file-excel' }
