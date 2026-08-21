@@ -1270,12 +1270,18 @@ def export_excel():
 
     # Normalize + compute the eligible/ineligible split per tax head (CGST/SGST/IGST),
     # matching the bank's required reconciliation format instead of a single 50% total.
+    # Respects itc_blocked (Section 17(5)): 0% eligible / 100% ineligible for blocked
+    # invoices, 50/50 otherwise -- rather than assuming every invoice is a flat 50%.
     rows = []
     for inv in invoices:
         cgst = float(inv.get('cgst') or 0.0)
         sgst = float(inv.get('sgst') or 0.0)
         igst = float(inv.get('igst') or 0.0)
         taxable = float(inv.get('taxable_value') or 0.0)
+        elig_ratio = 0.0 if inv.get('itc_blocked') else 0.5
+        elig_cgst = round(cgst * elig_ratio, 2)
+        elig_sgst = round(sgst * elig_ratio, 2)
+        elig_igst = round(igst * elig_ratio, 2)
         rows.append({
             "branch": inv.get('branch') or 'Unassigned',
             "gstin": inv.get('gstin') or 'N/A',
@@ -1287,12 +1293,12 @@ def export_excel():
             "sgst": sgst,
             "igst": igst,
             "total_invoice_value": taxable + cgst + sgst + igst,
-            "elig_cgst": round(cgst * 0.5, 2),
-            "elig_sgst": round(sgst * 0.5, 2),
-            "elig_igst": round(igst * 0.5, 2),
-            "inelig_cgst": round(cgst * 0.5, 2),
-            "inelig_sgst": round(sgst * 0.5, 2),
-            "inelig_igst": round(igst * 0.5, 2),
+            "elig_cgst": elig_cgst,
+            "elig_sgst": elig_sgst,
+            "elig_igst": elig_igst,
+            "inelig_cgst": round(cgst - elig_cgst, 2),
+            "inelig_sgst": round(sgst - elig_sgst, 2),
+            "inelig_igst": round(igst - elig_igst, 2),
         })
 
     # Group by branch (blank/Unassigned sorted last), preserving upload order within a branch
@@ -1658,7 +1664,7 @@ def export_annual_report():
             cur.execute('''
                 SELECT id, invoice_number, invoice_date, vendor_name, gstin, branch,
                        taxable_value::float, cgst::float, sgst::float, igst::float,
-                       eligible_itc::float, ineligible_itc::float, month
+                       eligible_itc::float, ineligible_itc::float, itc_blocked, month
                 FROM invoices
                 WHERE financial_year = %s
                 ORDER BY branch, created_at
@@ -1667,13 +1673,29 @@ def export_annual_report():
             cur.execute('''
                 SELECT id, invoice_number, invoice_date, vendor_name, gstin, branch,
                        taxable_value::float, cgst::float, sgst::float, igst::float,
-                       eligible_itc::float, ineligible_itc::float, month
+                       eligible_itc::float, ineligible_itc::float, itc_blocked, month
                 FROM invoices
                 WHERE user_id = %s AND financial_year = %s
                 ORDER BY branch, created_at
             ''', (user_id, fy))
         books = cur.fetchall()
         books = sorted(books, key=lambda r: (r['branch'] or '', month_sort_key(r['month'])))
+
+        # Per-tax-head eligible/ineligible split. Blocked-ITC invoices (0%
+        # eligible / 100% ineligible) and normal ones (50/50) both already
+        # have the correct combined eligible_itc/ineligible_itc stored --
+        # deriving each invoice's ratio from that (rather than assuming a
+        # flat 50%) and applying it per tax head keeps CGST+SGST+IGST
+        # exactly consistent with the totals already shown elsewhere.
+        for r in books:
+            total_gst = r["cgst"] + r["sgst"] + r["igst"]
+            elig_ratio = (r["eligible_itc"] / total_gst) if total_gst > 0 else (0.0 if r["itc_blocked"] else 0.5)
+            r["elig_cgst"] = round(r["cgst"] * elig_ratio, 2)
+            r["elig_sgst"] = round(r["sgst"] * elig_ratio, 2)
+            r["elig_igst"] = round(r["igst"] * elig_ratio, 2)
+            r["inelig_cgst"] = round(r["cgst"] - r["elig_cgst"], 2)
+            r["inelig_sgst"] = round(r["sgst"] - r["elig_sgst"], 2)
+            r["inelig_igst"] = round(r["igst"] - r["elig_igst"], 2)
 
         # 2. Fetch all portal GSTR-2B entries for this FY
         if is_admin:
@@ -1714,18 +1736,23 @@ def export_annual_report():
                              top=Side(style='thin', color='DDDDDD'), bottom=Side(style='thin', color='DDDDDD'))
         
         # Header Row
-        headers_books = ["Month", "Branch", "Supplier GSTIN", "Vendor Name", "Invoice No", "Date", "Taxable Value (₹)", "CGST (₹)", "SGST (₹)", "IGST (₹)", "Eligible ITC (50%)", "Ineligible ITC (50%)"]
+        headers_books = ["Month", "Branch", "Supplier GSTIN", "Vendor Name", "Invoice No", "Date",
+                          "Taxable Value (₹)", "CGST (₹)", "SGST (₹)", "IGST (₹)",
+                          "Eligible CGST (₹)", "Eligible SGST (₹)", "Eligible IGST (₹)", "Total Eligible ITC (₹)",
+                          "Ineligible CGST (₹)", "Ineligible SGST (₹)", "Ineligible IGST (₹)", "Total Ineligible ITC (₹)"]
         ws_books.append(headers_books)
         for col_idx in range(1, len(headers_books) + 1):
             cell = ws_books.cell(row=1, column=col_idx)
             cell.fill = header_fill
             cell.font = white_font
             cell.alignment = Alignment(horizontal="center")
-            
+
         for r in books:
             row_vals = [
                 r["month"], r["branch"], r["gstin"], r["vendor_name"], r["invoice_number"], r["invoice_date"],
-                r["taxable_value"], r["cgst"], r["sgst"], r["igst"], r["eligible_itc"], r["ineligible_itc"]
+                r["taxable_value"], r["cgst"], r["sgst"], r["igst"],
+                r["elig_cgst"], r["elig_sgst"], r["elig_igst"], r["eligible_itc"],
+                r["inelig_cgst"], r["inelig_sgst"], r["inelig_igst"], r["ineligible_itc"]
             ]
             ws_books.append(row_vals)
             curr_row = ws_books.max_row
