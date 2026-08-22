@@ -27,15 +27,23 @@ ctx.verify_mode = ssl.CERT_NONE
 
 # Read API Key
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 AI_MODEL_NAME = "claude-sonnet-4-6"
 # Used for anything that requires actually reading pixels (scanned images,
 # image-only PDFs, or filling gaps a text-based pass missed -- e.g. a
 # handwritten/stamped payment date or a GSTIN rendered as a header image).
-# Compared head-to-head against claude-sonnet-4-6 and OpenAI gpt-4o/gpt-5 on a
-# real hard-to-read bill: Opus was the only one that got every printed field
-# right (invoice number, GSTIN) and correctly left the illegible handwritten
-# date blank instead of guessing wrong.
-AI_VISION_MODEL_NAME = "claude-opus-5"
+# Routed through OpenRouter (not Anthropic directly) -- head-to-head tested
+# against claude-opus-5 and gpt-5.5-pro across 3 repeated runs on 2 real
+# bills: matched Opus's accuracy exactly (including both being equally
+# unable to read one genuinely illegible handwritten date), while running
+# roughly 40-50% faster and ~4x cheaper per token. gpt-5.5-pro was ruled
+# out for frequent non-JSON/empty responses (5 of 9 test calls failed).
+AI_VISION_MODEL_NAME = "x-ai/grok-4.6"
+# If the primary vision call fails for any reason (OpenRouter outage, rate
+# limit, malformed response), fall back to Claude Opus directly via
+# Anthropic rather than letting the whole extraction hard-fail -- this was
+# the previous primary model and is a proven, independent provider path.
+AI_VISION_FALLBACK_MODEL_NAME = "claude-opus-5"
 
 def render_pdf_page_to_png_base64(file_bytes, page_index=0, dpi=250):
     """Renders one PDF page to a base64 PNG at a resolution high enough for
@@ -328,6 +336,79 @@ def call_claude_api(payload):
         print(f"Error calling Anthropic API: {e}")
         raise e
 
+def call_openrouter_api(payload):
+    """Utility to make direct HTTP requests to OpenRouter's OpenAI-compatible
+    chat completions endpoint -- used for vision/OCR (see AI_VISION_MODEL_NAME),
+    kept separate from call_claude_api() since the request/response shape
+    differs (OpenAI chat format vs Anthropic's messages format)."""
+    url = "https://openrouter.ai/api/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers=headers,
+        method="POST"
+    )
+
+    try:
+        with urllib.request.urlopen(req, context=ctx, timeout=90) as res:
+            response = json.loads(res.read().decode("utf-8"))
+            if "error" in response:
+                raise ValueError(f"OpenRouter error: {response['error']}")
+            return response["choices"][0]["message"]["content"]
+    except Exception as e:
+        print(f"Error calling OpenRouter API: {e}")
+        raise e
+
+def call_vision_model(system_prompt, user_prompt, base64_data, mime_type):
+    """Calls the primary vision model (Grok 4.6 via OpenRouter) and, if that
+    fails for any reason, falls back to Claude Opus 5 directly via
+    Anthropic (AI_VISION_FALLBACK_MODEL_NAME) -- a scanned bill should
+    still get read even if one provider is briefly unavailable, rate
+    limited, or misbehaving. Returns the raw text response (callers strip
+    any ```json fencing and parse it themselves)."""
+    openrouter_payload = {
+        "model": AI_VISION_MODEL_NAME,
+        "max_tokens": 1500,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{base64_data}"}},
+                    {"type": "text", "text": user_prompt}
+                ]
+            }
+        ]
+    }
+    try:
+        return call_openrouter_api(openrouter_payload)
+    except Exception as e:
+        print(f"Primary vision model ({AI_VISION_MODEL_NAME}) failed, falling back to {AI_VISION_FALLBACK_MODEL_NAME}: {e}")
+
+    anthropic_payload = {
+        "model": AI_VISION_FALLBACK_MODEL_NAME,
+        "max_tokens": 1500,
+        "system": system_prompt,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {"type": "base64", "media_type": mime_type, "data": base64_data}
+                    },
+                    {"type": "text", "text": user_prompt}
+                ]
+            }
+        ]
+    }
+    return call_claude_api(anthropic_payload)
+
 def extract_from_text(text):
     """Sends extracted text to Claude to parse invoice details into JSON."""
     system_prompt = (
@@ -399,7 +480,8 @@ def extract_from_text(text):
     return json.loads(result)
 
 def extract_from_image(base64_data, mime_type):
-    """Sends a base64 encoded invoice image to Claude to parse details into JSON."""
+    """Sends a base64 encoded invoice image to the vision model (via
+    OpenRouter, see AI_VISION_MODEL_NAME) to parse details into JSON."""
     system_prompt = (
         "You are an expert financial OCR assistant. Analyze the invoice image "
         "and extract the key values. You must respond with ONLY a valid JSON object. "
@@ -426,32 +508,7 @@ def extract_from_image(base64_data, mime_type):
         "letter G vs digit 6, letter Z vs digit 2 - do not just guess the visually 'nicer' option."
     )
 
-    payload = {
-        "model": AI_VISION_MODEL_NAME,
-        "max_tokens": 1500,
-        "system": system_prompt,
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": mime_type,
-                            "data": base64_data
-                        }
-                    },
-                    {
-                        "type": "text",
-                        "text": user_prompt
-                    }
-                ]
-            }
-        ]
-    }
-
-    result = call_claude_api(payload)
+    result = call_vision_model(system_prompt, user_prompt, base64_data, mime_type)
     if "```json" in result:
         result = result.split("```json")[1].split("```")[0].strip()
     elif "```" in result:
@@ -460,9 +517,10 @@ def extract_from_image(base64_data, mime_type):
 
 def extract_from_pdf_binary(file_bytes):
     """Renders the PDF's first page to a high-resolution PNG and sends that
-    image to Claude, rather than the raw PDF -- gives more control over
-    resolution than the API's own internal PDF rendering, which matters for
-    small/handwritten text (see AI_VISION_MODEL_NAME comment)."""
+    image to the vision model (via OpenRouter, see AI_VISION_MODEL_NAME),
+    rather than the raw PDF -- gives more control over resolution than
+    relying on a provider's own internal PDF rendering, which matters for
+    small/handwritten text."""
     system_prompt = (
         "You are an expert financial OCR assistant. Analyze the invoice image "
         "and extract the key values. You must respond with ONLY a valid JSON object. "
@@ -491,32 +549,7 @@ def extract_from_pdf_binary(file_bytes):
 
     base64_png = render_pdf_page_to_png_base64(file_bytes)
 
-    payload = {
-        "model": AI_VISION_MODEL_NAME,
-        "max_tokens": 1500,
-        "system": system_prompt,
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": "image/png",
-                            "data": base64_png
-                        }
-                    },
-                    {
-                        "type": "text",
-                        "text": user_prompt
-                    }
-                ]
-            }
-        ]
-    }
-
-    result = call_claude_api(payload)
+    result = call_vision_model(system_prompt, user_prompt, base64_png, "image/png")
     if "```json" in result:
         result = result.split("```json")[1].split("```")[0].strip()
     elif "```" in result:
@@ -611,7 +644,7 @@ def parse_excel_register(file_bytes):
 @app.route('/')
 @login_required
 def home():
-    return render_template('index.html', is_admin=is_admin_user(), api_key_configured=bool(ANTHROPIC_API_KEY), ai_model_name=AI_MODEL_NAME)
+    return render_template('index.html', is_admin=is_admin_user(), api_key_configured=bool(ANTHROPIC_API_KEY and OPENROUTER_API_KEY), ai_model_name=AI_MODEL_NAME)
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -720,7 +753,7 @@ def settings():
             except Exception as e:
                 error = f"Database connection error: {e}"
 
-    return render_template('settings.html', error=error, api_key_configured=bool(ANTHROPIC_API_KEY), ai_model_name=AI_MODEL_NAME)
+    return render_template('settings.html', error=error, api_key_configured=bool(ANTHROPIC_API_KEY and OPENROUTER_API_KEY), ai_model_name=AI_MODEL_NAME)
 
 # API Endpoints
 @app.route('/api/get-invoices', methods=['GET'])
@@ -1639,7 +1672,7 @@ def parse_gstr2b_excel(file_bytes):
 @login_required
 def reconciliation():
     current_fy, _ = _dt_to_fy_and_month(datetime.datetime.now())
-    return render_template('reconciliation.html', api_key_configured=bool(ANTHROPIC_API_KEY), ai_model_name=AI_MODEL_NAME, current_fy=current_fy)
+    return render_template('reconciliation.html', api_key_configured=bool(ANTHROPIC_API_KEY and OPENROUTER_API_KEY), ai_model_name=AI_MODEL_NAME, current_fy=current_fy)
 
 @app.route('/api/export-annual-report', methods=['GET'])
 @login_required
@@ -2477,7 +2510,7 @@ def export_vendor_discrepancies():
 @app.route('/filing-history')
 @login_required
 def filing_history():
-    return render_template('filing_history.html', is_admin=is_admin_user(), api_key_configured=bool(ANTHROPIC_API_KEY), ai_model_name=AI_MODEL_NAME)
+    return render_template('filing_history.html', is_admin=is_admin_user(), api_key_configured=bool(ANTHROPIC_API_KEY and OPENROUTER_API_KEY), ai_model_name=AI_MODEL_NAME)
 
 @app.route('/api/filing-history', methods=['GET'])
 @login_required
