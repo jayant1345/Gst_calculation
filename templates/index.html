@@ -171,15 +171,20 @@
                             <label for="camera-input" class="btn btn-secondary">
                                 <i class="fa-solid fa-camera"></i> Scan Bill
                             </label>
+                            <label for="folder-input" class="btn btn-secondary" title="Select one main folder containing a subfolder per branch -- every subfolder is scanned automatically and tagged with its own branch name">
+                                <i class="fa-solid fa-folder-tree"></i> Upload Branch Folder
+                            </label>
                         </div>
                         <input type="file" id="file-input" multiple accept=".pdf,.png,.jpg,.jpeg,.webp,.xlsx,.xls,.csv" style="display: none;">
                         <input type="file" id="camera-input" accept="image/*" capture="environment" style="display: none;">
+                        <input type="file" id="folder-input" webkitdirectory directory multiple style="display: none;">
+                        <p class="branch-folder-hint">Optional: <strong>Upload Branch Folder</strong> picks a main folder with one subfolder per branch (e.g. <em>Bills/Andheri/</em>, <em>Bills/Borivali/</em>) and scans every subfolder automatically, tagging each bill with its branch. Financial year and month are still taken from each bill's own date, as always.</p>
                     </div>
                 </div>
-                
+
                 <!-- File Uploading Progress List -->
                 <div class="upload-progress-container" id="progress-container" style="display: none;">
-                    <h3>Processing Files...</h3>
+                    <h3 id="progress-heading">Processing Files...</h3>
                     <div class="progress-list" id="progress-list">
                         <!-- Dynamic items -->
                     </div>

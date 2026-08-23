@@ -6,7 +6,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const dropZone = document.getElementById('drop-zone');
     const fileInput = document.getElementById('file-input');
     const cameraInput = document.getElementById('camera-input');
+    const folderInput = document.getElementById('folder-input');
     const progressContainer = document.getElementById('progress-container');
+    const progressHeading = document.getElementById('progress-heading');
     const progressList = document.getElementById('progress-list');
     const tableBody = document.getElementById('invoice-table-body');
     const searchInput = document.getElementById('table-search');
@@ -48,6 +50,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const haPasswordCancel = document.getElementById('ha-password-cancel');
     const haPasswordConfirmBtn = document.getElementById('ha-password-confirm');
     let pendingHighAccuracyFiles = null;
+    let pendingHighAccuracyFolderGroups = null;
+    let hideProgressTimeoutId = null;
 
     // Load saved invoices from PostgreSQL on initial load
     loadInvoices();
@@ -153,6 +157,47 @@ document.addEventListener('DOMContentLoaded', () => {
         cameraInput.value = '';
     });
 
+    // Optional bulk path: pick one main folder containing a subfolder per
+    // branch (e.g. Bills/Andheri/, Bills/Borivali/) and every subfolder is
+    // scanned automatically, tagged with its own branch name. Does not
+    // touch the normal drag-and-drop/browse/camera flow at all.
+    if (folderInput) {
+        folderInput.addEventListener('change', () => {
+            if (folderInput.files.length > 0) {
+                const groups = groupFilesByBranchFolder(folderInput.files);
+                if (groups.size === 0) {
+                    alert('No supported bill files (PDF, JPG, PNG, WEBP, XLSX, XLS, CSV) were found in that folder.');
+                } else {
+                    triggerFolderUpload(groups);
+                }
+            }
+            folderInput.value = '';
+        });
+    }
+
+    const SUPPORTED_EXTENSIONS = ['pdf', 'png', 'jpg', 'jpeg', 'webp', 'xlsx', 'xls', 'csv'];
+
+    // Groups a webkitdirectory FileList by its immediate branch subfolder,
+    // using each file's relative path (e.g. "Bills/Andheri/inv1.pdf" ->
+    // branch "Andheri"). Files sitting directly in the selected root with
+    // no branch subfolder fall back to "Unassigned", matching the existing
+    // default used everywhere else in this app.
+    function groupFilesByBranchFolder(fileList) {
+        const groups = new Map();
+        Array.from(fileList).forEach(file => {
+            const ext = (file.name.split('.').pop() || '').toLowerCase();
+            if (!SUPPORTED_EXTENSIONS.includes(ext)) return;
+
+            const relPath = file.webkitRelativePath || file.name;
+            const parts = relPath.split('/');
+            const branch = parts.length > 2 ? parts[1] : 'Unassigned';
+
+            if (!groups.has(branch)) groups.set(branch, []);
+            groups.get(branch).push(file);
+        });
+        return groups;
+    }
+
     // Routes uploads through a password-confirm gate when High Accuracy Scan
     // is enabled (slower, forces a full AI vision pass on every field).
     function triggerUpload(files) {
@@ -167,9 +212,54 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    // Same password gate as triggerUpload, but for a whole folder's worth
+    // of branch groups -- one password entry covers every branch found.
+    function triggerFolderUpload(branchGroups) {
+        if (highAccuracyToggle.checked) {
+            pendingHighAccuracyFolderGroups = branchGroups;
+            haPasswordInput.value = '';
+            haPasswordError.style.display = 'none';
+            haPasswordOverlay.style.display = 'flex';
+            haPasswordInput.focus();
+        } else {
+            uploadFolderGroupsSequentially(branchGroups, {});
+        }
+    }
+
+    // Uploads each branch's files as its own batch (one at a time, so the
+    // server isn't hit with every branch's files simultaneously), reusing
+    // handleFileUpload per branch with that branch name forced via
+    // options.branch. A failure on one branch doesn't stop the rest.
+    function uploadFolderGroupsSequentially(branchGroups, options) {
+        const entries = Array.from(branchGroups.entries());
+        const total = entries.length;
+        let index = 0;
+
+        function next() {
+            if (index >= total) {
+                if (options.onSuccess) options.onSuccess();
+                return;
+            }
+            const [branch, files] = entries[index];
+            index++;
+            handleFileUpload(files, {
+                ...options,
+                branch: branch,
+                progressHeadingText: `Branch ${index} of ${total}: ${branch} — Processing Files...`,
+                onSuccess: next,
+                onError: (err) => {
+                    console.error(`Folder upload failed for branch "${branch}":`, err);
+                    next();
+                }
+            });
+        }
+        next();
+    }
+
     function closeHaPasswordModal() {
         haPasswordOverlay.style.display = 'none';
         pendingHighAccuracyFiles = null;
+        pendingHighAccuracyFolderGroups = null;
     }
 
     haPasswordClose.addEventListener('click', closeHaPasswordModal);
@@ -180,30 +270,34 @@ document.addEventListener('DOMContentLoaded', () => {
 
     haPasswordForm.addEventListener('submit', (e) => {
         e.preventDefault();
-        if (!pendingHighAccuracyFiles) return;
+        if (!pendingHighAccuracyFiles && !pendingHighAccuracyFolderGroups) return;
 
         const password = haPasswordInput.value;
-        const filesToUpload = pendingHighAccuracyFiles;
 
         haPasswordError.style.display = 'none';
         haPasswordConfirmBtn.disabled = true;
         haPasswordConfirmBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Verifying...';
 
-        handleFileUpload(filesToUpload, {
-            highAccuracy: true,
-            password: password,
-            onSuccess: () => {
-                haPasswordConfirmBtn.disabled = false;
-                haPasswordConfirmBtn.innerHTML = '<i class="fa-solid fa-check"></i> Confirm & Scan';
-                closeHaPasswordModal();
-            },
-            onError: (err) => {
-                haPasswordConfirmBtn.disabled = false;
-                haPasswordConfirmBtn.innerHTML = '<i class="fa-solid fa-check"></i> Confirm & Scan';
-                haPasswordError.textContent = err.message || 'Failed to verify password.';
-                haPasswordError.style.display = 'block';
-            }
-        });
+        const onDone = () => {
+            haPasswordConfirmBtn.disabled = false;
+            haPasswordConfirmBtn.innerHTML = '<i class="fa-solid fa-check"></i> Confirm & Scan';
+            closeHaPasswordModal();
+        };
+        const onFail = (err) => {
+            haPasswordConfirmBtn.disabled = false;
+            haPasswordConfirmBtn.innerHTML = '<i class="fa-solid fa-check"></i> Confirm & Scan';
+            haPasswordError.textContent = err.message || 'Failed to verify password.';
+            haPasswordError.style.display = 'block';
+        };
+
+        if (pendingHighAccuracyFolderGroups) {
+            const groups = pendingHighAccuracyFolderGroups;
+            pendingHighAccuracyFolderGroups = null;
+            uploadFolderGroupsSequentially(groups, { highAccuracy: true, password, onSuccess: onDone, onError: onFail });
+        } else {
+            const filesToUpload = pendingHighAccuracyFiles;
+            handleFileUpload(filesToUpload, { highAccuracy: true, password, onSuccess: onDone, onError: onFail });
+        }
     });
 
     // File Upload handling. `options.highAccuracy` + `options.password` route
@@ -211,11 +305,18 @@ document.addEventListener('DOMContentLoaded', () => {
     // let callers (e.g. the password modal) react without changing the
     // normal drag-and-drop/browse callers, which don't pass them.
     function handleFileUpload(files, options = {}) {
+        if (hideProgressTimeoutId) {
+            clearTimeout(hideProgressTimeoutId);
+            hideProgressTimeoutId = null;
+        }
         progressContainer.style.display = 'block';
         progressList.innerHTML = '';
+        if (progressHeading) {
+            progressHeading.textContent = options.progressHeadingText || 'Processing Files...';
+        }
 
         const formData = new FormData();
-        formData.append('branch', branchInput.value.trim());
+        formData.append('branch', options.branch !== undefined ? options.branch : branchInput.value.trim());
         if (options.highAccuracy) {
             formData.append('high_accuracy', 'true');
             formData.append('confirm_password', options.password || '');
@@ -276,8 +377,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 updateBranchSuggestions();
             }
 
-            setTimeout(() => {
+            hideProgressTimeoutId = setTimeout(() => {
                 progressContainer.style.display = 'none';
+                hideProgressTimeoutId = null;
             }, 3000);
 
             if (options.onSuccess) options.onSuccess();

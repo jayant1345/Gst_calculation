@@ -470,6 +470,13 @@ body {
     color: var(--text-muted);
 }
 
+.branch-folder-hint {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 12px;
+    max-width: 480px;
+}
+
 /* Drop Zone Upload Area */
 .drop-zone {
     border: 2px dashed #cbd5e1;
