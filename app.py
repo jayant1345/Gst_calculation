@@ -1227,29 +1227,42 @@ def get_invoice_file(invoice_id):
 @app.route('/api/clear-invoices', methods=['POST'])
 @login_required
 def clear_invoices():
-    """Deletes exactly the invoice ids the client sends -- the frontend
-    sends whatever's currently visible under its active FY/month/search
-    filter, so 'Clear All' means 'clear what's shown', not silently
-    wipe every bill this user has ever entered regardless of filter."""
+    """Deletes invoice IDs sent by the client. Restricted to Admin users
+    and requires entering account password to authorize bulk deletion."""
     user_id = session['user_id']
-    is_admin = is_admin_user()
+    if not is_admin_user():
+        return jsonify({"error": "Clear All is restricted to Administrator users only."}), 403
+
     data = request.json or {}
     ids = data.get('ids')
+    password = data.get('password', '').strip()
+
     if not ids or not isinstance(ids, list):
-        return jsonify({"error": "ids is required"}), 400
+        return jsonify({"error": "No invoices selected to delete."}), 400
+
+    if not password:
+        return jsonify({"error": "Password confirmation is required to authorize bulk deletion."}), 400
+
     try:
         conn = get_db_connection()
-        cur = conn.cursor()
-        if is_admin:
-            cur.execute('DELETE FROM invoices WHERE id = ANY(%s)', (ids,))
-        else:
-            cur.execute('DELETE FROM invoices WHERE id = ANY(%s) AND user_id = %s', (ids, user_id))
+        cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        # Verify admin password
+        cur.execute('SELECT password_hash FROM users WHERE id = %s', (user_id,))
+        user_row = cur.fetchone()
+
+        if not user_row or not check_password_hash(user_row['password_hash'], password):
+            cur.close()
+            conn.close()
+            return jsonify({"error": "Incorrect password. Bulk delete aborted."}), 401
+
+        # Delete selected invoices
+        cur.execute('DELETE FROM invoices WHERE id = ANY(%s)', (ids,))
         deleted = cur.rowcount
         conn.commit()
         cur.close()
         conn.close()
 
-        log_activity(user_id, 'bills_cleared', f'Cleared {deleted} bill(s) via Clear All', record_count=deleted)
+        log_activity(user_id, 'bills_cleared', f'Cleared {deleted} bill(s) via Password-Protected Clear All', record_count=deleted)
         return jsonify({"success": True, "count": deleted})
     except Exception as e:
         return jsonify({"error": str(e)}), 500

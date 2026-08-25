@@ -667,6 +667,36 @@ document.addEventListener('DOMContentLoaded', () => {
         if (invoices.length === 0) {
             alert('No invoices loaded. Nothing to clear.');
             return;
+    // ---- Clear All (Password Protected & Admin Only) ----
+    const clearAllOverlay = document.getElementById('clear-all-modal-overlay');
+    const clearAllCloseBtn = document.getElementById('clear-all-modal-close');
+    const clearAllCancelBtn = document.getElementById('clear-all-cancel-btn');
+    const clearAllForm = document.getElementById('clear-all-password-form');
+    const clearAllPasswordInput = document.getElementById('clear-all-password-input');
+    const clearAllError = document.getElementById('clear-all-password-error');
+    const clearAllCountText = document.getElementById('clear-all-count-text');
+    const clearAllScopeText = document.getElementById('clear-all-scope-text');
+    const clearAllConfirmBtn = document.getElementById('clear-all-confirm-btn');
+
+    let pendingIdsToDelete = [];
+
+    function closeClearAllModal() {
+        if (clearAllOverlay) clearAllOverlay.style.display = 'none';
+        if (clearAllPasswordInput) clearAllPasswordInput.value = '';
+        if (clearAllError) {
+            clearAllError.style.display = 'none';
+            clearAllError.textContent = '';
+        }
+        pendingIdsToDelete = [];
+    }
+
+    if (clearAllCloseBtn) clearAllCloseBtn.addEventListener('click', closeClearAllModal);
+    if (clearAllCancelBtn) clearAllCancelBtn.addEventListener('click', closeClearAllModal);
+
+    clearAllBtn.addEventListener('click', () => {
+        if (!window.IS_ADMIN) {
+            alert('Clear All is an Administrator-only action. Contact your admin to perform bulk invoice deletion.');
+            return;
         }
 
         const filteredInvoices = getFilteredInvoices();
@@ -675,47 +705,69 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
+        pendingIdsToDelete = filteredInvoices.map(inv => inv.id).filter(id => id != null);
         const isFiltered = filteredInvoices.length !== invoices.length;
-        const scopeNote = isFiltered ? ' matching your current filter/search' : '';
-        const typed = prompt(
-            `This will PERMANENTLY delete ${filteredInvoices.length} bill(s)${scopeNote}, ` +
-            `including their original file attachments. This cannot be undone.\n\n` +
-            `Type DELETE to confirm.`
-        );
-        if (typed === null) return;
-        if (typed.trim().toUpperCase() !== 'DELETE') {
-            alert('Confirmation text did not match "DELETE". Nothing was deleted.');
-            return;
+        
+        if (clearAllCountText) clearAllCountText.textContent = pendingIdsToDelete.length;
+        if (clearAllScopeText) clearAllScopeText.textContent = isFiltered ? ' matching your current search/filter' : '';
+        if (clearAllPasswordInput) clearAllPasswordInput.value = '';
+        if (clearAllError) {
+            clearAllError.style.display = 'none';
+            clearAllError.textContent = '';
         }
 
-        const idsToDelete = filteredInvoices.map(inv => inv.id).filter(id => id != null);
-
-        fetch('/api/clear-invoices', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ids: idsToDelete })
-        })
-        .then(response => {
-            if (!response.ok) throw new Error('Failed to clear invoices');
-            return response.json();
-        })
-        .then(data => {
-            if (data.success) {
-                const deletedIds = new Set(idsToDelete);
-                invoices = invoices.filter(inv => !deletedIds.has(inv.id));
-                populateFilters();
-                renderTable();
-                updateMetrics();
-                updateBranchSuggestions();
-            } else {
-                alert(data.error || 'Failed to clear invoices.');
-            }
-        })
-        .catch(error => {
-            console.error('Error clearing invoices:', error);
-            alert('Failed to clear invoices from database.');
-        });
+        if (clearAllOverlay) {
+            clearAllOverlay.style.display = 'flex';
+            setTimeout(() => clearAllPasswordInput.focus(), 100);
+        }
     });
+
+    if (clearAllForm) {
+        clearAllForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            const password = clearAllPasswordInput.value.trim();
+            if (!password) {
+                clearAllError.textContent = 'Password is required.';
+                clearAllError.style.display = 'block';
+                return;
+            }
+
+            clearAllConfirmBtn.disabled = true;
+            clearAllConfirmBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Deleting...';
+
+            fetch('/api/clear-invoices', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ids: pendingIdsToDelete, password: password })
+            })
+            .then(response => response.json().then(data => ({ status: response.status, data })))
+            .then(({ status, data }) => {
+                clearAllConfirmBtn.disabled = false;
+                clearAllConfirmBtn.innerHTML = '<i class="fa-solid fa-trash-can"></i> Confirm & Delete Bills';
+
+                if (status === 200 && data.success) {
+                    const deletedIds = new Set(pendingIdsToDelete);
+                    invoices = invoices.filter(inv => !deletedIds.has(inv.id));
+                    closeClearAllModal();
+                    populateFilters();
+                    renderTable();
+                    updateMetrics();
+                    updateBranchSuggestions();
+                    alert(`Successfully deleted ${data.count} bill(s).`);
+                } else {
+                    clearAllError.textContent = data.error || 'Failed to clear invoices.';
+                    clearAllError.style.display = 'block';
+                }
+            })
+            .catch(error => {
+                console.error('Error clearing invoices:', error);
+                clearAllConfirmBtn.disabled = false;
+                clearAllConfirmBtn.innerHTML = '<i class="fa-solid fa-trash-can"></i> Confirm & Delete Bills';
+                clearAllError.textContent = 'Network or server error while executing delete.';
+                clearAllError.style.display = 'block';
+            });
+        });
+    }
 
     // ---- Manual Bill Entry (no physical/soft copy available) ----
     function openManualBillModal() {
