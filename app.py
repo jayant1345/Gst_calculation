@@ -1360,25 +1360,31 @@ def process_invoices():
                     # scan itself, not the PDF's text layer, so it's a genuinely
                     # recoverable gap worth a paid vision pass to fill in.
                     needs_gstin = not inv.get('gstin') or inv.get('gstin') == 'N/A'
-                    # A handwritten/rubber-stamped payment date is a nice-to-have,
-                    # not something to pay for a second AI call over: most bills
-                    # legitimately have no such stamp at all, so triggering a vision
-                    # call on "payment_date is blank" alone fired on nearly every
-                    # bill and roughly doubled scanning cost for little benefit.
                     # If the text pass returned a payment_date identical to the
                     # invoice_date, that's a strong sign it echoed the printed date
                     # rather than finding a genuinely distinct stamped one.
                     needs_payment_date = not inv.get('payment_date') or inv.get('payment_date') == inv.get('invoice_date')
-                    if needs_gstin:
+                    # A handwritten/rubber-stamped payment date is itself invisible
+                    # to text extraction -- but the PRINTED label around it (a
+                    # payment-voucher section: "RTGS/NEFT", "Cheque No.", "P.O.
+                    # No.", a "Sanctioned"/"Please Pay" block) is part of the
+                    # template and survives in the text layer even when the
+                    # handwritten value doesn't. Only bills whose printed template
+                    # actually has such a section can plausibly have a stamped date
+                    # to find -- a plain invoice with no payment-voucher section has
+                    # nothing there, so triggering vision on "payment_date is blank"
+                    # for every bill wasted a paid call on bills with no stamp to
+                    # find at all. Checking for that section first targets the
+                    # vision pass at bills that plausibly need it.
+                    payment_date_markers = ('rtgs', 'neft', 'p.o. no', 'po no', 'cheque',
+                                             'sanctioned', 'please pay', 'paid on', 'demand draft')
+                    has_payment_voucher_section = any(m in text.lower() for m in payment_date_markers)
+                    if needs_gstin or (needs_payment_date and has_payment_voucher_section):
                         try:
-                            # Already paying for this vision pass to recover GSTIN --
-                            # opportunistically grab a better payment_date from the
-                            # same response too, at no extra cost, rather than a
-                            # second dedicated call just for that.
                             vision_inv = extract_from_pdf_binary(file_bytes)
                             if needs_payment_date and vision_inv.get('payment_date'):
                                 inv['payment_date'] = vision_inv['payment_date']
-                            if vision_inv.get('gstin'):
+                            if needs_gstin and vision_inv.get('gstin'):
                                 inv['gstin'] = vision_inv['gstin']
                             # Record that vision was needed to complete this bill --
                             # more informative for the "which model actually did the
