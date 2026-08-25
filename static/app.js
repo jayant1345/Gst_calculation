@@ -157,10 +157,23 @@ document.addEventListener('DOMContentLoaded', () => {
         cameraInput.value = '';
     });
 
+    // Progress UI Elements
+    const progressCounter = document.getElementById('progress-counter');
+    const progressBarFill = document.getElementById('progress-bar-fill');
+    const uploadSummaryBanner = document.getElementById('upload-summary-banner');
+    const summaryBannerText = document.getElementById('summary-banner-text');
+    const dismissSummaryBtn = document.getElementById('dismiss-summary-btn');
+
+    if (dismissSummaryBtn) {
+        dismissSummaryBtn.addEventListener('click', () => {
+            progressContainer.style.display = 'none';
+            uploadSummaryBanner.style.display = 'none';
+        });
+    }
+
     // Optional bulk path: pick one main folder containing a subfolder per
     // branch (e.g. Bills/Andheri/, Bills/Borivali/) and every subfolder is
-    // scanned automatically, tagged with its own branch name. Does not
-    // touch the normal drag-and-drop/browse/camera flow at all.
+    // scanned automatically, tagged with its own branch name.
     if (folderInput) {
         folderInput.addEventListener('change', () => {
             if (folderInput.files.length > 0) {
@@ -177,20 +190,32 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const SUPPORTED_EXTENSIONS = ['pdf', 'png', 'jpg', 'jpeg', 'webp', 'xlsx', 'xls', 'csv'];
 
-    // Groups a webkitdirectory FileList by its immediate branch subfolder,
-    // using each file's relative path (e.g. "Bills/Andheri/inv1.pdf" ->
-    // branch "Andheri"). Files sitting directly in the selected root with
-    // no branch subfolder fall back to "Unassigned", matching the existing
-    // default used everywhere else in this app.
+    // Groups a webkitdirectory FileList by its branch subfolder.
+    // Supports direct branch folder selection ("Andheri/inv1.pdf" -> "Andheri")
+    // as well as container folder selection ("Bills/Andheri/inv1.pdf" -> "Andheri").
     function groupFilesByBranchFolder(fileList) {
         const groups = new Map();
         Array.from(fileList).forEach(file => {
+            if (file.name.startsWith('.') || file.name.startsWith('~$')) return; // Ignore system/temp files
+
             const ext = (file.name.split('.').pop() || '').toLowerCase();
             if (!SUPPORTED_EXTENSIONS.includes(ext)) return;
 
             const relPath = file.webkitRelativePath || file.name;
-            const parts = relPath.split('/');
-            const branch = parts.length > 2 ? parts[1] : 'Unassigned';
+            const parts = relPath.split('/').filter(p => p.trim().length > 0);
+
+            let branch = 'Unassigned';
+            if (parts.length === 2) {
+                // Direct branch folder: "Andheri/invoice1.pdf" -> "Andheri"
+                branch = parts[0];
+            } else if (parts.length > 2) {
+                // Container folder: "Bills/Andheri/invoice1.pdf" -> "Andheri"
+                // Or nested: "Bills/2024/Andheri/invoice1.pdf" -> "Andheri"
+                branch = (parts[parts.length - 2] !== parts[0]) ? parts[parts.length - 2] : parts[1];
+            }
+
+            branch = branch.trim();
+            if (!branch) branch = 'Unassigned';
 
             if (!groups.has(branch)) groups.set(branch, []);
             groups.get(branch).push(file);
@@ -201,7 +226,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Routes uploads through a password-confirm gate when High Accuracy Scan
     // is enabled (slower, forces a full AI vision pass on every field).
     function triggerUpload(files) {
-        if (highAccuracyToggle.checked) {
+        if (highAccuracyToggle && highAccuracyToggle.checked) {
             pendingHighAccuracyFiles = files;
             haPasswordInput.value = '';
             haPasswordError.style.display = 'none';
@@ -212,10 +237,8 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // Same password gate as triggerUpload, but for a whole folder's worth
-    // of branch groups -- one password entry covers every branch found.
     function triggerFolderUpload(branchGroups) {
-        if (highAccuracyToggle.checked) {
+        if (highAccuracyToggle && highAccuracyToggle.checked) {
             pendingHighAccuracyFolderGroups = branchGroups;
             haPasswordInput.value = '';
             haPasswordError.style.display = 'none';
@@ -226,26 +249,76 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // Uploads each branch's files as its own batch (one at a time, so the
-    // server isn't hit with every branch's files simultaneously), reusing
-    // handleFileUpload per branch with that branch name forced via
-    // options.branch. A failure on one branch doesn't stop the rest.
+    // Global batch state for progress tracking
+    let globalBatchState = {
+        totalFiles: 0,
+        processedFiles: 0,
+        successFiles: 0,
+        errorFiles: 0,
+        itemIndexCounter: 0
+    };
+
+    function updateProgressBar() {
+        if (globalBatchState.totalFiles > 0) {
+            const percent = Math.min(100, Math.round((globalBatchState.processedFiles / globalBatchState.totalFiles) * 100));
+            if (progressBarFill) progressBarFill.style.width = `${percent}%`;
+            if (progressCounter) progressCounter.textContent = `${globalBatchState.processedFiles} / ${globalBatchState.totalFiles} files`;
+        }
+    }
+
     function uploadFolderGroupsSequentially(branchGroups, options) {
         const entries = Array.from(branchGroups.entries());
-        const total = entries.length;
-        let index = 0;
+        const totalBranches = entries.length;
+        let totalFiles = 0;
+        entries.forEach(([_, files]) => { totalFiles += files.length; });
 
+        // Reset progress UI for batch folder upload
+        if (hideProgressTimeoutId) {
+            clearTimeout(hideProgressTimeoutId);
+            hideProgressTimeoutId = null;
+        }
+        progressContainer.style.display = 'block';
+        if (uploadSummaryBanner) uploadSummaryBanner.style.display = 'none';
+        progressList.innerHTML = '';
+        
+        globalBatchState = {
+            totalFiles: totalFiles,
+            processedFiles: 0,
+            successFiles: 0,
+            errorFiles: 0,
+            itemIndexCounter: 0
+        };
+        updateProgressBar();
+
+        if (progressHeading) {
+            progressHeading.innerHTML = `<i class="fa-solid fa-folder-tree" style="color: var(--accent-blue);"></i> Uploading Branch Folder: ${totalBranches} Branch(es), ${totalFiles} File(s)...`;
+        }
+
+        let index = 0;
         function next() {
-            if (index >= total) {
+            if (index >= totalBranches) {
+                // Complete! Show summary report banner
+                if (progressHeading) {
+                    progressHeading.innerHTML = `<i class="fa-solid fa-circle-check" style="color: var(--accent-green);"></i> Branch Folder Upload Complete`;
+                }
+                if (uploadSummaryBanner && summaryBannerText) {
+                    const errCount = globalBatchState.errorFiles;
+                    uploadSummaryBanner.className = errCount > 0 ? 'upload-summary-card error' : 'upload-summary-card';
+                    summaryBannerText.innerHTML = `<strong><i class="fa-solid ${errCount > 0 ? 'fa-triangle-exclamation' : 'fa-circle-check'}"></i> Upload Finished:</strong> Processed ${globalBatchState.processedFiles} bill(s) across ${totalBranches} branch(es) (${globalBatchState.successFiles} succeeded${errCount > 0 ? `, ${errCount} failed` : ''}).`;
+                    uploadSummaryBanner.style.display = 'flex';
+                }
+
                 if (options.onSuccess) options.onSuccess();
                 return;
             }
+
             const [branch, files] = entries[index];
             index++;
+            
             handleFileUpload(files, {
                 ...options,
                 branch: branch,
-                progressHeadingText: `Branch ${index} of ${total}: ${branch} — Processing Files...`,
+                appendProgress: true,
                 onSuccess: next,
                 onError: (err) => {
                     console.error(`Folder upload failed for branch "${branch}":`, err);
@@ -300,44 +373,60 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    // File Upload handling. `options.highAccuracy` + `options.password` route
-    // the batch through the slower full-vision scan; `onSuccess`/`onError`
-    // let callers (e.g. the password modal) react without changing the
-    // normal drag-and-drop/browse callers, which don't pass them.
+    // File Upload handling with real-time progress updates
     function handleFileUpload(files, options = {}) {
         if (hideProgressTimeoutId) {
             clearTimeout(hideProgressTimeoutId);
             hideProgressTimeoutId = null;
         }
-        progressContainer.style.display = 'block';
-        progressList.innerHTML = '';
-        if (progressHeading) {
-            progressHeading.textContent = options.progressHeadingText || 'Processing Files...';
+
+        if (!options.appendProgress) {
+            progressContainer.style.display = 'block';
+            if (uploadSummaryBanner) uploadSummaryBanner.style.display = 'none';
+            progressList.innerHTML = '';
+            globalBatchState = {
+                totalFiles: files.length,
+                processedFiles: 0,
+                successFiles: 0,
+                errorFiles: 0,
+                itemIndexCounter: 0
+            };
+            updateProgressBar();
+            if (progressHeading) {
+                progressHeading.innerHTML = `<i class="fa-solid fa-spinner fa-spin" style="color: var(--accent-blue);"></i> Processing ${files.length} File(s)...`;
+            }
         }
 
         const formData = new FormData();
-        formData.append('branch', options.branch !== undefined ? options.branch : branchInput.value.trim());
+        const activeBranch = options.branch !== undefined ? options.branch : branchInput.value.trim();
+        formData.append('branch', activeBranch);
         if (options.highAccuracy) {
             formData.append('high_accuracy', 'true');
             formData.append('confirm_password', options.password || '');
         }
 
         const statusLabel = options.highAccuracy
-            ? 'High accuracy scanning (this can take a while)...'
+            ? 'High accuracy scanning...'
             : 'Extracting & saving...';
 
-        Array.from(files).forEach((file, index) => {
+        const itemIds = [];
+        Array.from(files).forEach((file) => {
             formData.append('files[]', file);
+            const itemId = `upload-item-${globalBatchState.itemIndexCounter++}`;
+            itemIds.push(itemId);
+
+            const branchBadgeHtml = activeBranch ? `<span class="badge-branch"><i class="fa-solid fa-code-branch"></i> ${activeBranch}</span>` : '';
 
             const progressItem = document.createElement('div');
             progressItem.className = 'progress-item';
-            progressItem.id = `upload-item-${index}`;
+            progressItem.id = itemId;
             progressItem.innerHTML = `
                 <div class="progress-file-info">
                     <i class="fa-solid fa-file-invoice"></i>
+                    ${branchBadgeHtml}
                     <span class="progress-filename">${file.name}</span>
                 </div>
-                <span class="progress-status" id="upload-status-${index}">
+                <span class="progress-status" id="status-${itemId}">
                     <i class="fa-solid fa-spinner fa-spin"></i> ${statusLabel}
                 </span>
             `;
@@ -358,17 +447,20 @@ document.addEventListener('DOMContentLoaded', () => {
             return response.json();
         })
         .then(data => {
-            Array.from(files).forEach((file, index) => {
-                const statusSpan = document.getElementById(`upload-status-${index}`);
+            itemIds.forEach(itemId => {
+                const statusSpan = document.getElementById(`status-${itemId}`);
                 if (statusSpan) {
                     statusSpan.className = 'progress-status success';
                     statusSpan.innerHTML = '<i class="fa-solid fa-circle-check"></i> Processed';
                 }
             });
 
+            globalBatchState.processedFiles += files.length;
+            globalBatchState.successFiles += files.length;
+            updateProgressBar();
+
             // Add newly saved invoices to state
             if (data.invoices && data.invoices.length > 0) {
-                // Filter out any errored rows from merging into invoices list
                 const validInvoices = data.invoices.filter(inv => inv.id !== null);
                 invoices = [...validInvoices, ...invoices];
                 populateFilters();
@@ -377,22 +469,32 @@ document.addEventListener('DOMContentLoaded', () => {
                 updateBranchSuggestions();
             }
 
-            hideProgressTimeoutId = setTimeout(() => {
-                progressContainer.style.display = 'none';
-                hideProgressTimeoutId = null;
-            }, 3000);
+            if (!options.appendProgress) {
+                if (progressHeading) {
+                    progressHeading.innerHTML = `<i class="fa-solid fa-circle-check" style="color: var(--accent-green);"></i> Upload Complete`;
+                }
+                if (uploadSummaryBanner && summaryBannerText) {
+                    summaryBannerText.innerHTML = `<strong><i class="fa-solid fa-circle-check"></i> Upload Successful:</strong> Processed ${files.length} file(s).`;
+                    uploadSummaryBanner.className = 'upload-summary-card';
+                    uploadSummaryBanner.style.display = 'flex';
+                }
+            }
 
             if (options.onSuccess) options.onSuccess();
         })
         .catch(error => {
             console.error('Error uploading invoices:', error);
-            Array.from(files).forEach((file, index) => {
-                const statusSpan = document.getElementById(`upload-status-${index}`);
+            itemIds.forEach(itemId => {
+                const statusSpan = document.getElementById(`status-${itemId}`);
                 if (statusSpan) {
                     statusSpan.className = 'progress-status error';
-                    statusSpan.innerHTML = '<i class="fa-solid fa-circle-xmark"></i> Failed';
+                    statusSpan.innerHTML = `<i class="fa-solid fa-circle-xmark"></i> Failed (${error.message || 'Error'})`;
                 }
             });
+
+            globalBatchState.processedFiles += files.length;
+            globalBatchState.errorFiles += files.length;
+            updateProgressBar();
 
             if (options.onError) options.onError(error);
         });

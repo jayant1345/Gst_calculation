@@ -190,7 +190,20 @@
 
                 <!-- File Uploading Progress List -->
                 <div class="upload-progress-container" id="progress-container" style="display: none;">
-                    <h3 id="progress-heading">Processing Files...</h3>
+                    <div class="progress-header-row">
+                        <h3 id="progress-heading"><i class="fa-solid fa-spinner fa-spin" style="color: var(--accent-blue);"></i> Processing Files...</h3>
+                        <span class="progress-counter-text" id="progress-counter">0 / 0 files</span>
+                    </div>
+
+                    <div class="progress-bar-track">
+                        <div class="progress-bar-fill" id="progress-bar-fill"></div>
+                    </div>
+
+                    <div id="upload-summary-banner" class="upload-summary-card" style="display: none;">
+                        <span id="summary-banner-text">Upload completed successfully.</span>
+                        <button type="button" class="btn btn-secondary btn-sm" id="dismiss-summary-btn" style="padding: 4px 10px; font-size: 12px;">Close</button>
+                    </div>
+
                     <div class="progress-list" id="progress-list">
                         <!-- Dynamic items -->
                     </div>
