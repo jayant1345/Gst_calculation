@@ -762,15 +762,6 @@ document.addEventListener('DOMContentLoaded', () => {
         renderTable();
     });
 
-    // Clear All records for user
-    // "Clear All" only deletes whatever the active FY/month/search filter
-    // is currently showing -- not silently every bill ever entered -- and
-    // requires typing DELETE rather than a single OK/Cancel popup, since
-    // it permanently removes the original file attachments too.
-    btnClearAll.addEventListener('click', () => {
-        if (invoices.length === 0) {
-            alert('No invoices loaded. Nothing to clear.');
-            return;
     // ---- Clear All (Password Protected & Admin Only) ----
     const clearAllOverlay = document.getElementById('clear-all-modal-overlay');
     const clearAllCloseBtn = document.getElementById('clear-all-modal-close');
@@ -797,9 +788,19 @@ document.addEventListener('DOMContentLoaded', () => {
     if (clearAllCloseBtn) clearAllCloseBtn.addEventListener('click', closeClearAllModal);
     if (clearAllCancelBtn) clearAllCancelBtn.addEventListener('click', closeClearAllModal);
 
-    clearAllBtn.addEventListener('click', () => {
+    // Clear All records for user
+    // "Clear All" only deletes whatever the active FY/month/search filter
+    // is currently showing -- not silently every bill ever entered -- and
+    // is Admin-only, password-protected via a confirmation modal, since it
+    // permanently removes the original file attachments too.
+    btnClearAll.addEventListener('click', () => {
         if (!window.IS_ADMIN) {
             alert('Clear All is an Administrator-only action. Contact your admin to perform bulk invoice deletion.');
+            return;
+        }
+
+        if (invoices.length === 0) {
+            alert('No invoices loaded. Nothing to clear.');
             return;
         }
 
@@ -811,7 +812,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         pendingIdsToDelete = filteredInvoices.map(inv => inv.id).filter(id => id != null);
         const isFiltered = filteredInvoices.length !== invoices.length;
-        
+
         if (clearAllCountText) clearAllCountText.textContent = pendingIdsToDelete.length;
         if (clearAllScopeText) clearAllScopeText.textContent = isFiltered ? ' matching your current search/filter' : '';
         if (clearAllPasswordInput) clearAllPasswordInput.value = '';
