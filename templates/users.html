@@ -387,7 +387,7 @@
                                                 </form>
 
                                                 <!-- Delete User Form -->
-                                                <form action="/admin/users/{{ user['id'] }}/delete" method="POST" style="display: inline;" onsubmit="return confirm('Are you sure you want to delete user \'{{ user[\'username\'] }}\'? This will remove all their records.');">
+                                                <form action="/admin/users/{{ user['id'] }}/delete" method="POST" style="display: inline;" onsubmit="return confirm('Are you sure you want to delete user &quot;{{ user['username'] }}&quot;? This will remove all their records.');">
                                                     <button type="submit" class="btn btn-outline-danger btn-sm" title="Delete User">
                                                         <i class="fa-solid fa-trash-can"></i>
                                                     </button>
