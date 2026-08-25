@@ -145,13 +145,14 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     fileInput.addEventListener('change', () => {
-        if (fileInput.files.length > 0) {
+        if (fileInput.files && fileInput.files.length > 0) {
             triggerUpload(fileInput.files);
         }
+        fileInput.value = '';
     });
 
     cameraInput.addEventListener('change', () => {
-        if (cameraInput.files.length > 0) {
+        if (cameraInput.files && cameraInput.files.length > 0) {
             triggerUpload(cameraInput.files);
         }
         cameraInput.value = '';
@@ -166,8 +167,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (dismissSummaryBtn) {
         dismissSummaryBtn.addEventListener('click', () => {
-            progressContainer.style.display = 'none';
-            uploadSummaryBanner.style.display = 'none';
+            if (progressContainer) progressContainer.style.display = 'none';
+            if (uploadSummaryBanner) uploadSummaryBanner.style.display = 'none';
         });
     }
 
@@ -176,7 +177,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // scanned automatically, tagged with its own branch name.
     if (folderInput) {
         folderInput.addEventListener('change', () => {
-            if (folderInput.files.length > 0) {
+            if (folderInput.files && folderInput.files.length > 0) {
                 const groups = groupFilesByBranchFolder(folderInput.files);
                 if (groups.size === 0) {
                     alert('No supported bill files (PDF, JPG, PNG, WEBP, XLSX, XLS, CSV) were found in that folder.');
@@ -226,12 +227,13 @@ document.addEventListener('DOMContentLoaded', () => {
     // Routes uploads through a password-confirm gate when High Accuracy Scan
     // is enabled (slower, forces a full AI vision pass on every field).
     function triggerUpload(files) {
+        if (!files || files.length === 0) return;
         if (highAccuracyToggle && highAccuracyToggle.checked) {
             pendingHighAccuracyFiles = files;
-            haPasswordInput.value = '';
-            haPasswordError.style.display = 'none';
-            haPasswordOverlay.style.display = 'flex';
-            haPasswordInput.focus();
+            if (haPasswordInput) haPasswordInput.value = '';
+            if (haPasswordError) haPasswordError.style.display = 'none';
+            if (haPasswordOverlay) haPasswordOverlay.style.display = 'flex';
+            if (haPasswordInput) haPasswordInput.focus();
         } else {
             handleFileUpload(files);
         }
@@ -398,7 +400,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         const formData = new FormData();
-        const activeBranch = options.branch !== undefined ? options.branch : branchInput.value.trim();
+        const activeBranch = options.branch !== undefined ? options.branch : (branchInput ? branchInput.value.trim() : '');
         formData.append('branch', activeBranch);
         if (options.highAccuracy) {
             formData.append('high_accuracy', 'true');
@@ -874,7 +876,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // ---- Manual Bill Entry (no physical/soft copy available) ----
     function openManualBillModal() {
         manualBillForm.reset();
-        document.getElementById('mb-branch').value = branchInput.value.trim();
+        if (branchInput && document.getElementById('mb-branch')) document.getElementById('mb-branch').value = branchInput.value.trim();
         mbDirectFields.style.display = 'grid';
         mbAutoFields.style.display = 'none';
         mbPreview.style.display = 'none';
