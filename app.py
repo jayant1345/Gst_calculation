@@ -380,8 +380,11 @@ def call_vision_model(system_prompt, user_prompt, base64_data, mime_type):
     fails for any reason, falls back to Claude Opus 5 directly via
     Anthropic (AI_VISION_FALLBACK_MODEL_NAME) -- a scanned bill should
     still get read even if one provider is briefly unavailable, rate
-    limited, or misbehaving. Returns the raw text response (callers strip
-    any ```json fencing and parse it themselves)."""
+    limited, or misbehaving. Returns (text, model_used) -- model_used lets
+    callers report which model actually produced the result (Grok vs the
+    Opus fallback), rather than callers just assuming the primary model
+    was used. Callers strip any ```json fencing and parse the text
+    themselves."""
     openrouter_payload = {
         "model": AI_VISION_MODEL_NAME,
         "max_tokens": 1500,
@@ -397,7 +400,7 @@ def call_vision_model(system_prompt, user_prompt, base64_data, mime_type):
         ]
     }
     try:
-        return call_openrouter_api(openrouter_payload)
+        return call_openrouter_api(openrouter_payload), AI_VISION_MODEL_NAME
     except Exception as e:
         print(f"Primary vision model ({AI_VISION_MODEL_NAME}) failed, falling back to {AI_VISION_FALLBACK_MODEL_NAME}: {e}")
 
@@ -418,7 +421,7 @@ def call_vision_model(system_prompt, user_prompt, base64_data, mime_type):
             }
         ]
     }
-    return call_claude_api(anthropic_payload)
+    return call_claude_api(anthropic_payload), AI_VISION_FALLBACK_MODEL_NAME
 
 def extract_from_text(text):
     """Sends extracted text to Claude to parse invoice details into JSON."""
@@ -488,7 +491,9 @@ def extract_from_text(text):
         result = result.split("```json")[1].split("```")[0].strip()
     elif "```" in result:
         result = result.split("```")[1].split("```")[0].strip()
-    return json.loads(result)
+    parsed = json.loads(result)
+    parsed["_ai_model"] = AI_MODEL_NAME
+    return parsed
 
 def extract_from_image(base64_data, mime_type):
     """Sends a base64 encoded invoice image to the vision model (via
@@ -519,12 +524,14 @@ def extract_from_image(base64_data, mime_type):
         "letter G vs digit 6, letter Z vs digit 2 - do not just guess the visually 'nicer' option."
     )
 
-    result = call_vision_model(system_prompt, user_prompt, base64_data, mime_type)
+    result, model_used = call_vision_model(system_prompt, user_prompt, base64_data, mime_type)
     if "```json" in result:
         result = result.split("```json")[1].split("```")[0].strip()
     elif "```" in result:
         result = result.split("```")[1].split("```")[0].strip()
-    return json.loads(result)
+    parsed = json.loads(result)
+    parsed["_ai_model"] = model_used
+    return parsed
 
 def extract_from_pdf_binary(file_bytes):
     """Renders the PDF's first page to a high-resolution PNG and sends that
@@ -560,12 +567,14 @@ def extract_from_pdf_binary(file_bytes):
 
     base64_png = render_pdf_page_to_png_base64(file_bytes)
 
-    result = call_vision_model(system_prompt, user_prompt, base64_png, "image/png")
+    result, model_used = call_vision_model(system_prompt, user_prompt, base64_png, "image/png")
     if "```json" in result:
         result = result.split("```json")[1].split("```")[0].strip()
     elif "```" in result:
         result = result.split("```")[1].split("```")[0].strip()
-    return json.loads(result)
+    parsed = json.loads(result)
+    parsed["_ai_model"] = model_used
+    return parsed
 
 def parse_excel_register(file_bytes):
     """Parses a purchase register or GSTR-2B Excel file using Pandas."""
@@ -1189,7 +1198,8 @@ def rescan_invoice():
             "eligible_itc": eligible,
             "ineligible_itc": ineligible,
             "financial_year": fy,
-            "month": m
+            "month": m,
+            "ai_model_used": inv.get("_ai_model")
         })
     except Exception as e:
         print(f"Error rescanning invoice: {e}")
@@ -1349,6 +1359,10 @@ def process_invoices():
                                 inv['payment_date'] = vision_inv['payment_date']
                             if needs_gstin and vision_inv.get('gstin'):
                                 inv['gstin'] = vision_inv['gstin']
+                            # Record that vision was needed to complete this bill --
+                            # more informative for the "which model actually did the
+                            # work" badge than silently leaving it as the text model.
+                            inv['_ai_model'] = vision_inv.get('_ai_model', inv.get('_ai_model'))
                         except Exception as ex:
                             print(f"Vision fallback failed for {filename}: {ex}")
                 else:
@@ -1429,7 +1443,8 @@ def process_invoices():
                     "ineligible_itc": ineligible,
                     "financial_year": fy,
                     "month": m,
-                    "filename": filename
+                    "filename": filename,
+                    "ai_model_used": inv.get("_ai_model")
                 })
             conn.commit()
             cur.close()

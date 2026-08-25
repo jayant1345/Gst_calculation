@@ -500,6 +500,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 renderTable();
                 updateMetrics();
                 updateBranchSuggestions();
+
+                // Reflect which AI model actually handled the most recent
+                // scan in this batch (Grok primary, the Opus fallback, or
+                // Sonnet for a bill with a clean text layer) -- the badge
+                // previously always said "Sonnet 4.6" regardless of which
+                // model did the real work.
+                const modelUsed = [...data.invoices].reverse().map(inv => inv.ai_model_used).find(Boolean);
+                if (modelUsed) updateApiModelBadge(modelUsed);
             }
 
             if (!options.appendProgress) {
@@ -531,6 +539,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (options.onError) options.onError(error);
         });
+    }
+
+    // Friendly labels for the raw model ids the backend reports via
+    // ai_model_used, so the sidebar badge reads clearly instead of showing
+    // an internal id like "x-ai/grok-4.6" or "claude-opus-5" verbatim.
+    const API_MODEL_DISPLAY_NAMES = {
+        'claude-sonnet-4-6': 'Claude Sonnet 4.6',
+        'x-ai/grok-4.6': 'Grok 4.6 (OpenRouter)',
+        'claude-opus-5': 'Claude Opus 5 (Fallback)'
+    };
+
+    function updateApiModelBadge(modelId) {
+        const badge = document.getElementById('api-model-badge');
+        if (!badge || !modelId) return;
+        badge.textContent = API_MODEL_DISPLAY_NAMES[modelId] || modelId;
     }
 
     // Populate the branch datalist with previously used branch names
