@@ -178,9 +178,36 @@ document.addEventListener('DOMContentLoaded', () => {
     if (folderInput) {
         folderInput.addEventListener('change', () => {
             if (folderInput.files && folderInput.files.length > 0) {
-                const groups = groupFilesByBranchFolder(folderInput.files);
+                const files = Array.from(folderInput.files);
+
+                // Some browser/Windows combinations don't honor webkitdirectory
+                // and silently fall back to a plain multi-file picker instead
+                // of a real folder walk (no file gets a "/" in its relative
+                // path). Rather than silently dumping everything into
+                // "Unassigned" and losing the point of the feature, ask once
+                // for a branch name to apply to the whole selection -- keeps
+                // this button useful as a "pick several files, tag them as
+                // one branch" shortcut even where true folder-picking doesn't
+                // work, while still doing a real per-subfolder split
+                // automatically wherever the browser does support it.
+                const hasRealFolderStructure = files.some(f => f.webkitRelativePath && f.webkitRelativePath.includes('/'));
+                let fallbackBranch = '';
+                if (!hasRealFolderStructure) {
+                    const input = prompt(
+                        `Your browser selected ${files.length} individual file(s) rather than a folder ` +
+                        `(this can happen depending on your Chrome/Windows setup). ` +
+                        `Enter one branch name to apply to all of them, or leave blank for "Unassigned":`
+                    );
+                    if (input === null) {
+                        folderInput.value = '';
+                        return;
+                    }
+                    fallbackBranch = input.trim();
+                }
+
+                const groups = groupFilesByBranchFolder(files, fallbackBranch);
                 if (groups.size === 0) {
-                    alert('No supported bill files (PDF, JPG, PNG, WEBP, XLSX, XLS, CSV) were found in that folder.');
+                    alert('No supported bill files (PDF, JPG, PNG, WEBP, XLSX, XLS, CSV) were found in that selection.');
                 } else {
                     triggerFolderUpload(groups);
                 }
@@ -194,7 +221,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Groups a webkitdirectory FileList by its branch subfolder.
     // Supports direct branch folder selection ("Andheri/inv1.pdf" -> "Andheri")
     // as well as container folder selection ("Bills/Andheri/inv1.pdf" -> "Andheri").
-    function groupFilesByBranchFolder(fileList) {
+    function groupFilesByBranchFolder(fileList, fallbackBranch) {
         const groups = new Map();
         Array.from(fileList).forEach(file => {
             if (file.name.startsWith('.') || file.name.startsWith('~$')) return; // Ignore system/temp files
@@ -202,10 +229,10 @@ document.addEventListener('DOMContentLoaded', () => {
             const ext = (file.name.split('.').pop() || '').toLowerCase();
             if (!SUPPORTED_EXTENSIONS.includes(ext)) return;
 
-            const relPath = file.webkitRelativePath || file.name;
+            const relPath = file.webkitRelativePath || '';
             const parts = relPath.split('/').filter(p => p.trim().length > 0);
 
-            let branch = 'Unassigned';
+            let branch;
             if (parts.length === 2) {
                 // Direct branch folder: "Andheri/invoice1.pdf" -> "Andheri"
                 branch = parts[0];
@@ -213,9 +240,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Container folder: "Bills/Andheri/invoice1.pdf" -> "Andheri"
                 // Or nested: "Bills/2024/Andheri/invoice1.pdf" -> "Andheri"
                 branch = (parts[parts.length - 2] !== parts[0]) ? parts[parts.length - 2] : parts[1];
+            } else {
+                // No real folder structure for this file (plain multi-file
+                // fallback) -- use the branch name gathered up front.
+                branch = fallbackBranch || 'Unassigned';
             }
 
-            branch = branch.trim();
+            branch = (branch || '').trim();
             if (!branch) branch = 'Unassigned';
 
             if (!groups.has(branch)) groups.set(branch, []);
