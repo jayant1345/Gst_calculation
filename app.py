@@ -1356,25 +1356,29 @@ def process_invoices():
 
                 if not high_accuracy and len(text.strip()) > 100:
                     inv = extract_from_text(text)
-                    # Some fields -- a handwritten/rubber-stamped payment date, or a
-                    # seller GSTIN rendered as a logo/header image -- live in the scan
-                    # image itself, not in the PDF's text layer, so they can come back
-                    # blank here even when every other field extracted fine from text.
-                    # Fall back to a vision pass on the actual PDF just to look for
-                    # those specific gaps, without discarding the (usually more
-                    # reliable) text-based extraction for the rest.
+                    # A seller GSTIN rendered as a logo/header image lives in the
+                    # scan itself, not the PDF's text layer, so it's a genuinely
+                    # recoverable gap worth a paid vision pass to fill in.
                     needs_gstin = not inv.get('gstin') or inv.get('gstin') == 'N/A'
+                    # A handwritten/rubber-stamped payment date is a nice-to-have,
+                    # not something to pay for a second AI call over: most bills
+                    # legitimately have no such stamp at all, so triggering a vision
+                    # call on "payment_date is blank" alone fired on nearly every
+                    # bill and roughly doubled scanning cost for little benefit.
                     # If the text pass returned a payment_date identical to the
                     # invoice_date, that's a strong sign it echoed the printed date
-                    # rather than finding a genuinely distinct handwritten/stamped
-                    # one (which the garbled OCR text layer often loses entirely).
+                    # rather than finding a genuinely distinct stamped one.
                     needs_payment_date = not inv.get('payment_date') or inv.get('payment_date') == inv.get('invoice_date')
-                    if needs_gstin or needs_payment_date:
+                    if needs_gstin:
                         try:
+                            # Already paying for this vision pass to recover GSTIN --
+                            # opportunistically grab a better payment_date from the
+                            # same response too, at no extra cost, rather than a
+                            # second dedicated call just for that.
                             vision_inv = extract_from_pdf_binary(file_bytes)
                             if needs_payment_date and vision_inv.get('payment_date'):
                                 inv['payment_date'] = vision_inv['payment_date']
-                            if needs_gstin and vision_inv.get('gstin'):
+                            if vision_inv.get('gstin'):
                                 inv['gstin'] = vision_inv['gstin']
                             # Record that vision was needed to complete this bill --
                             # more informative for the "which model actually did the
