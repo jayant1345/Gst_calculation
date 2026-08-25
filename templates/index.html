@@ -155,6 +155,12 @@
                 </div>
 
                 <div class="branch-input-row">
+                    <label for="state-input"><i class="fa-solid fa-map-location-dot"></i> State</label>
+                    <select id="state-input">
+                        <option value="">-- Select State --</option>
+                        <option value="Gujarat">Gujarat</option>
+                        <option value="Maharashtra">Maharashtra</option>
+                    </select>
                     <label for="branch-input"><i class="fa-solid fa-code-branch"></i> Branch</label>
                     <input type="text" id="branch-input" list="branch-suggestions" placeholder="e.g. Ashram Road" autocomplete="off">
                     <datalist id="branch-suggestions"></datalist>
@@ -245,7 +251,8 @@
                     <table class="invoice-table" id="invoice-table">
                         <thead>
                             <tr>
-                                <th width="8%">Branch</th>
+                                <th width="7%">State</th>
+                                <th width="7%">Branch</th>
                                 <th width="9%">GST No</th>
                                 <th width="8%">Invoice #</th>
                                 <th width="8%">Date</th>
@@ -264,7 +271,7 @@
                         </thead>
                         <tbody id="invoice-table-body">
                             <tr class="empty-state-row">
-                                <td colspan="{{ 15 if is_admin else 14 }}">
+                                <td colspan="{{ 16 if is_admin else 15 }}">
                                     <div class="empty-state">
                                         <i class="fa-solid fa-receipt"></i>
                                         <p>No invoices processed yet. Drag & drop or upload files above to automatically extract values and calculate 50% GST credit.</p>
@@ -293,6 +300,14 @@
                     <div class="form-field">
                         <label for="mb-invoice-number">Invoice Number</label>
                         <input type="text" id="mb-invoice-number" placeholder="e.g. INV-1022" autocomplete="off">
+                    </div>
+                    <div class="form-field">
+                        <label for="mb-state">State</label>
+                        <select id="mb-state">
+                            <option value="">-- Select State --</option>
+                            <option value="Gujarat">Gujarat</option>
+                            <option value="Maharashtra">Maharashtra</option>
+                        </select>
                     </div>
                     <div class="form-field">
                         <label for="mb-branch">Branch</label>

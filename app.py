@@ -174,6 +174,12 @@ def init_db():
         # Migrate existing installs that predate the branch/GSTIN columns
         cur.execute('ALTER TABLE invoices ADD COLUMN IF NOT EXISTS branch VARCHAR(100);')
         cur.execute('ALTER TABLE invoices ADD COLUMN IF NOT EXISTS gstin VARCHAR(20);')
+
+        # Migrate existing installs that predate the state (GST registration --
+        # Gujarat vs Maharashtra) column. Distinct from branch: the same branch
+        # name can exist under both state registrations, and GSTR-2B is filed
+        # separately per state.
+        cur.execute('ALTER TABLE invoices ADD COLUMN IF NOT EXISTS state VARCHAR(50);')
         cur.execute('ALTER TABLE invoices ADD COLUMN IF NOT EXISTS financial_year VARCHAR(10);')
         cur.execute('ALTER TABLE invoices ADD COLUMN IF NOT EXISTS month VARCHAR(20);')
 
@@ -200,6 +206,9 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         ''')
+
+        # Migrate existing installs that predate the state (GST registration) column
+        cur.execute('ALTER TABLE gstr2b_entries ADD COLUMN IF NOT EXISTS state VARCHAR(50);')
 
         # Create Filing History / activity log table
         cur.execute('''
@@ -246,6 +255,8 @@ def init_db():
         cur.execute("UPDATE invoices SET ineligible_itc = 0 WHERE ineligible_itc IS NULL;")
         cur.execute("UPDATE invoices SET branch = 'Unassigned' WHERE branch IS NULL OR branch = '';")
         cur.execute("UPDATE invoices SET gstin = 'N/A' WHERE gstin IS NULL OR gstin = '';")
+        cur.execute("UPDATE invoices SET state = 'Unassigned' WHERE state IS NULL OR state = '';")
+        cur.execute("UPDATE gstr2b_entries SET state = 'Unassigned' WHERE state IS NULL OR state = '';")
         conn.commit()
 
         # Backfill financial_year and month for old invoices
@@ -603,6 +614,7 @@ def parse_excel_register(file_bytes):
     igst_cols = ["igst", "igstamount", "igstamt", "integratedtax"]
     gstin_cols = ["gstin", "gstno", "gstnumber", "vendorgstin", "suppliergstin", "gstregistrationnumber"]
     branch_cols = ["branch", "branchname", "location", "office", "unit"]
+    state_cols = ["state", "section", "gstregistration", "registrationstate"]
     payment_date_cols = ["paymentdate", "paiddate", "datepaid", "paymentdt"]
     itc_blocked_cols = ["itcblocked", "gstblocked", "blocked", "noitc", "itcineligible"]
 
@@ -615,6 +627,7 @@ def parse_excel_register(file_bytes):
     col_igst = find_column(igst_cols)
     col_gstin = find_column(gstin_cols)
     col_branch = find_column(branch_cols)
+    col_state = find_column(state_cols)
     col_payment_date = find_column(payment_date_cols)
     col_itc_blocked = find_column(itc_blocked_cols)
 
@@ -634,6 +647,7 @@ def parse_excel_register(file_bytes):
             payment_date = str(row[col_payment_date]).split(" ")[0].strip() if col_payment_date and pd.notna(row[col_payment_date]) else None
             gstin = str(row[col_gstin]) if col_gstin and pd.notna(row[col_gstin]) else "N/A"
             branch = str(row[col_branch]).strip() if col_branch and pd.notna(row[col_branch]) else None
+            state = str(row[col_state]).strip() if col_state and pd.notna(row[col_state]) else None
             itc_blocked = str(row[col_itc_blocked]).strip().lower() in ('yes', 'true', '1', 'y') if col_itc_blocked and pd.notna(row[col_itc_blocked]) else False
 
             taxable = float(row[col_taxable]) if col_taxable and pd.notna(row[col_taxable]) else 0.0
@@ -648,6 +662,7 @@ def parse_excel_register(file_bytes):
                 "vendor_name": vendor,
                 "gstin": gstin,
                 "branch": branch,
+                "state": state,
                 "itc_blocked": itc_blocked,
                 "taxable_value": taxable,
                 "cgst": cgst,
@@ -935,7 +950,7 @@ def get_invoices():
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         if is_admin:
             cur.execute('''
-                SELECT invoices.id, invoice_number, invoice_date, payment_date, vendor_name, gstin, branch,
+                SELECT invoices.id, invoice_number, invoice_date, payment_date, vendor_name, gstin, branch, state,
                        taxable_value::float, cgst::float, sgst::float, igst::float, itc_blocked,
                        eligible_itc::float, ineligible_itc::float, users.username,
                        financial_year, month,
@@ -946,7 +961,7 @@ def get_invoices():
             ''')
         else:
             cur.execute('''
-                SELECT id, invoice_number, invoice_date, payment_date, vendor_name, gstin, branch,
+                SELECT id, invoice_number, invoice_date, payment_date, vendor_name, gstin, branch, state,
                        taxable_value::float, cgst::float, sgst::float, igst::float, itc_blocked,
                        eligible_itc::float, ineligible_itc::float,
                        financial_year, month,
@@ -975,6 +990,7 @@ def save_invoice():
     vendor = inv.get('vendor_name', '')
     gstin = normalize_gstin(inv.get('gstin', '') or 'N/A')
     branch = inv.get('branch', '') or 'Unassigned'
+    state = inv.get('state', '') or 'Unassigned'
     taxable = float(inv.get('taxable_value', 0.0))
     cgst = float(inv.get('cgst', 0.0))
     sgst = float(inv.get('sgst', 0.0))
@@ -1005,26 +1021,26 @@ def save_invoice():
             if is_admin:
                 cur.execute('''
                     UPDATE invoices
-                    SET invoice_number = %s, invoice_date = %s, payment_date = %s, vendor_name = %s, gstin = %s, branch = %s,
+                    SET invoice_number = %s, invoice_date = %s, payment_date = %s, vendor_name = %s, gstin = %s, branch = %s, state = %s,
                         taxable_value = %s, cgst = %s, sgst = %s, igst = %s, itc_blocked = %s,
                         eligible_itc = %s, ineligible_itc = %s, financial_year = %s, month = %s
                     WHERE id = %s
-                ''', (inv_num, inv_date, payment_date, vendor, gstin, branch, taxable, cgst, sgst, igst, itc_blocked, eligible, ineligible, fy, m, db_id))
+                ''', (inv_num, inv_date, payment_date, vendor, gstin, branch, state, taxable, cgst, sgst, igst, itc_blocked, eligible, ineligible, fy, m, db_id))
             else:
                 cur.execute('''
                     UPDATE invoices
-                    SET invoice_number = %s, invoice_date = %s, payment_date = %s, vendor_name = %s, gstin = %s, branch = %s,
+                    SET invoice_number = %s, invoice_date = %s, payment_date = %s, vendor_name = %s, gstin = %s, branch = %s, state = %s,
                         taxable_value = %s, cgst = %s, sgst = %s, igst = %s, itc_blocked = %s,
                         eligible_itc = %s, ineligible_itc = %s, financial_year = %s, month = %s
                     WHERE id = %s AND user_id = %s
-                ''', (inv_num, inv_date, payment_date, vendor, gstin, branch, taxable, cgst, sgst, igst, itc_blocked, eligible, ineligible, fy, m, db_id, user_id))
+                ''', (inv_num, inv_date, payment_date, vendor, gstin, branch, state, taxable, cgst, sgst, igst, itc_blocked, eligible, ineligible, fy, m, db_id, user_id))
             ret_id = db_id
         else:
             # Insert new invoice
             cur.execute('''
-                INSERT INTO invoices (user_id, invoice_number, invoice_date, payment_date, vendor_name, gstin, branch, taxable_value, cgst, sgst, igst, itc_blocked, eligible_itc, ineligible_itc, financial_year, month)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
-            ''', (user_id, inv_num, inv_date, payment_date, vendor, gstin, branch, taxable, cgst, sgst, igst, itc_blocked, eligible, ineligible, fy, m))
+                INSERT INTO invoices (user_id, invoice_number, invoice_date, payment_date, vendor_name, gstin, branch, state, taxable_value, cgst, sgst, igst, itc_blocked, eligible_itc, ineligible_itc, financial_year, month)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
+            ''', (user_id, inv_num, inv_date, payment_date, vendor, gstin, branch, state, taxable, cgst, sgst, igst, itc_blocked, eligible, ineligible, fy, m))
             ret_id = cur.fetchone()[0]
 
         conn.commit()
@@ -1286,6 +1302,7 @@ def process_invoices():
 
     files = request.files.getlist('files[]')
     batch_branch = request.form.get('branch', '').strip()
+    batch_state = request.form.get('state', '').strip()
     high_accuracy = request.form.get('high_accuracy', '').lower() in ('1', 'true', 'yes')
 
     if high_accuracy:
@@ -1398,6 +1415,10 @@ def process_invoices():
                 # branches combined in one file); otherwise fall back to the single branch
                 # entered for this upload batch.
                 inv["branch"] = inv.get("branch") or batch_branch or "Unassigned"
+                # Same rule as branch: a bulk sheet may carry its own State column
+                # per row; otherwise fall back to the single state selected for
+                # this upload batch.
+                inv["state"] = inv.get("state") or batch_state or "Unassigned"
                 inv["itc_blocked"] = bool(inv.get("itc_blocked", False))
                 for field in ("taxable_value", "cgst", "sgst", "igst"):
                     try:
@@ -1416,9 +1437,9 @@ def process_invoices():
                 fy, m = parse_date_to_fy_and_month(inv["invoice_date"])
 
                 cur.execute('''
-                    INSERT INTO invoices (user_id, invoice_number, invoice_date, payment_date, vendor_name, gstin, branch, taxable_value, cgst, sgst, igst, itc_blocked, eligible_itc, ineligible_itc, file_data, file_mime_type, file_name, financial_year, month)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
-                ''', (user_id, inv["invoice_number"], inv["invoice_date"], inv["payment_date"], inv["vendor_name"], inv["gstin"], inv["branch"],
+                    INSERT INTO invoices (user_id, invoice_number, invoice_date, payment_date, vendor_name, gstin, branch, state, taxable_value, cgst, sgst, igst, itc_blocked, eligible_itc, ineligible_itc, file_data, file_mime_type, file_name, financial_year, month)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
+                ''', (user_id, inv["invoice_number"], inv["invoice_date"], inv["payment_date"], inv["vendor_name"], inv["gstin"], inv["branch"], inv["state"],
                       inv["taxable_value"], inv["cgst"], inv["sgst"], inv["igst"], inv["itc_blocked"],
                       eligible, ineligible,
                       psycopg2.Binary(store_file_bytes) if store_file_bytes else None,
@@ -1433,6 +1454,7 @@ def process_invoices():
                     "vendor_name": inv["vendor_name"],
                     "gstin": inv["gstin"],
                     "branch": inv["branch"],
+                    "state": inv["state"],
                     "taxable_value": inv["taxable_value"],
                     "cgst": inv["cgst"],
                     "sgst": inv["sgst"],
@@ -1460,6 +1482,7 @@ def process_invoices():
                 "vendor_name": f"Failed to parse {filename}",
                 "gstin": "N/A",
                 "branch": batch_branch or "Unassigned",
+                "state": batch_state or "Unassigned",
                 "taxable_value": 0.0,
                 "cgst": 0.0,
                 "sgst": 0.0,
@@ -1504,6 +1527,7 @@ def export_excel():
         elig_sgst = round(sgst * elig_ratio, 2)
         elig_igst = round(igst * elig_ratio, 2)
         rows.append({
+            "state": inv.get('state') or 'Unassigned',
             "branch": inv.get('branch') or 'Unassigned',
             "gstin": inv.get('gstin') or 'N/A',
             "invoice_date": inv.get('invoice_date') or '',
@@ -1522,10 +1546,16 @@ def export_excel():
             "inelig_igst": round(igst - elig_igst, 2),
         })
 
-    # Group by branch (blank/Unassigned sorted last), preserving upload order within a branch
-    branches = sorted(
-        {r["branch"] for r in rows},
-        key=lambda b: (b == 'Unassigned', b.lower())
+    # Group by (state, branch) -- not branch alone, since the same branch name
+    # can exist under both state registrations and would otherwise be silently
+    # merged into one subtotal. Blank/Unassigned sorted last within each level.
+    state_branch_groups = sorted(
+        {(r["state"], r["branch"]) for r in rows},
+        key=lambda sb: (sb[0] == 'Unassigned', sb[0].lower(), sb[1] == 'Unassigned', sb[1].lower())
+    )
+    states_ordered = sorted(
+        {sb[0] for sb in state_branch_groups},
+        key=lambda s: (s == 'Unassigned', s.lower())
     )
 
     NUMERIC_FIELDS = ["taxable_value", "cgst", "sgst", "igst", "total_invoice_value",
@@ -1552,23 +1582,23 @@ def export_excel():
 
     # ---- Header (two rows, with merged ELIGIBLE / INELIGIBLE groups) ----
     single_headers = [
-        (1, "Branch"), (2, "GST No"), (3, "Date"), (4, "Vendor Name"), (5, "Invoice No"),
-        (6, "Taxable Value (INR)"), (7, "CGST (INR)"), (8, "SGST (INR)"), (9, "IGST (INR)"),
-        (10, "Total Invoice Value (INR)")
+        (1, "State"), (2, "Branch"), (3, "GST No"), (4, "Date"), (5, "Vendor Name"), (6, "Invoice No"),
+        (7, "Taxable Value (INR)"), (8, "CGST (INR)"), (9, "SGST (INR)"), (10, "IGST (INR)"),
+        (11, "Total Invoice Value (INR)")
     ]
     for col_idx, label in single_headers:
         worksheet.merge_cells(start_row=1, start_column=col_idx, end_row=2, end_column=col_idx)
         worksheet.cell(row=1, column=col_idx, value=label)
 
-    worksheet.merge_cells(start_row=1, start_column=11, end_row=1, end_column=13)
-    worksheet.cell(row=1, column=11, value="ELIGIBLE ITC (50%)")
-    worksheet.merge_cells(start_row=1, start_column=14, end_row=1, end_column=16)
-    worksheet.cell(row=1, column=14, value="INELIGIBLE ITC (50%)")
+    worksheet.merge_cells(start_row=1, start_column=12, end_row=1, end_column=14)
+    worksheet.cell(row=1, column=12, value="ELIGIBLE ITC (50%)")
+    worksheet.merge_cells(start_row=1, start_column=15, end_row=1, end_column=17)
+    worksheet.cell(row=1, column=15, value="INELIGIBLE ITC (50%)")
 
-    for col_idx, label in [(11, "CGST"), (12, "SGST"), (13, "IGST"), (14, "CGST"), (15, "SGST"), (16, "IGST")]:
+    for col_idx, label in [(12, "CGST"), (13, "SGST"), (14, "IGST"), (15, "CGST"), (16, "SGST"), (17, "IGST")]:
         worksheet.cell(row=2, column=col_idx, value=label)
 
-    total_cols = 16
+    total_cols = 17
     for row_idx in (1, 2):
         for col_idx in range(1, total_cols + 1):
             cell = worksheet.cell(row=row_idx, column=col_idx)
@@ -1576,52 +1606,75 @@ def export_excel():
             cell.font = white_font
             cell.alignment = Alignment(horizontal="center", vertical="center")
 
-    # ---- Data rows, grouped by branch with a subtotal row per branch ----
+    # ---- Data rows, grouped by state then branch, with a branch subtotal row
+    # and a state total row -- (state, branch) grouping (not branch alone)
+    # since the same branch name can exist under both state registrations.
     row_idx = 3
     grand_totals = {f: 0.0 for f in NUMERIC_FIELDS}
 
-    for branch in branches:
-        branch_rows = [r for r in rows if r["branch"] == branch]
-        branch_totals = {f: 0.0 for f in NUMERIC_FIELDS}
+    for state in states_ordered:
+        state_totals = {f: 0.0 for f in NUMERIC_FIELDS}
+        branches_in_state = [sb[1] for sb in state_branch_groups if sb[0] == state]
 
-        for r in branch_rows:
-            values = [
-                r["branch"], r["gstin"], r["invoice_date"], r["vendor_name"], r["invoice_number"],
-                r["taxable_value"], r["cgst"], r["sgst"], r["igst"], r["total_invoice_value"],
-                r["elig_cgst"], r["elig_sgst"], r["elig_igst"], r["inelig_cgst"], r["inelig_sgst"], r["inelig_igst"]
-            ]
-            for col_idx, val in enumerate(values, start=1):
+        for branch in branches_in_state:
+            branch_rows = [r for r in rows if r["state"] == state and r["branch"] == branch]
+            branch_totals = {f: 0.0 for f in NUMERIC_FIELDS}
+
+            for r in branch_rows:
+                values = [
+                    r["state"], r["branch"], r["gstin"], r["invoice_date"], r["vendor_name"], r["invoice_number"],
+                    r["taxable_value"], r["cgst"], r["sgst"], r["igst"], r["total_invoice_value"],
+                    r["elig_cgst"], r["elig_sgst"], r["elig_igst"], r["inelig_cgst"], r["inelig_sgst"], r["inelig_igst"]
+                ]
+                for col_idx, val in enumerate(values, start=1):
+                    cell = worksheet.cell(row=row_idx, column=col_idx, value=val)
+                    cell.font = regular_font
+                    cell.border = thin_border
+                    if col_idx >= 7:
+                        cell.alignment = Alignment(horizontal="right")
+                        cell.number_format = '#,##0.00'
+                    else:
+                        cell.alignment = Alignment(horizontal="left")
+                for f in NUMERIC_FIELDS:
+                    branch_totals[f] += r[f]
+                    state_totals[f] += r[f]
+                    grand_totals[f] += r[f]
+                row_idx += 1
+
+            # Branch subtotal row
+            subtotal_values = ["", f"{branch} - Subtotal", "", "", "", "",
+                                branch_totals["taxable_value"], branch_totals["cgst"], branch_totals["sgst"],
+                                branch_totals["igst"], branch_totals["total_invoice_value"],
+                                branch_totals["elig_cgst"], branch_totals["elig_sgst"], branch_totals["elig_igst"],
+                                branch_totals["inelig_cgst"], branch_totals["inelig_sgst"], branch_totals["inelig_igst"]]
+            for col_idx, val in enumerate(subtotal_values, start=1):
                 cell = worksheet.cell(row=row_idx, column=col_idx, value=val)
-                cell.font = regular_font
+                cell.font = bold_font
+                cell.fill = subtotal_fill
                 cell.border = thin_border
-                if col_idx >= 6:
+                if col_idx >= 7:
                     cell.alignment = Alignment(horizontal="right")
                     cell.number_format = '#,##0.00'
-                else:
-                    cell.alignment = Alignment(horizontal="left")
-            for f in NUMERIC_FIELDS:
-                branch_totals[f] += r[f]
-                grand_totals[f] += r[f]
             row_idx += 1
 
-        # Branch subtotal row
-        subtotal_values = [f"{branch} - Subtotal", "", "", "", "",
-                            branch_totals["taxable_value"], branch_totals["cgst"], branch_totals["sgst"],
-                            branch_totals["igst"], branch_totals["total_invoice_value"],
-                            branch_totals["elig_cgst"], branch_totals["elig_sgst"], branch_totals["elig_igst"],
-                            branch_totals["inelig_cgst"], branch_totals["inelig_sgst"], branch_totals["inelig_igst"]]
-        for col_idx, val in enumerate(subtotal_values, start=1):
+        # State total row
+        state_total_values = [f"{state} - TOTAL", "", "", "", "", "",
+                               state_totals["taxable_value"], state_totals["cgst"], state_totals["sgst"],
+                               state_totals["igst"], state_totals["total_invoice_value"],
+                               state_totals["elig_cgst"], state_totals["elig_sgst"], state_totals["elig_igst"],
+                               state_totals["inelig_cgst"], state_totals["inelig_sgst"], state_totals["inelig_igst"]]
+        for col_idx, val in enumerate(state_total_values, start=1):
             cell = worksheet.cell(row=row_idx, column=col_idx, value=val)
             cell.font = bold_font
-            cell.fill = subtotal_fill
+            cell.fill = total_fill
             cell.border = thin_border
-            if col_idx >= 6:
+            if col_idx >= 7:
                 cell.alignment = Alignment(horizontal="right")
                 cell.number_format = '#,##0.00'
         row_idx += 1
 
     # ---- Grand total row ----
-    grand_total_values = ["GRAND TOTAL", "", "", "", "",
+    grand_total_values = ["GRAND TOTAL", "", "", "", "", "",
                            grand_totals["taxable_value"], grand_totals["cgst"], grand_totals["sgst"],
                            grand_totals["igst"], grand_totals["total_invoice_value"],
                            grand_totals["elig_cgst"], grand_totals["elig_sgst"], grand_totals["elig_igst"],
@@ -1631,7 +1684,7 @@ def export_excel():
         cell.font = bold_font
         cell.fill = total_fill
         cell.border = double_bottom_border
-        if col_idx >= 6:
+        if col_idx >= 7:
             cell.alignment = Alignment(horizontal="right")
             cell.number_format = '#,##0.00'
 
@@ -1883,24 +1936,24 @@ def export_annual_report():
         # GST is filed at the company level across every branch/user)
         if is_admin:
             cur.execute('''
-                SELECT id, invoice_number, invoice_date, vendor_name, gstin, branch,
+                SELECT id, invoice_number, invoice_date, vendor_name, gstin, branch, state,
                        taxable_value::float, cgst::float, sgst::float, igst::float,
                        eligible_itc::float, ineligible_itc::float, itc_blocked, month
                 FROM invoices
                 WHERE financial_year = %s
-                ORDER BY branch, created_at
+                ORDER BY state, branch, created_at
             ''', (fy,))
         else:
             cur.execute('''
-                SELECT id, invoice_number, invoice_date, vendor_name, gstin, branch,
+                SELECT id, invoice_number, invoice_date, vendor_name, gstin, branch, state,
                        taxable_value::float, cgst::float, sgst::float, igst::float,
                        eligible_itc::float, ineligible_itc::float, itc_blocked, month
                 FROM invoices
                 WHERE user_id = %s AND financial_year = %s
-                ORDER BY branch, created_at
+                ORDER BY state, branch, created_at
             ''', (user_id, fy))
         books = cur.fetchall()
-        books = sorted(books, key=lambda r: (r['branch'] or '', month_sort_key(r['month'])))
+        books = sorted(books, key=lambda r: (r['state'] or '', r['branch'] or '', month_sort_key(r['month'])))
 
         # Per-tax-head eligible/ineligible split. Blocked-ITC invoices (0%
         # eligible / 100% ineligible) and normal ones (50/50) both already
@@ -1921,7 +1974,7 @@ def export_annual_report():
         # 2. Fetch all portal GSTR-2B entries for this FY
         if is_admin:
             cur.execute('''
-                SELECT id, invoice_number, invoice_date, supplier_name as vendor_name, supplier_gstin as gstin,
+                SELECT id, invoice_number, invoice_date, supplier_name as vendor_name, supplier_gstin as gstin, state,
                        taxable_value::float, cgst::float, sgst::float, igst::float, month
                 FROM gstr2b_entries
                 WHERE financial_year = %s
@@ -1929,14 +1982,14 @@ def export_annual_report():
             ''', (fy,))
         else:
             cur.execute('''
-                SELECT id, invoice_number, invoice_date, supplier_name as vendor_name, supplier_gstin as gstin,
+                SELECT id, invoice_number, invoice_date, supplier_name as vendor_name, supplier_gstin as gstin, state,
                        taxable_value::float, cgst::float, sgst::float, igst::float, month
                 FROM gstr2b_entries
                 WHERE user_id = %s AND financial_year = %s
                 ORDER BY created_at
             ''', (user_id, fy))
         portal = cur.fetchall()
-        portal = sorted(portal, key=lambda r: month_sort_key(r['month']))
+        portal = sorted(portal, key=lambda r: (r['state'] or '', month_sort_key(r['month'])))
 
         cur.close()
         conn.close()
@@ -1957,7 +2010,7 @@ def export_annual_report():
                              top=Side(style='thin', color='DDDDDD'), bottom=Side(style='thin', color='DDDDDD'))
         
         # Header Row
-        headers_books = ["Month", "Branch", "Supplier GSTIN", "Vendor Name", "Invoice No", "Date",
+        headers_books = ["State", "Month", "Branch", "Supplier GSTIN", "Vendor Name", "Invoice No", "Date",
                           "Taxable Value (₹)", "CGST (₹)", "SGST (₹)", "IGST (₹)",
                           "Eligible CGST (₹)", "Eligible SGST (₹)", "Eligible IGST (₹)", "Total Eligible ITC (₹)",
                           "Ineligible CGST (₹)", "Ineligible SGST (₹)", "Ineligible IGST (₹)", "Total Ineligible ITC (₹)"]
@@ -1970,7 +2023,7 @@ def export_annual_report():
 
         for r in books:
             row_vals = [
-                r["month"], r["branch"], r["gstin"], r["vendor_name"], r["invoice_number"], r["invoice_date"],
+                r["state"], r["month"], r["branch"], r["gstin"], r["vendor_name"], r["invoice_number"], r["invoice_date"],
                 r["taxable_value"], r["cgst"], r["sgst"], r["igst"],
                 r["elig_cgst"], r["elig_sgst"], r["elig_igst"], r["eligible_itc"],
                 r["inelig_cgst"], r["inelig_sgst"], r["inelig_igst"], r["ineligible_itc"]
@@ -1981,7 +2034,7 @@ def export_annual_report():
                 cell = ws_books.cell(row=curr_row, column=col_idx)
                 cell.font = regular_font
                 cell.border = border_thin
-                if col_idx >= 7:
+                if col_idx >= 8:
                     cell.alignment = Alignment(horizontal="right")
                     cell.number_format = '#,##0.00'
                     
@@ -1998,17 +2051,17 @@ def export_annual_report():
             
         # Sheet 2: Portal Entries
         ws_portal = wb.create_sheet("Annual Portal GSTR-2B")
-        headers_portal = ["Month", "Supplier GSTIN", "Vendor Name", "Invoice No", "Date", "Taxable Value (₹)", "CGST (₹)", "SGST (₹)", "IGST (₹)"]
+        headers_portal = ["State", "Month", "Supplier GSTIN", "Vendor Name", "Invoice No", "Date", "Taxable Value (₹)", "CGST (₹)", "SGST (₹)", "IGST (₹)"]
         ws_portal.append(headers_portal)
         for col_idx in range(1, len(headers_portal) + 1):
             cell = ws_portal.cell(row=1, column=col_idx)
             cell.fill = header_fill
             cell.font = white_font
             cell.alignment = Alignment(horizontal="center")
-            
+
         for r in portal:
             row_vals = [
-                r["month"], r["gstin"], r["vendor_name"], r["invoice_number"], r["invoice_date"],
+                r["state"], r["month"], r["gstin"], r["vendor_name"], r["invoice_number"], r["invoice_date"],
                 r["taxable_value"], r["cgst"], r["sgst"], r["igst"]
             ]
             ws_portal.append(row_vals)
@@ -2017,7 +2070,7 @@ def export_annual_report():
                 cell = ws_portal.cell(row=curr_row, column=col_idx)
                 cell.font = regular_font
                 cell.border = border_thin
-                if col_idx >= 6:
+                if col_idx >= 7:
                     cell.alignment = Alignment(horizontal="right")
                     cell.number_format = '#,##0.00'
                     
@@ -2057,40 +2110,44 @@ def upload_gstr2b():
     file = request.files['file']
     fy = request.form.get('financial_year', '').strip()
     month = request.form.get('month', '').strip()
-    
-    if not fy or not month:
-        return jsonify({"error": "Financial Year and Month are required"}), 400
-        
+    state = request.form.get('state', '').strip()
+
+    if not fy or not month or not state:
+        return jsonify({"error": "Financial Year, Month, and State are required"}), 400
+
     file_bytes = file.read()
-    
+
     try:
         entries = parse_gstr2b_excel(file_bytes)
         if not entries:
             return jsonify({"error": "No valid GSTR-2B entries found in sheet B2B. Check file headers."}), 400
-            
+
         conn = get_db_connection()
         cur = conn.cursor()
-        
-        # Delete existing portal entries for this user/FY/Month to prevent duplicates on re-upload
+
+        # Delete existing portal entries for this user/FY/Month/State to prevent
+        # duplicates on re-upload -- scoped by state too, so re-uploading
+        # Maharashtra's file for a month never wipes Gujarat's entries for that
+        # same month (and vice versa).
         cur.execute('''
-            DELETE FROM gstr2b_entries 
-            WHERE user_id = %s AND financial_year = %s AND month = %s
-        ''', (user_id, fy, month))
-        
+            DELETE FROM gstr2b_entries
+            WHERE user_id = %s AND financial_year = %s AND month = %s AND state = %s
+        ''', (user_id, fy, month, state))
+
         inserted = 0
         for ent in entries:
             cur.execute('''
-                INSERT INTO gstr2b_entries (user_id, financial_year, month, supplier_gstin, supplier_name, invoice_number, invoice_date, taxable_value, cgst, sgst, igst)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ''', (user_id, fy, month, ent["gstin"], ent["vendor_name"], ent["invoice_number"], ent["invoice_date"],
+                INSERT INTO gstr2b_entries (user_id, financial_year, month, state, supplier_gstin, supplier_name, invoice_number, invoice_date, taxable_value, cgst, sgst, igst)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ''', (user_id, fy, month, state, ent["gstin"], ent["vendor_name"], ent["invoice_number"], ent["invoice_date"],
                   ent["taxable_value"], ent["cgst"], ent["sgst"], ent["igst"]))
             inserted += 1
-            
+
         conn.commit()
         cur.close()
         conn.close()
 
-        log_activity(user_id, 'gstr2b_upload', f'Imported {inserted} GSTR-2B entries', fy, month, inserted)
+        log_activity(user_id, 'gstr2b_upload', f'Imported {inserted} GSTR-2B entries ({state})', fy, month, inserted)
 
         return jsonify({"success": True, "count": inserted})
     except Exception as e:
@@ -2101,30 +2158,31 @@ def upload_gstr2b():
 @login_required
 def delete_gstr2b():
     """Removes a wrongly-uploaded or duplicate GSTR-2B batch for a specific
-    FY+month. Re-uploading only replaces that exact same FY+month combo,
-    so there was previously no way to remove data imported under the
+    FY+month+state. Re-uploading only replaces that exact same FY+month+state
+    combo, so there was previously no way to remove data imported under the
     wrong month/FY short of uploading a blank replacement file."""
     user_id = session['user_id']
     is_admin = is_admin_user()
     data = request.json or {}
     fy = (data.get('financial_year') or '').strip()
     month = (data.get('month') or '').strip()
-    if not fy or not month:
-        return jsonify({"error": "Financial Year and Month are required"}), 400
+    state = (data.get('state') or '').strip()
+    if not fy or not month or not state:
+        return jsonify({"error": "Financial Year, Month, and State are required"}), 400
 
     try:
         conn = get_db_connection()
         cur = conn.cursor()
         if is_admin:
-            cur.execute('DELETE FROM gstr2b_entries WHERE financial_year = %s AND month = %s', (fy, month))
+            cur.execute('DELETE FROM gstr2b_entries WHERE financial_year = %s AND month = %s AND state = %s', (fy, month, state))
         else:
-            cur.execute('DELETE FROM gstr2b_entries WHERE user_id = %s AND financial_year = %s AND month = %s', (user_id, fy, month))
+            cur.execute('DELETE FROM gstr2b_entries WHERE user_id = %s AND financial_year = %s AND month = %s AND state = %s', (user_id, fy, month, state))
         deleted = cur.rowcount
         conn.commit()
         cur.close()
         conn.close()
 
-        log_activity(user_id, 'gstr2b_deleted', f'Deleted {deleted} GSTR-2B entries for {month} ({fy})', fy, month, deleted)
+        log_activity(user_id, 'gstr2b_deleted', f'Deleted {deleted} GSTR-2B entries for {month} ({fy}, {state})', fy, month, deleted)
         return jsonify({"success": True, "count": deleted})
     except Exception as e:
         print(f"Error deleting GSTR-2B entries: {e}")
@@ -2136,7 +2194,7 @@ def execute_reconciliation(fy, months, user_id, is_admin):
 
     if is_admin:
         cur.execute('''
-            SELECT id, invoice_number, invoice_date, vendor_name, gstin, branch,
+            SELECT id, invoice_number, invoice_date, vendor_name, gstin, branch, state,
                    taxable_value::float, cgst::float, sgst::float, igst::float,
                    eligible_itc::float, ineligible_itc::float,
                    (cgst::float + sgst::float + igst::float) as total_gst,
@@ -2146,7 +2204,7 @@ def execute_reconciliation(fy, months, user_id, is_admin):
         ''', (fy, months))
     else:
         cur.execute('''
-            SELECT id, invoice_number, invoice_date, vendor_name, gstin, branch,
+            SELECT id, invoice_number, invoice_date, vendor_name, gstin, branch, state,
                    taxable_value::float, cgst::float, sgst::float, igst::float,
                    eligible_itc::float, ineligible_itc::float,
                    (cgst::float + sgst::float + igst::float) as total_gst,
@@ -2158,7 +2216,7 @@ def execute_reconciliation(fy, months, user_id, is_admin):
 
     if is_admin:
         cur.execute('''
-            SELECT id, invoice_number, invoice_date, supplier_name as vendor_name, supplier_gstin as gstin,
+            SELECT id, invoice_number, invoice_date, supplier_name as vendor_name, supplier_gstin as gstin, state,
                    taxable_value::float, cgst::float, sgst::float, igst::float,
                    (cgst::float + sgst::float + igst::float) as total_gst
             FROM gstr2b_entries
@@ -2166,7 +2224,7 @@ def execute_reconciliation(fy, months, user_id, is_admin):
         ''', (fy, months))
     else:
         cur.execute('''
-            SELECT id, invoice_number, invoice_date, supplier_name as vendor_name, supplier_gstin as gstin,
+            SELECT id, invoice_number, invoice_date, supplier_name as vendor_name, supplier_gstin as gstin, state,
                    taxable_value::float, cgst::float, sgst::float, igst::float,
                    (cgst::float + sgst::float + igst::float) as total_gst
             FROM gstr2b_entries
@@ -2177,119 +2235,154 @@ def execute_reconciliation(fy, months, user_id, is_admin):
     cur.close()
     conn.close()
 
-    portal_pool = collections.defaultdict(list)
-    for pe in portal_entries:
-        gst = pe['gstin'].strip().upper()
-        num = clean_invoice_number(pe['invoice_number'])
-        if not num:
-            continue
-        portal_pool[(gst, num)].append(pe)
+    def match_bucket(books_subset, portal_subset):
+        """Runs the exact-match + near-match algorithm within one state's
+        books/portal pool only -- called once per state so a book invoice can
+        never be matched against another state's GSTR-2B entry."""
+        portal_pool = collections.defaultdict(list)
+        for pe in portal_subset:
+            gst = pe['gstin'].strip().upper()
+            num = clean_invoice_number(pe['invoice_number'])
+            if not num:
+                continue
+            portal_pool[(gst, num)].append(pe)
+
+        bucket_reconciled = []
+        matched_count = 0
+        mismatched_count = 0
+        missing_portal_count = 0
+        matched_portal_ids = set()
+
+        for bi in books_subset:
+            bgst = bi['gstin'].strip().upper()
+            bnum = clean_invoice_number(bi['invoice_number'])
+
+            candidates = portal_pool.get((bgst, bnum), []) if bnum else []
+            candidates = [c for c in candidates if c['id'] not in matched_portal_ids]
+
+            if not candidates:
+                bucket_reconciled.append({
+                    "status": "Missing in GSTR-2B",
+                    "book": bi,
+                    "portal": None
+                })
+                missing_portal_count += 1
+            else:
+                best_cand = candidates[0]
+                if len(candidates) > 1:
+                    for c in candidates:
+                        if abs(c['total_gst'] - bi['total_gst']) <= 10.0:
+                            best_cand = c
+                            break
+
+                matched_portal_ids.add(best_cand['id'])
+                tax_diff = abs(best_cand['total_gst'] - bi['total_gst'])
+                taxable_diff = abs(best_cand['taxable_value'] - bi['taxable_value'])
+
+                if tax_diff <= 10.0 and taxable_diff <= 10.0:
+                    bucket_reconciled.append({
+                        "status": "Matched",
+                        "book": bi,
+                        "portal": best_cand
+                    })
+                    matched_count += 1
+                else:
+                    bucket_reconciled.append({
+                        "status": "Value Mismatched",
+                        "book": bi,
+                        "portal": best_cand
+                    })
+                    mismatched_count += 1
+
+        missing_books_count = 0
+        for pe in portal_subset:
+            if pe['id'] not in matched_portal_ids:
+                bucket_reconciled.append({
+                    "status": "Missing in Books",
+                    "book": None,
+                    "portal": pe
+                })
+                missing_books_count += 1
+
+        # Second pass: near-match detection. OCR commonly misreads a single
+        # character (0/O, P/F, 1/I, 5/S...), so the same real-world invoice can
+        # fail the strict GSTIN+invoice-number key match above and show up as
+        # two separate, unexplained "missing" rows. Amounts identical to the
+        # existing ±10 tolerance plus a small edit distance on GSTIN/invoice
+        # number is a strong signal it's the same bill -- flag it for a human
+        # to confirm rather than auto-merging (a wrong merge would hide a
+        # genuine discrepancy).
+        unmatched_book = [r for r in bucket_reconciled if r["status"] == "Missing in GSTR-2B"]
+        unmatched_portal = [r for r in bucket_reconciled if r["status"] == "Missing in Books"]
+        used_portal_ids = set()
+        possible_match_count = 0
+
+        for br in unmatched_book:
+            bi = br["book"]
+            bgst = bi['gstin'].strip().upper()
+            bnum = clean_invoice_number(bi['invoice_number'])
+            best = None
+            best_score = None
+
+            for pr in unmatched_portal:
+                pe = pr["portal"]
+                if pe['id'] in used_portal_ids:
+                    continue
+                if abs(pe['total_gst'] - bi['total_gst']) > 10.0 or abs(pe['taxable_value'] - bi['taxable_value']) > 10.0:
+                    continue
+                gstin_dist = levenshtein(bgst, pe['gstin'].strip().upper())
+                num_dist = levenshtein(bnum, clean_invoice_number(pe['invoice_number']))
+                if gstin_dist == 0 and num_dist == 0:
+                    continue  # would already have matched exactly above
+                if gstin_dist > 2 or num_dist > 3:
+                    continue
+                score = gstin_dist + num_dist
+                if best is None or score < best_score:
+                    best = pr
+                    best_score = score
+
+            if best is not None:
+                used_portal_ids.add(best["portal"]['id'])
+                br["status"] = "Possible Match"
+                br["portal"] = best["portal"]
+                possible_match_count += 1
+
+        if used_portal_ids:
+            bucket_reconciled = [r for r in bucket_reconciled
+                                  if not (r["status"] == "Missing in Books" and r["portal"]['id'] in used_portal_ids)]
+            missing_portal_count -= possible_match_count
+            missing_books_count -= possible_match_count
+
+        return bucket_reconciled, matched_count, mismatched_count, missing_portal_count, missing_books_count, possible_match_count
+
+    # Partition strictly by state (GST registration) before matching -- a
+    # Gujarat book invoice must never be compared against a Maharashtra
+    # GSTR-2B entry, or vice versa. Legacy rows with no state tag fall into
+    # their own "Unassigned" bucket and only match each other.
+    states_present = sorted({(bi['state'] or 'Unassigned') for bi in books_invoices} |
+                             {(pe['state'] or 'Unassigned') for pe in portal_entries})
 
     reconciled = []
     matched_count = 0
     mismatched_count = 0
     missing_portal_count = 0
-    matched_portal_ids = set()
-
-    for bi in books_invoices:
-        bgst = bi['gstin'].strip().upper()
-        bnum = clean_invoice_number(bi['invoice_number'])
-
-        candidates = portal_pool.get((bgst, bnum), []) if bnum else []
-        candidates = [c for c in candidates if c['id'] not in matched_portal_ids]
-
-        if not candidates:
-            reconciled.append({
-                "status": "Missing in GSTR-2B",
-                "book": bi,
-                "portal": None
-            })
-            missing_portal_count += 1
-        else:
-            best_cand = candidates[0]
-            if len(candidates) > 1:
-                for c in candidates:
-                    if abs(c['total_gst'] - bi['total_gst']) <= 10.0:
-                        best_cand = c
-                        break
-
-            matched_portal_ids.add(best_cand['id'])
-            tax_diff = abs(best_cand['total_gst'] - bi['total_gst'])
-            taxable_diff = abs(best_cand['taxable_value'] - bi['taxable_value'])
-
-            if tax_diff <= 10.0 and taxable_diff <= 10.0:
-                reconciled.append({
-                    "status": "Matched",
-                    "book": bi,
-                    "portal": best_cand
-                })
-                matched_count += 1
-            else:
-                reconciled.append({
-                    "status": "Value Mismatched",
-                    "book": bi,
-                    "portal": best_cand
-                })
-                mismatched_count += 1
-
     missing_books_count = 0
-    for pe in portal_entries:
-        if pe['id'] not in matched_portal_ids:
-            reconciled.append({
-                "status": "Missing in Books",
-                "book": None,
-                "portal": pe
-            })
-            missing_books_count += 1
-
-    # Second pass: near-match detection. OCR commonly misreads a single
-    # character (0/O, P/F, 1/I, 5/S...), so the same real-world invoice can
-    # fail the strict GSTIN+invoice-number key match above and show up as
-    # two separate, unexplained "missing" rows. Amounts identical to the
-    # existing ±10 tolerance plus a small edit distance on GSTIN/invoice
-    # number is a strong signal it's the same bill -- flag it for a human
-    # to confirm rather than auto-merging (a wrong merge would hide a
-    # genuine discrepancy).
-    unmatched_book = [r for r in reconciled if r["status"] == "Missing in GSTR-2B"]
-    unmatched_portal = [r for r in reconciled if r["status"] == "Missing in Books"]
-    used_portal_ids = set()
     possible_match_count = 0
 
-    for br in unmatched_book:
-        bi = br["book"]
-        bgst = bi['gstin'].strip().upper()
-        bnum = clean_invoice_number(bi['invoice_number'])
-        best = None
-        best_score = None
+    for st in states_present:
+        books_subset = [bi for bi in books_invoices if (bi['state'] or 'Unassigned') == st]
+        portal_subset = [pe for pe in portal_entries if (pe['state'] or 'Unassigned') == st]
 
-        for pr in unmatched_portal:
-            pe = pr["portal"]
-            if pe['id'] in used_portal_ids:
-                continue
-            if abs(pe['total_gst'] - bi['total_gst']) > 10.0 or abs(pe['taxable_value'] - bi['taxable_value']) > 10.0:
-                continue
-            gstin_dist = levenshtein(bgst, pe['gstin'].strip().upper())
-            num_dist = levenshtein(bnum, clean_invoice_number(pe['invoice_number']))
-            if gstin_dist == 0 and num_dist == 0:
-                continue  # would already have matched exactly above
-            if gstin_dist > 2 or num_dist > 3:
-                continue
-            score = gstin_dist + num_dist
-            if best is None or score < best_score:
-                best = pr
-                best_score = score
+        bucket_items, mc, mmc, mpc, mbc, pmc = match_bucket(books_subset, portal_subset)
+        for item in bucket_items:
+            item["state"] = st
+        reconciled.extend(bucket_items)
 
-        if best is not None:
-            used_portal_ids.add(best["portal"]['id'])
-            br["status"] = "Possible Match"
-            br["portal"] = best["portal"]
-            possible_match_count += 1
-
-    if used_portal_ids:
-        reconciled = [r for r in reconciled
-                      if not (r["status"] == "Missing in Books" and r["portal"]['id'] in used_portal_ids)]
-        missing_portal_count -= possible_match_count
-        missing_books_count -= possible_match_count
+        matched_count += mc
+        mismatched_count += mmc
+        missing_portal_count += mpc
+        missing_books_count += mbc
+        possible_match_count += pmc
 
     summary = {
         "total_books": len(books_invoices),

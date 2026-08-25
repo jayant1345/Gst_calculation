@@ -114,7 +114,7 @@
 
             <!-- Parameters Filter Panel (Shared across Stage 2 & 3) -->
             <div class="control-center-grid" style="margin-top: 1rem;">
-                <section class="dashboard-panel filter-panel">
+                <section class="dashboard-panel filter-panel" style="grid-column: 1 / -1;">
                     <div class="panel-header">
                         <h2><i class="fa-solid fa-sliders"></i> Filter Parameters</h2>
                     </div>
@@ -147,16 +147,20 @@
                         </div>
                     </div>
                 </section>
+            </div>
 
-                <!-- Portal GSTR-2B Upload -->
-                <section class="dashboard-panel upload-gstr2b-panel">
+            <!-- Portal GSTR-2B Upload -- separate facility per state, since Gujarat
+                 and Maharashtra each file their own GSTR-2B and must never share
+                 or overwrite each other's uploaded data. -->
+            <div class="control-center-grid">
+                <section class="dashboard-panel upload-gstr2b-panel" data-state="Gujarat">
                     <div class="panel-header">
-                        <h2><i class="fa-solid fa-file-arrow-up"></i> Upload GSTR-2B Excel</h2>
-                        <p class="panel-subtitle">Select matching month to import Portal GSTR-2B B2B sheet details.</p>
+                        <h2><i class="fa-solid fa-file-arrow-up"></i> Upload Gujarat GSTR-2B</h2>
+                        <p class="panel-subtitle">Select matching month to import Gujarat's Portal GSTR-2B B2B sheet details.</p>
                     </div>
-                    
+
                     <div class="gstr2b-upload-row">
-                        <select id="upload-month" class="form-control">
+                        <select id="upload-month-gj" class="form-control gstr2b-month-select">
                             <option value="">-- Select Month --</option>
                             <option value="April">April</option>
                             <option value="May">May</option>
@@ -171,21 +175,60 @@
                             <option value="February">February</option>
                             <option value="March">March</option>
                         </select>
-                        
-                        <div class="gstr2b-drop-zone" id="gstr2b-drop-zone">
-                            <input type="file" id="gstr2b-file-input" accept=".xlsx,.xls" style="display:none;">
-                            <label for="gstr2b-file-input" class="gstr2b-upload-label">
+
+                        <div class="gstr2b-drop-zone" id="gstr2b-drop-zone-gj">
+                            <input type="file" id="gstr2b-file-input-gj" class="gstr2b-file-input" accept=".xlsx,.xls" style="display:none;">
+                            <label for="gstr2b-file-input-gj" class="gstr2b-upload-label">
                                 <i class="fa-solid fa-cloud-arrow-up"></i>
-                                <span>Choose GSTR-2B Excel File</span>
+                                <span>Choose Gujarat GSTR-2B Excel File</span>
                             </label>
                         </div>
                     </div>
 
-                    <button type="button" class="btn btn-secondary" id="btn-delete-gstr2b" style="margin-top: 12px;" title="Remove the GSTR-2B entries already imported for the month selected above">
+                    <button type="button" class="btn btn-secondary btn-delete-gstr2b" data-state="Gujarat" data-month-select="upload-month-gj" style="margin-top: 12px;" title="Remove the Gujarat GSTR-2B entries already imported for the month selected above">
                         <i class="fa-solid fa-trash-can"></i> Delete Uploaded GSTR-2B for This Month
                     </button>
 
-                    <div id="gstr2b-upload-status" class="upload-status-message" style="display:none;"></div>
+                    <div id="gstr2b-upload-status-gj" class="upload-status-message" style="display:none;"></div>
+                </section>
+
+                <section class="dashboard-panel upload-gstr2b-panel" data-state="Maharashtra">
+                    <div class="panel-header">
+                        <h2><i class="fa-solid fa-file-arrow-up"></i> Upload Maharashtra GSTR-2B</h2>
+                        <p class="panel-subtitle">Select matching month to import Maharashtra's Portal GSTR-2B B2B sheet details.</p>
+                    </div>
+
+                    <div class="gstr2b-upload-row">
+                        <select id="upload-month-mh" class="form-control gstr2b-month-select">
+                            <option value="">-- Select Month --</option>
+                            <option value="April">April</option>
+                            <option value="May">May</option>
+                            <option value="June">June</option>
+                            <option value="July">July</option>
+                            <option value="August">August</option>
+                            <option value="September">September</option>
+                            <option value="October">October</option>
+                            <option value="November">November</option>
+                            <option value="December">December</option>
+                            <option value="January">January</option>
+                            <option value="February">February</option>
+                            <option value="March">March</option>
+                        </select>
+
+                        <div class="gstr2b-drop-zone" id="gstr2b-drop-zone-mh">
+                            <input type="file" id="gstr2b-file-input-mh" class="gstr2b-file-input" accept=".xlsx,.xls" style="display:none;">
+                            <label for="gstr2b-file-input-mh" class="gstr2b-upload-label">
+                                <i class="fa-solid fa-cloud-arrow-up"></i>
+                                <span>Choose Maharashtra GSTR-2B Excel File</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <button type="button" class="btn btn-secondary btn-delete-gstr2b" data-state="Maharashtra" data-month-select="upload-month-mh" style="margin-top: 12px;" title="Remove the Maharashtra GSTR-2B entries already imported for the month selected above">
+                        <i class="fa-solid fa-trash-can"></i> Delete Uploaded GSTR-2B for This Month
+                    </button>
+
+                    <div id="gstr2b-upload-status-mh" class="upload-status-message" style="display:none;"></div>
                 </section>
             </div>
 
@@ -242,7 +285,13 @@
                             <button class="btn btn-gold" id="btn-export-annual">
                                 <i class="fa-solid fa-file-excel"></i> Export Annual Report
                             </button>
-                            <div class="status-filters">
+                            <div class="status-filters" id="state-filters">
+                                <button class="filter-status-btn active" data-state="all">All States</button>
+                                <button class="filter-status-btn" data-state="Gujarat">Gujarat</button>
+                                <button class="filter-status-btn" data-state="Maharashtra">Maharashtra</button>
+                                <button class="filter-status-btn" data-state="Unassigned">Unassigned</button>
+                            </div>
+                            <div class="status-filters" id="status-filters">
                                 <button class="filter-status-btn active" data-status="all">All</button>
                                 <button class="filter-status-btn" data-status="Matched">Matched</button>
                                 <button class="filter-status-btn" data-status="Value Mismatched">Mismatched</button>
@@ -258,7 +307,8 @@
                         <table class="invoice-table recon-table">
                             <thead>
                                 <tr class="header-main">
-                                    <th rowspan="2" width="15%">Supplier / GSTIN</th>
+                                    <th rowspan="2" width="8%">State</th>
+                                    <th rowspan="2" width="14%">Supplier / GSTIN</th>
                                     <th colspan="4" class="th-books">Our Books Data (Stage 1)</th>
                                     <th colspan="4" class="th-portal">Portal GSTR-2B Data (Stage 2)</th>
                                     <th rowspan="2" width="10%">Match Status</th>
@@ -269,7 +319,7 @@
                                     <th class="th-books-sub">Inv No</th>
                                     <th class="th-books-sub">Date</th>
                                     <th class="th-books-sub">GST Amt (₹)</th>
-                                    
+
                                     <th class="th-portal-sub">Inv No</th>
                                     <th class="th-portal-sub">Date</th>
                                     <th class="th-portal-sub">GST Amt (₹)</th>
@@ -278,7 +328,7 @@
                             </thead>
                             <tbody id="recon-table-body">
                                 <tr class="empty-state-row">
-                                    <td colspan="11">
+                                    <td colspan="12">
                                         <div class="empty-state">
                                             <i class="fa-solid fa-scale-balanced"></i>
                                             <p>No reconciliation records loaded. Select financial year & months, or upload a GSTR-2B Excel to trigger matching.</p>

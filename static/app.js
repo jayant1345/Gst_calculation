@@ -17,6 +17,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const invoiceCountText = document.getElementById('invoice-count');
     const branchInput = document.getElementById('branch-input');
     const branchSuggestions = document.getElementById('branch-suggestions');
+    const stateInput = document.getElementById('state-input');
     
     // Metric Elements
     const billingMetric = document.getElementById('metric-total-billing');
@@ -433,6 +434,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const formData = new FormData();
         const activeBranch = options.branch !== undefined ? options.branch : (branchInput ? branchInput.value.trim() : '');
         formData.append('branch', activeBranch);
+        const activeState = options.state !== undefined ? options.state : (stateInput ? stateInput.value.trim() : '');
+        formData.append('state', activeState);
         if (options.highAccuracy) {
             formData.append('high_accuracy', 'true');
             formData.append('confirm_password', options.password || '');
@@ -584,7 +587,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Render Invoices Table
     function renderTable() {
         const filteredInvoices = getFilteredInvoices();
-        const colCount = window.IS_ADMIN ? 15 : 14;
+        const colCount = window.IS_ADMIN ? 16 : 15;
 
         if (filteredInvoices.length === 0) {
             tableBody.innerHTML = `
@@ -607,7 +610,14 @@ document.addEventListener('DOMContentLoaded', () => {
         filteredInvoices.forEach((inv, index) => {
             const tr = document.createElement('tr');
             tr.dataset.index = index;
+            const stateVal = inv.state || '';
+            const stateOptions = ['Gujarat', 'Maharashtra'];
+            if (stateVal && !stateOptions.includes(stateVal)) stateOptions.push(stateVal);
             tr.innerHTML = `
+                <td><select class="field-state">
+                    <option value="">-- Select --</option>
+                    ${stateOptions.map(s => `<option value="${s}" ${s === stateVal ? 'selected' : ''}>${s}</option>`).join('')}
+                </select></td>
                 <td><input type="text" class="field-branch" list="branch-suggestions" value="${inv.branch || ''}"></td>
                 <td><input type="text" class="field-gstin" value="${inv.gstin || ''}"></td>
                 <td><input type="text" class="field-number" value="${inv.invoice_number || ''}"></td>
@@ -634,7 +644,7 @@ document.addEventListener('DOMContentLoaded', () => {
             `;
 
             // Row-level listeners to update state & save changes to Postgres database
-            const inputs = tr.querySelectorAll('input');
+            const inputs = tr.querySelectorAll('input, select');
             inputs.forEach(input => {
                 input.addEventListener('change', (e) => {
                     updateStateFromRow(tr, index);
@@ -658,6 +668,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Sync input values with invoice state, calculate 50% split, and POST update to database
     function updateStateFromRow(rowEl, index) {
+        const state = rowEl.querySelector('.field-state').value.trim() || 'Unassigned';
         const branch = rowEl.querySelector('.field-branch').value.trim() || 'Unassigned';
         const gstin = rowEl.querySelector('.field-gstin').value.trim() || 'N/A';
         const invNum = rowEl.querySelector('.field-number').value;
@@ -677,6 +688,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // Update local state
         invoices[index] = {
             ...invoices[index],
+            state: state,
             branch: branch,
             gstin: gstin,
             invoice_number: invNum,
@@ -931,6 +943,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // ---- Manual Bill Entry (no physical/soft copy available) ----
     function openManualBillModal() {
         manualBillForm.reset();
+        if (stateInput && document.getElementById('mb-state')) document.getElementById('mb-state').value = stateInput.value.trim();
         if (branchInput && document.getElementById('mb-branch')) document.getElementById('mb-branch').value = branchInput.value.trim();
         mbDirectFields.style.display = 'grid';
         mbAutoFields.style.display = 'none';
@@ -1032,6 +1045,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const newInvoice = {
             id: null,
+            state: document.getElementById('mb-state').value.trim() || 'Unassigned',
             branch: document.getElementById('mb-branch').value.trim() || 'Unassigned',
             gstin: document.getElementById('mb-gstin').value.trim() || 'N/A',
             invoice_number: document.getElementById('mb-invoice-number').value.trim() || 'N/A',

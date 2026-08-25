@@ -2,6 +2,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // State variables
     let reconData = [];
     let activeFilter = 'all';
+    let activeStateFilter = 'all';
 
     function escapeHtml(value) {
         if (value === null || value === undefined) return '';
@@ -17,17 +18,11 @@ document.addEventListener('DOMContentLoaded', function() {
     const fySelect = document.getElementById('fy-select');
     const monthChecks = document.querySelectorAll('input[name="months"]');
     const reconSearch = document.getElementById('recon-search');
-    const statusBtns = document.querySelectorAll('.filter-status-btn');
+    const statusBtns = document.querySelectorAll('#status-filters .filter-status-btn');
+    const stateFilterBtns = document.querySelectorAll('#state-filters .filter-status-btn');
     const reconTableBody = document.getElementById('recon-table-body');
     const reconCardList = document.getElementById('recon-card-list');
     const reconCountText = document.getElementById('recon-count');
-    
-    // GSTR-2B Upload Elements
-    const gstr2bFileInput = document.getElementById('gstr2b-file-input');
-    const gstr2bDropZone = document.getElementById('gstr2b-drop-zone');
-    const uploadMonthSelect = document.getElementById('upload-month');
-    const uploadStatusDiv = document.getElementById('gstr2b-upload-status');
-    const btnDeleteGstr2b = document.getElementById('btn-delete-gstr2b');
 
     // Trigger reconciliation on filter parameter change
     fySelect.addEventListener('change', fetchReconciliationData);
@@ -43,7 +38,7 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    // Filter Buttons
+    // Status Filter Buttons
     statusBtns.forEach(btn => {
         btn.addEventListener('click', function() {
             statusBtns.forEach(b => b.classList.remove('active'));
@@ -53,37 +48,108 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     });
 
-    // File Drag & Drop for GSTR-2B
-    gstr2bDropZone.addEventListener('dragover', (e) => {
-        e.preventDefault();
-        gstr2bDropZone.classList.add('dragover');
+    // State Filter Buttons -- also drives the KPI cards, since KPIs should
+    // reflect whichever state (or "All States") is currently selected.
+    stateFilterBtns.forEach(btn => {
+        btn.addEventListener('click', function() {
+            stateFilterBtns.forEach(b => b.classList.remove('active'));
+            this.classList.add('active');
+            activeStateFilter = this.getAttribute('data-state');
+            updateKPIsForActiveState();
+            applyFilters();
+        });
     });
 
-    gstr2bDropZone.addEventListener('dragleave', () => {
-        gstr2bDropZone.classList.remove('dragover');
-    });
+    // ---- GSTR-2B Upload: one independent facility per state (Gujarat /
+    // Maharashtra), since each files its own separate GSTR-2B return and
+    // must never share or overwrite the other's uploaded data. ----
+    const GSTR2B_PANELS = [
+        { state: 'Gujarat', suffix: 'gj' },
+        { state: 'Maharashtra', suffix: 'mh' }
+    ];
 
-    gstr2bDropZone.addEventListener('drop', (e) => {
-        e.preventDefault();
-        gstr2bDropZone.classList.remove('dragover');
-        if (e.dataTransfer.files.length > 0) {
-            handleGstr2bUpload(e.dataTransfer.files[0]);
+    GSTR2B_PANELS.forEach(panel => {
+        const fileInput = document.getElementById(`gstr2b-file-input-${panel.suffix}`);
+        const dropZone = document.getElementById(`gstr2b-drop-zone-${panel.suffix}`);
+        const monthSelect = document.getElementById(`upload-month-${panel.suffix}`);
+        const statusDiv = document.getElementById(`gstr2b-upload-status-${panel.suffix}`);
+        const deleteBtn = document.querySelector(`.btn-delete-gstr2b[data-state="${panel.state}"]`);
+        if (!fileInput || !dropZone || !monthSelect || !statusDiv) return;
+
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('dragover');
+        });
+        dropZone.addEventListener('dragleave', () => {
+            dropZone.classList.remove('dragover');
+        });
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('dragover');
+            if (e.dataTransfer.files.length > 0) {
+                handleGstr2bUpload(e.dataTransfer.files[0], panel.state, monthSelect, statusDiv);
+            }
+        });
+        fileInput.addEventListener('change', function() {
+            if (this.files.length > 0) {
+                handleGstr2bUpload(this.files[0], panel.state, monthSelect, statusDiv);
+            }
+        });
+
+        // Removes a wrongly-uploaded or duplicate GSTR-2B batch for the FY +
+        // month + state currently selected. Re-uploading only replaces the
+        // exact same FY+month+state combo, so this is the only way to clear
+        // one imported under the wrong month/FY without a blank replacement file.
+        if (deleteBtn) {
+            deleteBtn.addEventListener('click', function() {
+                const fy = fySelect.value;
+                const month = monthSelect.value;
+
+                if (!month) {
+                    showUploadStatus(statusDiv, 'Select a month above first, to know which GSTR-2B batch to delete.', 'error');
+                    return;
+                }
+
+                const typed = prompt(
+                    `This will PERMANENTLY delete all ${panel.state} GSTR-2B entries imported for ${month} (FY ${fy}). ` +
+                    `This cannot be undone.\n\nType DELETE to confirm.`
+                );
+                if (typed === null) return;
+                if (typed.trim().toUpperCase() !== 'DELETE') {
+                    showUploadStatus(statusDiv, 'Confirmation text did not match "DELETE". Nothing was deleted.', 'error');
+                    return;
+                }
+
+                fetch('/api/delete-gstr2b', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ financial_year: fy, month: month, state: panel.state })
+                })
+                .then(res => res.json())
+                .then(data => {
+                    if (data.success) {
+                        showUploadStatus(statusDiv, `Deleted ${data.count} ${panel.state} GSTR-2B entr${data.count === 1 ? 'y' : 'ies'} for ${month} (${fy}).`, 'success');
+                        fetchReconciliationData();
+                        if (activeStage === 3) loadStage3Data();
+                    } else {
+                        showUploadStatus(statusDiv, data.error || 'Failed to delete GSTR-2B entries.', 'error');
+                    }
+                })
+                .catch(err => {
+                    showUploadStatus(statusDiv, 'Network error while deleting GSTR-2B entries.', 'error');
+                    console.error(err);
+                });
+            });
         }
     });
 
-    gstr2bFileInput.addEventListener('change', function() {
-        if (this.files.length > 0) {
-            handleGstr2bUpload(this.files[0]);
-        }
-    });
-
-    // Handle GSTR-2B Upload
-    function handleGstr2bUpload(file) {
-        const month = uploadMonthSelect.value;
+    // Handle GSTR-2B Upload for one state's panel
+    function handleGstr2bUpload(file, state, monthSelect, statusDiv) {
+        const month = monthSelect.value;
         const fy = fySelect.value;
 
         if (!month) {
-            showUploadStatus('Please select a GSTR-2B month first.', 'error');
+            showUploadStatus(statusDiv, 'Please select a GSTR-2B month first.', 'error');
             return;
         }
 
@@ -91,8 +157,9 @@ document.addEventListener('DOMContentLoaded', function() {
         formData.append('file', file);
         formData.append('financial_year', fy);
         formData.append('month', month);
+        formData.append('state', state);
 
-        showUploadStatus('Uploading and parsing GSTR-2B...', 'info');
+        showUploadStatus(statusDiv, `Uploading and parsing ${state} GSTR-2B...`, 'info');
 
         fetch('/api/upload-gstr2b', {
             method: 'POST',
@@ -101,7 +168,7 @@ document.addEventListener('DOMContentLoaded', function() {
         .then(res => res.json())
         .then(data => {
             if (data.success) {
-                showUploadStatus(`Success! Imported ${data.count} portal entries for ${month} (${fy}).`, 'success');
+                showUploadStatus(statusDiv, `Success! Imported ${data.count} ${state} portal entries for ${month} (${fy}).`, 'success');
                 // Check the checkbox for this month to trigger auto-reconcile
                 const matchingCheckbox = Array.from(monthChecks).find(cb => cb.value === month);
                 if (matchingCheckbox && !matchingCheckbox.checked) {
@@ -109,65 +176,19 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
                 fetchReconciliationData();
             } else {
-                showUploadStatus(data.error || 'Failed to upload GSTR-2B file.', 'error');
+                showUploadStatus(statusDiv, data.error || 'Failed to upload GSTR-2B file.', 'error');
             }
         })
         .catch(err => {
-            showUploadStatus('Network error occurred during upload.', 'error');
+            showUploadStatus(statusDiv, 'Network error occurred during upload.', 'error');
             console.error(err);
         });
     }
 
-    function showUploadStatus(msg, type) {
-        uploadStatusDiv.style.display = 'block';
-        uploadStatusDiv.innerText = msg;
-        uploadStatusDiv.className = `upload-status-message ${type}`;
-    }
-
-    // Removes a wrongly-uploaded or duplicate GSTR-2B batch for the FY +
-    // month currently selected. Re-uploading only replaces the exact same
-    // FY+month combo, so this is the only way to clear one imported under
-    // the wrong month/FY without a blank replacement file.
-    if (btnDeleteGstr2b) {
-        btnDeleteGstr2b.addEventListener('click', function() {
-            const fy = fySelect.value;
-            const month = uploadMonthSelect.value;
-
-            if (!month) {
-                showUploadStatus('Select a month above first, to know which GSTR-2B batch to delete.', 'error');
-                return;
-            }
-
-            const typed = prompt(
-                `This will PERMANENTLY delete all GSTR-2B entries imported for ${month} (FY ${fy}). ` +
-                `This cannot be undone.\n\nType DELETE to confirm.`
-            );
-            if (typed === null) return;
-            if (typed.trim().toUpperCase() !== 'DELETE') {
-                showUploadStatus('Confirmation text did not match "DELETE". Nothing was deleted.', 'error');
-                return;
-            }
-
-            fetch('/api/delete-gstr2b', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ financial_year: fy, month: month })
-            })
-            .then(res => res.json())
-            .then(data => {
-                if (data.success) {
-                    showUploadStatus(`Deleted ${data.count} GSTR-2B entr${data.count === 1 ? 'y' : 'ies'} for ${month} (${fy}).`, 'success');
-                    fetchReconciliationData();
-                    if (activeStage === 3) loadStage3Data();
-                } else {
-                    showUploadStatus(data.error || 'Failed to delete GSTR-2B entries.', 'error');
-                }
-            })
-            .catch(err => {
-                showUploadStatus('Network error while deleting GSTR-2B entries.', 'error');
-                console.error(err);
-            });
-        });
+    function showUploadStatus(statusDiv, msg, type) {
+        statusDiv.style.display = 'block';
+        statusDiv.innerText = msg;
+        statusDiv.className = `upload-status-message ${type}`;
     }
 
     // Fetch Reconciliation Data
@@ -192,7 +213,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 return;
             }
             reconData = data.items || [];
-            updateKPIs(data.summary);
+            updateKPIsForActiveState();
             applyFilters();
         })
         .catch(err => {
@@ -210,17 +231,41 @@ document.addEventListener('DOMContentLoaded', function() {
         document.getElementById('kpi-missing-books').innerText = `${summary.missing_in_books} Invoices`;
     }
 
+    // KPI cards reflect whichever state is currently selected (or the total
+    // across all states) -- computed client-side from the already-fetched
+    // reconData rather than the backend's unfiltered summary, so the cards
+    // stay in sync with the State filter the same way the ledger rows do.
+    function updateKPIsForActiveState() {
+        const subset = activeStateFilter === 'all'
+            ? reconData
+            : reconData.filter(item => (item.state || 'Unassigned') === activeStateFilter);
+
+        const counts = { matched: 0, mismatched: 0, missing_in_portal: 0, missing_in_books: 0 };
+        subset.forEach(item => {
+            if (item.status === 'Matched') counts.matched++;
+            else if (item.status === 'Value Mismatched') counts.mismatched++;
+            else if (item.status === 'Missing in GSTR-2B') counts.missing_in_portal++;
+            else if (item.status === 'Missing in Books') counts.missing_in_books++;
+        });
+        updateKPIs(counts);
+    }
+
     // Apply Filter state and Search Query
     function applyFilters() {
         const searchQuery = reconSearch.value.toLowerCase().trim();
-        
+
         const filtered = reconData.filter(item => {
-            // 1. Status Filter
+            // 1. State Filter
+            if (activeStateFilter !== 'all' && (item.state || 'Unassigned') !== activeStateFilter) {
+                return false;
+            }
+
+            // 2. Status Filter
             if (activeFilter !== 'all' && item.status !== activeFilter) {
                 return false;
             }
-            
-            // 2. Search Text Query (Fuzzy check supplier, gstin, or inv number)
+
+            // 3. Search Text Query (Fuzzy check supplier, gstin, or inv number)
             if (searchQuery) {
                 const bookGstin = item.book?.gstin || '';
                 const bookVendor = item.book?.vendor_name || '';
@@ -290,6 +335,7 @@ document.addEventListener('DOMContentLoaded', function() {
             const highlightDiff = item.status === 'Value Mismatched' || item.status === 'Possible Match';
 
             tr.innerHTML = `
+                <td>${escapeHtml(item.state || 'Unassigned')}</td>
                 <td>
                     <div class="supplier-info">
                         <strong>${escapeHtml(supplier)}</strong>
@@ -363,7 +409,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 <div class="card-mobile-header">
                     <div class="mobile-supplier">
                         <h4>${escapeHtml(supplier)}</h4>
-                        <span>${escapeHtml(gstin)}</span>
+                        <span>${escapeHtml(gstin)} &middot; ${escapeHtml(item.state || 'Unassigned')}</span>
                     </div>
                     ${statusBadge}
                 </div>
@@ -481,7 +527,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const safeMsg = escapeHtml(msg);
         reconTableBody.innerHTML = `
             <tr class="empty-state-row">
-                <td colspan="11">
+                <td colspan="12">
                     <div class="empty-state">
                         <i class="fa-solid fa-scale-balanced"></i>
                         <p>${safeMsg}</p>
