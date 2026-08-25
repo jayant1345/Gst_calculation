@@ -153,8 +153,8 @@
     <div class="auth-container">
         <div class="auth-card">
             <div class="auth-header">
-                <i class="fa-solid fa-building-columns auth-logo"></i>
-                <h1>Create Account</h1>
+                <i class="fa-solid fa-user-plus auth-logo"></i>
+                <h1>{% if is_admin %}Admin User Registration{% else %}Account Registration{% endif %}</h1>
                 <p>GST ITC Reconciliation Portal</p>
             </div>
             
@@ -165,22 +165,43 @@
             </div>
             {% endif %}
 
+            {% if not is_admin and not session.get('user_id') %}
+            <div style="background-color: #eff6ff; border: 1px solid #bfdbfe; color: #1e40af; padding: 12px 16px; border-radius: 8px; font-size: 13px; margin-bottom: 20px; text-align: left;">
+                <i class="fa-solid fa-circle-info"></i> User accounts are managed and registered by system Administrators. Please contact your admin to obtain login access.
+            </div>
+            {% endif %}
+
             <form action="/register" method="POST">
                 <div class="form-group">
                     <label for="username">Username</label>
-                    <input type="text" id="username" name="username" class="form-control" placeholder="Create username" required autofocus>
+                    <input type="text" id="username" name="username" class="form-control" placeholder="Enter username" required autofocus>
                 </div>
                 
                 <div class="form-group">
                     <label for="password">Password</label>
-                    <input type="password" id="password" name="password" class="form-control" placeholder="Create password" required>
+                    <input type="password" id="password" name="password" class="form-control" placeholder="Enter password" required minlength="4">
                 </div>
+
+                {% if is_admin %}
+                <div class="form-group" style="text-align: left; margin-bottom: 20px;">
+                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; font-weight: 500;">
+                        <input type="checkbox" name="is_admin" value="true" style="width: 16px; height: 16px; accent-color: var(--accent-blue);">
+                        <span>Grant Administrator Privileges</span>
+                    </label>
+                </div>
+                {% endif %}
                 
-                <button type="submit" class="btn btn-primary btn-block">Register</button>
+                <button type="submit" class="btn btn-primary btn-block">
+                    <i class="fa-solid fa-user-plus"></i> Register User Account
+                </button>
             </form>
             
             <div class="auth-footer">
+                {% if is_admin %}
+                <a href="/admin/users"><i class="fa-solid fa-arrow-left"></i> Back to User Management</a>
+                {% else %}
                 Already have an account? <a href="/login">Log in here</a>
+                {% endif %}
             </div>
         </div>
     </div>

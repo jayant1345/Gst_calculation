@@ -273,6 +273,17 @@ def login_required(f):
         return f(*args, **kwargs)
     return decorated_function
 
+def admin_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if 'user_id' not in session:
+            return redirect(url_for('login'))
+        if not is_admin_user():
+            flash("Access denied: Administrator privileges required.", "error")
+            return redirect(url_for('home'))
+        return f(*args, **kwargs)
+    return decorated_function
+
 def is_admin_user():
     """Checks admin status directly from the database rather than trusting a
     value cached in the session cookie, so role changes take effect immediately
@@ -678,13 +689,17 @@ def login():
 
 @app.route('/register', methods=['GET', 'POST'])
 def register():
-    if 'user_id' in session:
+    is_admin = is_admin_user()
+    
+    # If user is logged in as non-admin, redirect to home
+    if 'user_id' in session and not is_admin:
         return redirect(url_for('home'))
         
     error = None
     if request.method == 'POST':
         username = request.form.get('username', '').strip()
         password = request.form.get('password', '').strip()
+        make_admin = request.form.get('is_admin') in ['on', 'true', '1']
 
         if not username or not password:
             error = "All fields are required"
@@ -692,25 +707,29 @@ def register():
             try:
                 conn = get_db_connection()
                 cur = conn.cursor()
-                # Check duplicate username
                 cur.execute('SELECT id FROM users WHERE username = %s', (username,))
                 if cur.fetchone():
-                    error = "Username already exists"
+                    error = f"Username '{username}' already exists"
                 else:
-                    # Create user
                     hashed_pw = generate_password_hash(password)
-                    cur.execute('INSERT INTO users (username, password_hash) VALUES (%s, %s)', (username, hashed_pw))
+                    cur.execute('INSERT INTO users (username, password_hash, is_admin) VALUES (%s, %s, %s)', (username, hashed_pw, make_admin))
                     conn.commit()
                     cur.close()
                     conn.close()
-                    flash("Registration successful! You can now log in.", "success")
-                    return redirect(url_for('login'))
+
+                    if 'user_id' in session and is_admin:
+                        log_activity(session['user_id'], 'CREATE_USER', f"Admin created user '{username}' (Admin: {make_admin})")
+                        flash(f"User '{username}' registered successfully!", "success")
+                        return redirect(url_for('admin_users'))
+                    else:
+                        flash("Registration successful! You can now log in.", "success")
+                        return redirect(url_for('login'))
                 cur.close()
                 conn.close()
             except Exception as e:
-                error = f"Database connection error: {e}"
+                error = f"Database error: {e}"
 
-    return render_template('register.html', error=error)
+    return render_template('register.html', error=error, is_admin=is_admin)
 
 @app.route('/logout')
 def logout():
@@ -753,7 +772,148 @@ def settings():
             except Exception as e:
                 error = f"Database connection error: {e}"
 
-    return render_template('settings.html', error=error, api_key_configured=bool(ANTHROPIC_API_KEY and OPENROUTER_API_KEY), ai_model_name=AI_MODEL_NAME)
+    return render_template('settings.html', error=error, is_admin=is_admin_user(), api_key_configured=bool(ANTHROPIC_API_KEY and OPENROUTER_API_KEY), ai_model_name=AI_MODEL_NAME)
+
+# Admin User Management Routes
+@app.route('/admin/users', methods=['GET'])
+@admin_required
+def admin_users():
+    error = None
+    users = []
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        cur.execute('''
+            SELECT 
+                u.id, 
+                u.username, 
+                u.is_admin, 
+                u.created_at,
+                (SELECT COUNT(*) FROM invoices i WHERE i.user_id = u.id) as invoice_count,
+                (SELECT COUNT(*) FROM gstr2b_entries g WHERE g.user_id = u.id) as gstr2b_count
+            FROM users u
+            ORDER BY u.id ASC;
+        ''')
+        users = cur.fetchall()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        error = f"Database connection error: {e}"
+
+    return render_template('users.html', users=users, error=error, is_admin=True, api_key_configured=bool(ANTHROPIC_API_KEY and OPENROUTER_API_KEY), ai_model_name=AI_MODEL_NAME)
+
+@app.route('/admin/users/create', methods=['POST'])
+@admin_required
+def admin_create_user():
+    username = request.form.get('username', '').strip()
+    password = request.form.get('password', '').strip()
+    is_admin_flag = request.form.get('is_admin') in ['on', 'true', '1']
+
+    if not username or not password:
+        flash("Username and password are required.", "error")
+        return redirect(url_for('admin_users'))
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute('SELECT id FROM users WHERE username = %s', (username,))
+        if cur.fetchone():
+            flash(f"Username '{username}' already exists.", "error")
+        else:
+            hashed_pw = generate_password_hash(password)
+            cur.execute('INSERT INTO users (username, password_hash, is_admin) VALUES (%s, %s, %s)', (username, hashed_pw, is_admin_flag))
+            conn.commit()
+            log_activity(session['user_id'], 'CREATE_USER', f"Created user '{username}' (Admin: {is_admin_flag})")
+            flash(f"User '{username}' registered successfully!", "success")
+        cur.close()
+        conn.close()
+    except Exception as e:
+        flash(f"Error registering user: {e}", "error")
+
+    return redirect(url_for('admin_users'))
+
+@app.route('/admin/users/<int:user_id>/toggle-admin', methods=['POST'])
+@admin_required
+def admin_toggle_role(user_id):
+    if user_id == session['user_id']:
+        flash("You cannot revoke your own administrator status.", "error")
+        return redirect(url_for('admin_users'))
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        cur.execute('SELECT username, is_admin FROM users WHERE id = %s', (user_id,))
+        user = cur.fetchone()
+        if user:
+            new_role = not bool(user['is_admin'])
+            cur.execute('UPDATE users SET is_admin = %s WHERE id = %s', (new_role, user_id))
+            conn.commit()
+            role_text = "Admin" if new_role else "Standard User"
+            log_activity(session['user_id'], 'CHANGE_USER_ROLE', f"Changed user '{user['username']}' role to {role_text}")
+            flash(f"Updated '{user['username']}' role to {role_text}.", "success")
+        else:
+            flash("User not found.", "error")
+        cur.close()
+        conn.close()
+    except Exception as e:
+        flash(f"Error updating user role: {e}", "error")
+
+    return redirect(url_for('admin_users'))
+
+@app.route('/admin/users/<int:user_id>/reset-password', methods=['POST'])
+@admin_required
+def admin_reset_password(user_id):
+    new_password = request.form.get('new_password', '').strip()
+    if not new_password:
+        flash("Password cannot be empty.", "error")
+        return redirect(url_for('admin_users'))
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        cur.execute('SELECT username FROM users WHERE id = %s', (user_id,))
+        user = cur.fetchone()
+        if user:
+            hashed_pw = generate_password_hash(new_password)
+            cur.execute('UPDATE users SET password_hash = %s WHERE id = %s', (hashed_pw, user_id))
+            conn.commit()
+            log_activity(session['user_id'], 'RESET_PASSWORD', f"Reset password for user '{user['username']}'")
+            flash(f"Password reset successfully for '{user['username']}'.", "success")
+        else:
+            flash("User not found.", "error")
+        cur.close()
+        conn.close()
+    except Exception as e:
+        flash(f"Error resetting password: {e}", "error")
+
+    return redirect(url_for('admin_users'))
+
+@app.route('/admin/users/<int:user_id>/delete', methods=['POST'])
+@admin_required
+def admin_delete_user(user_id):
+    if user_id == session['user_id']:
+        flash("You cannot delete your own logged-in account.", "error")
+        return redirect(url_for('admin_users'))
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        cur.execute('SELECT username FROM users WHERE id = %s', (user_id,))
+        user = cur.fetchone()
+        if user:
+            username = user['username']
+            cur.execute('DELETE FROM users WHERE id = %s', (user_id,))
+            conn.commit()
+            log_activity(session['user_id'], 'DELETE_USER', f"Deleted user '{username}' (ID: {user_id})")
+            flash(f"User '{username}' deleted successfully.", "success")
+        else:
+            flash("User not found.", "error")
+        cur.close()
+        conn.close()
+    except Exception as e:
+        flash(f"Error deleting user: {e}", "error")
+
+    return redirect(url_for('admin_users'))
 
 # API Endpoints
 @app.route('/api/get-invoices', methods=['GET'])
@@ -1672,7 +1832,7 @@ def parse_gstr2b_excel(file_bytes):
 @login_required
 def reconciliation():
     current_fy, _ = _dt_to_fy_and_month(datetime.datetime.now())
-    return render_template('reconciliation.html', api_key_configured=bool(ANTHROPIC_API_KEY and OPENROUTER_API_KEY), ai_model_name=AI_MODEL_NAME, current_fy=current_fy)
+    return render_template('reconciliation.html', is_admin=is_admin_user(), api_key_configured=bool(ANTHROPIC_API_KEY and OPENROUTER_API_KEY), ai_model_name=AI_MODEL_NAME, current_fy=current_fy)
 
 @app.route('/api/export-annual-report', methods=['GET'])
 @login_required

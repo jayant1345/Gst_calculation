@@ -41,6 +41,12 @@
                     <i class="fa-solid fa-file-invoice"></i>
                     <span>Reconciliation</span>
                 </a>
+                {% if is_admin %}
+                <a href="/admin/users" class="nav-item">
+                    <i class="fa-solid fa-users-gear"></i>
+                    <span>User Management</span>
+                </a>
+                {% endif %}
                 <a href="/settings" class="nav-item">
                     <i class="fa-solid fa-gears"></i>
                     <span>Portal Settings</span>

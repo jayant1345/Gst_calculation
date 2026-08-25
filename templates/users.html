@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>User Management | GST ITC Reconciliation Portal</title>
+
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <!-- Custom Style Sheet -->
+    <link rel="stylesheet" href="/static/style.css">
+    <style>
+        .users-grid {
+            display: grid;
+            grid-template-columns: 360px 1fr;
+            gap: 24px;
+            margin-bottom: 24px;
+        }
+
+        @media (max-width: 1024px) {
+            .users-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .user-card {
+            background: #ffffff;
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 24px;
+            box-shadow: var(--shadow-card);
+        }
+
+        .form-group {
+            margin-bottom: 16px;
+            text-align: left;
+        }
+
+        .form-group label {
+            display: block;
+            font-size: 13px;
+            font-weight: 600;
+            color: #475569;
+            margin-bottom: 6px;
+        }
+
+        .form-control {
+            width: 100%;
+            padding: 10px 14px;
+            border-radius: 8px;
+            border: 1px solid #cbd5e1;
+            font-family: var(--font-body);
+            font-size: 14px;
+            color: var(--text-primary);
+            transition: all 0.2s ease;
+            background-color: #f8fafc;
+        }
+
+        .form-control:focus {
+            outline: none;
+            border-color: var(--accent-blue);
+            background-color: #ffffff;
+            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+        }
+
+        .checkbox-label {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            cursor: pointer;
+            font-size: 13.5px;
+            font-weight: 500;
+            color: #334155;
+            user-select: none;
+            margin-top: 8px;
+        }
+
+        .checkbox-label input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+            accent-color: var(--accent-blue);
+            cursor: pointer;
+        }
+
+        .role-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+        }
+
+        .role-badge.admin {
+            background-color: rgba(99, 102, 241, 0.12);
+            color: #4f46e5;
+            border: 1px solid rgba(99, 102, 241, 0.25);
+        }
+
+        .role-badge.user {
+            background-color: rgba(14, 165, 233, 0.12);
+            color: #0284c7;
+            border: 1px solid rgba(14, 165, 233, 0.25);
+        }
+
+        .action-btn-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .btn-sm {
+            padding: 6px 12px;
+            font-size: 12.5px;
+            border-radius: 6px;
+        }
+
+        .btn-outline-danger {
+            background-color: transparent;
+            border: 1px solid #fca5a5;
+            color: #dc2626;
+        }
+
+        .btn-outline-danger:hover {
+            background-color: #fef2f2;
+            border-color: #dc2626;
+        }
+
+        .btn-outline-secondary {
+            background-color: transparent;
+            border: 1px solid #cbd5e1;
+            color: #475569;
+        }
+
+        .btn-outline-secondary:hover {
+            background-color: #f1f5f9;
+            color: #1e293b;
+        }
+
+        .reset-pw-form {
+            display: none;
+            margin-top: 10px;
+            padding: 10px;
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+        }
+
+        .reset-pw-form.active {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .error-alert {
+            background-color: #fef2f2;
+            border: 1px solid rgba(220, 38, 38, 0.2);
+            color: var(--accent-red);
+            padding: 12px 16px;
+            border-radius: 8px;
+            font-size: 13px;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .success-alert {
+            background-color: #f0fdf4;
+            border: 1px solid rgba(22, 163, 74, 0.2);
+            color: var(--accent-green);
+            padding: 12px 16px;
+            border-radius: 8px;
+            font-size: 13px;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar Navigation -->
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-brand">
+                <i class="fa-solid fa-building-columns brand-icon"></i>
+                <div class="brand-text">
+                    <h2>Nutan Nagrik</h2>
+                    <span class="sub-text">SAHAKARI BANK LTD.</span>
+                </div>
+            </div>
+
+            <nav class="sidebar-nav">
+                <a href="/" class="nav-item">
+                    <i class="fa-solid fa-chart-line"></i>
+                    <span>ITC Dashboard</span>
+                </a>
+                <a href="/filing-history" class="nav-item">
+                    <i class="fa-solid fa-clock-rotate-left"></i>
+                    <span>Filing History</span>
+                </a>
+                <a href="/reconciliation" class="nav-item">
+                    <i class="fa-solid fa-file-invoice"></i>
+                    <span>Reconciliation</span>
+                </a>
+                {% if is_admin %}
+                <a href="/admin/users" class="nav-item active">
+                    <i class="fa-solid fa-users-gear"></i>
+                    <span>User Management</span>
+                </a>
+                {% endif %}
+                <a href="/settings" class="nav-item">
+                    <i class="fa-solid fa-gears"></i>
+                    <span>Portal Settings</span>
+                </a>
+                <a href="/logout" class="nav-item">
+                    <i class="fa-solid fa-right-from-bracket"></i>
+                    <span>Logout</span>
+                </a>
+            </nav>
+
+            <div class="sidebar-footer">
+                {% if api_key_configured %}
+                <span class="badge-status">
+                    <span class="pulse-indicator"></span>
+                    <span class="badge-status-text">
+                        API Connected
+                        <small>{{ ai_model_name }}</small>
+                    </span>
+                </span>
+                {% else %}
+                <span class="badge-status error" title="ANTHROPIC_API_KEY or OPENROUTER_API_KEY is not set on the server">
+                    <span class="pulse-indicator error"></span>
+                    <span class="badge-status-text">
+                        API Key Missing
+                        <small>set ANTHROPIC_API_KEY & OPENROUTER_API_KEY</small>
+                    </span>
+                </span>
+                {% endif %}
+            </div>
+        </aside>
+
+        <div class="sidebar-backdrop" id="sidebar-backdrop"></div>
+
+        <!-- Main Content Area -->
+        <main class="main-content">
+            <!-- Header -->
+            <header class="top-header">
+                <button class="mobile-menu-toggle" id="mobile-menu-toggle" aria-label="Open menu">
+                    <i class="fa-solid fa-bars"></i>
+                </button>
+                <div class="header-title">
+                    <h1>User Management</h1>
+                    <p class="section-desc">Register new users, assign roles, reset passwords, and track work</p>
+                </div>
+                <div class="user-profile">
+                    <div class="profile-info">
+                        <span class="profile-name">{{ session['username'] }}</span>
+                        <span class="profile-role">Administrator</span>
+                    </div>
+                    <div class="profile-avatar">
+                        <i class="fa-solid fa-user-shield"></i>
+                    </div>
+                </div>
+            </header>
+
+            {% if error %}
+            <div class="error-alert">
+                <i class="fa-solid fa-triangle-exclamation"></i>
+                <span>{{ error }}</span>
+            </div>
+            {% endif %}
+
+            {% for category, message in get_flashed_messages(with_categories=true) %}
+            <div class="{{ 'success-alert' if category == 'success' else 'error-alert' }}">
+                <i class="fa-solid {{ 'fa-circle-check' if category == 'success' else 'fa-triangle-exclamation' }}"></i>
+                <span>{{ message }}</span>
+            </div>
+            {% endfor %}
+
+            <div class="users-grid">
+                <!-- Register New User Card -->
+                <div class="user-card">
+                    <div class="panel-header" style="margin-bottom: 18px;">
+                        <h2 style="font-size: 17px;"><i class="fa-solid fa-user-plus" style="color: var(--accent-blue);"></i> Register New User</h2>
+                        <p class="panel-subtitle">Create an account for a team member</p>
+                    </div>
+
+                    <form action="/admin/users/create" method="POST">
+                        <div class="form-group">
+                            <label for="reg-username">Username</label>
+                            <input type="text" id="reg-username" name="username" class="form-control" placeholder="Enter username" required autofocus>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="reg-password">Password</label>
+                            <input type="password" id="reg-password" name="password" class="form-control" placeholder="Enter initial password" required minlength="4">
+                        </div>
+
+                        <div class="form-group">
+                            <label class="checkbox-label">
+                                <input type="checkbox" name="is_admin" value="true">
+                                <span>Grant Administrator Role</span>
+                            </label>
+                        </div>
+
+                        <button type="submit" class="btn btn-primary" style="width: 100%; justify-content: center; margin-top: 10px;">
+                            <i class="fa-solid fa-user-check"></i> Register User
+                        </button>
+                    </form>
+                </div>
+
+                <!-- User List & Work Tracking Table -->
+                <div class="user-card" style="padding: 0; overflow: hidden;">
+                    <div style="padding: 20px 24px; border-bottom: 1px solid var(--border-color); display: flex; align-items: center; justify-content: space-between;">
+                        <div>
+                            <h2 style="font-size: 17px; font-weight: 700; color: #0f172a; margin-bottom: 2px;"><i class="fa-solid fa-users" style="color: var(--accent-blue);"></i> Registered Accounts</h2>
+                            <p style="font-size: 13px; color: var(--text-muted); margin: 0;">Total users: {{ users|length }}</p>
+                        </div>
+                    </div>
+
+                    <div style="overflow-x: auto;">
+                        <table class="table-styled" style="width: 100%; margin: 0;">
+                            <thead>
+                                <tr>
+                                    <th width="6%">ID</th>
+                                    <th width="22%">Username</th>
+                                    <th width="16%">Role</th>
+                                    <th width="14%">Invoices</th>
+                                    <th width="14%">GSTR-2B</th>
+                                    <th width="28%" style="text-align: right;">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% if users %}
+                                    {% for user in users %}
+                                    <tr>
+                                        <td><strong>#{{ user['id'] }}</strong></td>
+                                        <td>
+                                            <div style="display: flex; align-items: center; gap: 8px;">
+                                                <i class="fa-solid {{ 'fa-user-gear' if user['is_admin'] else 'fa-user' }}" style="color: {{ '#4f46e5' if user['is_admin'] else '#64748b' }};"></i>
+                                                <span style="font-weight: 600;">{{ user['username'] }}</span>
+                                                {% if user['id'] == session['user_id'] %}
+                                                <span style="font-size: 11px; background: #e0f2fe; color: #0369a1; padding: 2px 6px; border-radius: 10px; font-weight: 600;">You</span>
+                                                {% endif %}
+                                            </div>
+                                        </td>
+                                        <td>
+                                            {% if user['is_admin'] %}
+                                            <span class="role-badge admin"><i class="fa-solid fa-shield"></i> Admin</span>
+                                            {% else %}
+                                            <span class="role-badge user"><i class="fa-solid fa-user"></i> Standard</span>
+                                            {% endif %}
+                                        </td>
+                                        <td>
+                                            <span style="font-weight: 600; color: #334155;">{{ user['invoice_count'] }}</span>
+                                            <small style="color: #94a3b8;"> records</small>
+                                        </td>
+                                        <td>
+                                            <span style="font-weight: 600; color: #334155;">{{ user['gstr2b_count'] }}</span>
+                                            <small style="color: #94a3b8;"> records</small>
+                                        </td>
+                                        <td style="text-align: right;">
+                                            <div class="action-btn-group" style="justify-content: flex-end;">
+                                                <!-- Reset Password Toggle Button -->
+                                                <button type="button" class="btn btn-outline-secondary btn-sm" onclick="toggleResetPw({{ user['id'] }})" title="Reset Password">
+                                                    <i class="fa-solid fa-key"></i> Password
+                                                </button>
+
+                                                <!-- Role Toggle Form -->
+                                                {% if user['id'] != session['user_id'] %}
+                                                <form action="/admin/users/{{ user['id'] }}/toggle-admin" method="POST" style="display: inline;">
+                                                    <button type="submit" class="btn btn-outline-secondary btn-sm" title="Toggle Admin Role">
+                                                        <i class="fa-solid fa-user-shield"></i> {{ 'Demote' if user['is_admin'] else 'Make Admin' }}
+                                                    </button>
+                                                </form>
+
+                                                <!-- Delete User Form -->
+                                                <form action="/admin/users/{{ user['id'] }}/delete" method="POST" style="display: inline;" onsubmit="return confirm('Are you sure you want to delete user \'{{ user[\'username\'] }}\'? This will remove all their records.');">
+                                                    <button type="submit" class="btn btn-outline-danger btn-sm" title="Delete User">
+                                                        <i class="fa-solid fa-trash-can"></i>
+                                                    </button>
+                                                </form>
+                                                {% endif %}
+                                            </div>
+
+                                            <!-- Hidden Password Reset Sub-Form -->
+                                            <div id="reset-pw-box-{{ user['id'] }}" class="reset-pw-form">
+                                                <form action="/admin/users/{{ user['id'] }}/reset-password" method="POST" style="display: flex; gap: 8px; width: 100%;">
+                                                    <input type="password" name="new_password" class="form-control" placeholder="New Password" required minlength="4" style="padding: 6px 10px; font-size: 12px;">
+                                                    <button type="submit" class="btn btn-primary btn-sm">Save</button>
+                                                    <button type="button" class="btn btn-outline-secondary btn-sm" onclick="toggleResetPw({{ user['id'] }})">X</button>
+                                                </form>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                    {% endfor %}
+                                {% else %}
+                                    <tr>
+                                        <td colspan="6" style="text-align: center; padding: 30px; color: var(--text-muted);">
+                                            No registered users found.
+                                        </td>
+                                    </tr>
+                                {% endif %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="/static/nav.js"></script>
+    <script>
+        function toggleResetPw(userId) {
+            const box = document.getElementById(`reset-pw-box-${userId}`);
+            if (box) {
+                box.classList.toggle('active');
+            }
+        }
+    </script>
+</body>
+</html>
