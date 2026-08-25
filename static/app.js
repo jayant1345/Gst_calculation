@@ -145,9 +145,18 @@ document.addEventListener('DOMContentLoaded', () => {
         fileInput.click();
     });
 
+    // "Select Folder" -- webkitdirectory, so this always returns every file
+    // found anywhere under the chosen folder (recursively). Filter down to
+    // supported bill types before handing off, since a real-world folder
+    // will often contain unrelated files (Thumbs.db, .DS_Store, etc.).
     fileInput.addEventListener('change', () => {
         if (fileInput.files && fileInput.files.length > 0) {
-            triggerUpload(fileInput.files);
+            const supportedFiles = Array.from(fileInput.files).filter(isSupportedBillFile);
+            if (supportedFiles.length === 0) {
+                alert('No supported bill files (PDF, JPG, PNG, WEBP, XLSX, XLS, CSV) were found in that folder.');
+            } else {
+                triggerUpload(supportedFiles);
+            }
         }
         fileInput.value = '';
     });
@@ -219,16 +228,22 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const SUPPORTED_EXTENSIONS = ['pdf', 'png', 'jpg', 'jpeg', 'webp', 'xlsx', 'xls', 'csv'];
 
+    // Shared by both folder-based upload paths: ignores system/temp files
+    // (Thumbs.db, .DS_Store, Office lock files) and anything not a
+    // recognized bill format.
+    function isSupportedBillFile(file) {
+        if (file.name.startsWith('.') || file.name.startsWith('~$')) return false;
+        const ext = (file.name.split('.').pop() || '').toLowerCase();
+        return SUPPORTED_EXTENSIONS.includes(ext);
+    }
+
     // Groups a webkitdirectory FileList by its branch subfolder.
     // Supports direct branch folder selection ("Andheri/inv1.pdf" -> "Andheri")
     // as well as container folder selection ("Bills/Andheri/inv1.pdf" -> "Andheri").
     function groupFilesByBranchFolder(fileList, fallbackBranch) {
         const groups = new Map();
         Array.from(fileList).forEach(file => {
-            if (file.name.startsWith('.') || file.name.startsWith('~$')) return; // Ignore system/temp files
-
-            const ext = (file.name.split('.').pop() || '').toLowerCase();
-            if (!SUPPORTED_EXTENSIONS.includes(ext)) return;
+            if (!isSupportedBillFile(file)) return;
 
             const relPath = file.webkitRelativePath || '';
             const parts = relPath.split('/').filter(p => p.trim().length > 0);

@@ -179,7 +179,9 @@
                         <p>Supports <strong>PDF, JPG, PNG, WEBP, XLSX, XLS, CSV</strong> formats</p>
                         <span class="or-separator">or</span>
                         <div class="upload-btn-row">
-                            <label for="file-input" class="btn btn-primary">Browse Files</label>
+                            <label for="file-input" class="btn btn-primary" title="Pick a folder -- every supported bill inside it is uploaded and scanned automatically, using the State/Branch selected above">
+                                <i class="fa-solid fa-folder-open"></i> Select Folder
+                            </label>
                             <label for="camera-input" class="btn btn-secondary">
                                 <i class="fa-solid fa-camera"></i> Scan Bill
                             </label>
@@ -187,10 +189,10 @@
                                 <i class="fa-solid fa-folder-tree"></i> Upload Branch Folder
                             </label>
                         </div>
-                        <input type="file" id="file-input" multiple accept=".pdf,.png,.jpg,.jpeg,.webp,.xlsx,.xls,.csv" style="display: none;">
+                        <input type="file" id="file-input" webkitdirectory directory multiple accept=".pdf,.png,.jpg,.jpeg,.webp,.xlsx,.xls,.csv" style="display: none;">
                         <input type="file" id="camera-input" accept="image/*" capture="environment" style="display: none;">
                         <input type="file" id="folder-input" webkitdirectory directory multiple style="display: none;">
-                        <p class="branch-folder-hint">Optional: <strong>Upload Branch Folder</strong> picks a main folder with one subfolder per branch (e.g. <em>Bills/Andheri/</em>, <em>Bills/Borivali/</em>) and scans every subfolder automatically, tagging each bill with its branch. Financial year and month are still taken from each bill's own date, as always.</p>
+                        <p class="branch-folder-hint"><strong>Select Folder</strong> uploads every supported bill in one folder, tagged with the State/Branch chosen above. Use <strong>Upload Branch Folder</strong> instead only if your bills are already organized into one sub-folder per branch (e.g. <em>Bills/Andheri/</em>, <em>Bills/Borivali/</em>) -- it scans every sub-folder automatically and tags each bill with its own branch. Financial year and month are still taken from each bill's own date, as always. To pick just a few individual files instead, drag & drop them above.</p>
                     </div>
                 </div>
 
