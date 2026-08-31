@@ -79,6 +79,61 @@ document.addEventListener('DOMContentLoaded', () => {
             });
     }
 
+    // Master Branches & Vendors Directory
+    let masterBranches = [];
+    let masterVendors = [];
+
+    function loadMasterData() {
+        fetch('/api/master-data')
+            .then(res => res.json())
+            .then(data => {
+                if (data.branches) masterBranches = data.branches;
+                if (data.vendors) masterVendors = data.vendors;
+                updateBranchSuggestions();
+                updateVendorSuggestions();
+            })
+            .catch(err => console.error("Error loading master data:", err));
+    }
+    loadMasterData();
+
+    function updateBranchSuggestions() {
+        if (!branchSuggestions) return;
+        const branchSet = new Set(masterBranches.map(b => b.name));
+        invoices.forEach(inv => {
+            if (inv.branch && inv.branch !== 'Unassigned') branchSet.add(inv.branch);
+        });
+
+        const sortedBranches = Array.from(branchSet).sort();
+        branchSuggestions.innerHTML = sortedBranches.map(b => {
+            const mb = masterBranches.find(item => item.name === b);
+            const stateHint = mb ? ` (${mb.state})` : '';
+            return `<option value="${escapeHtml(b)}">${escapeHtml(b)}${stateHint}</option>`;
+        }).join('');
+    }
+
+    function updateVendorSuggestions() {
+        const vendorSuggestions = document.getElementById('vendor-suggestions');
+        if (!vendorSuggestions) return;
+        vendorSuggestions.innerHTML = masterVendors.map(v => 
+            `<option value="${escapeHtml(v.name)}">${escapeHtml(v.name)} [${escapeHtml(v.gstin)}]</option>`
+        ).join('');
+    }
+
+    // Auto-fill State when Branch is entered on main upload strip
+    if (branchInput && stateInput) {
+        branchInput.addEventListener('input', () => {
+            const val = branchInput.value.trim().toUpperCase();
+            const mb = masterBranches.find(b => b.name.toUpperCase() === val);
+            if (mb) {
+                stateInput.value = mb.state;
+            } else if (val.includes('ANDHERI') || val.includes('MAHARASHTRA') || val.includes('MAHARASTRA')) {
+                stateInput.value = 'Maharashtra';
+            } else if (val) {
+                stateInput.value = 'Gujarat';
+            }
+        });
+    }
+
     // Financial year runs April -> March; used to sort the month filter
     // dropdown in FY order rather than plain alphabetical/calendar order.
     const FY_MONTH_ORDER = ['April', 'May', 'June', 'July', 'August', 'September',
@@ -86,10 +141,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Rebuild the FY and Month filter dropdowns from whatever financial
     // years/months are actually present in the currently loaded invoices,
-    // so they always reflect real data. Month options are scoped to
-    // whichever FY is currently selected (or every month across all years
-    // when "All Years" is picked), like the FY -> month drill-down on the
-    // Reconciliation page.
+    // so they always reflect real data.
     function populateFilters() {
         const years = [...new Set(invoices.map(inv => inv.financial_year).filter(Boolean))]
             .sort((a, b) => b.localeCompare(a));
@@ -115,6 +167,13 @@ document.addEventListener('DOMContentLoaded', () => {
         if (months.includes(currentMonth)) {
             monthFilter.value = currentMonth;
         }
+    }
+
+    function escapeHtml(text) {
+        if (!text) return '';
+        return String(text).replace(/[&<>"']/g, function(m) {
+            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[m];
+        });
     }
 
     // Setup drag and drop listeners
@@ -738,7 +797,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 <td><input type="text" class="field-number" value="${inv.invoice_number || ''}"></td>
                 <td><input type="text" class="field-date" value="${inv.invoice_date || ''}"></td>
                 <td><input type="text" class="field-payment-date" placeholder="DD-MM-YYYY" value="${inv.payment_date || ''}"></td>
-                <td><input type="text" class="field-vendor" value="${inv.vendor_name || ''}"></td>
+                <td><input type="text" class="field-vendor" list="vendor-suggestions" value="${inv.vendor_name || ''}"></td>
                 <td class="numeric"><input type="number" step="0.01" class="field-taxable" value="${(inv.taxable_value || 0).toFixed(2)}"></td>
                 <td class="numeric"><input type="number" step="0.01" class="field-cgst" value="${(inv.cgst || 0).toFixed(2)}"></td>
                 <td class="numeric"><input type="number" step="0.01" class="field-sgst" value="${(inv.sgst || 0).toFixed(2)}"></td>
@@ -759,6 +818,36 @@ document.addEventListener('DOMContentLoaded', () => {
             `;
 
             // Row-level listeners to update state & save changes to Postgres database
+            const vendorInput = tr.querySelector('.field-vendor');
+            const gstinInput = tr.querySelector('.field-gstin');
+            const branchInputRow = tr.querySelector('.field-branch');
+            const stateSelectRow = tr.querySelector('.field-state');
+
+            if (vendorInput && gstinInput) {
+                vendorInput.addEventListener('input', () => {
+                    const partyVal = vendorInput.value.trim().toLowerCase();
+                    if (!partyVal) return;
+                    const matched = masterVendors.find(v => v.name.toLowerCase() === partyVal || partyVal.includes(v.name.toLowerCase()) || v.name.toLowerCase().includes(partyVal));
+                    if (matched) {
+                        gstinInput.value = matched.gstin;
+                    }
+                });
+            }
+
+            if (branchInputRow && stateSelectRow) {
+                branchInputRow.addEventListener('input', () => {
+                    const val = branchInputRow.value.trim().toUpperCase();
+                    const mb = masterBranches.find(b => b.name.toUpperCase() === val);
+                    if (mb) {
+                        stateSelectRow.value = mb.state;
+                    } else if (val.includes('ANDHERI') || val.includes('MAHARASHTRA') || val.includes('MAHARASTRA')) {
+                        stateSelectRow.value = 'Maharashtra';
+                    } else if (val) {
+                        stateSelectRow.value = 'Gujarat';
+                    }
+                });
+            }
+
             const inputs = tr.querySelectorAll('input, select');
             inputs.forEach(input => {
                 input.addEventListener('change', (e) => {
@@ -1178,6 +1267,37 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('mb-preview-cgst').textContent = `₹${split.cgst.toFixed(2)}`;
         document.getElementById('mb-preview-sgst').textContent = `₹${split.sgst.toFixed(2)}`;
         document.getElementById('mb-preview-igst').textContent = `₹${split.igst.toFixed(2)}`;
+    }
+
+    // Auto-fill State when Branch is entered in Manual Bill modal
+    const mbBranchInput = document.getElementById('mb-branch');
+    const mbStateSelect = document.getElementById('mb-state');
+    if (mbBranchInput && mbStateSelect) {
+        mbBranchInput.addEventListener('input', () => {
+            const val = mbBranchInput.value.trim().toUpperCase();
+            const mb = masterBranches.find(b => b.name.toUpperCase() === val);
+            if (mb) {
+                mbStateSelect.value = mb.state;
+            } else if (val.includes('ANDHERI') || val.includes('MAHARASHTRA') || val.includes('MAHARASTRA')) {
+                mbStateSelect.value = 'Maharashtra';
+            } else if (val) {
+                mbStateSelect.value = 'Gujarat';
+            }
+        });
+    }
+
+    // Auto-fill GSTIN when Vendor/Party Name is selected in Manual Bill modal
+    const mbPartyInput = document.getElementById('mb-party');
+    const mbGstinInput = document.getElementById('mb-gstin');
+    if (mbPartyInput && mbGstinInput) {
+        mbPartyInput.addEventListener('input', () => {
+            const partyVal = mbPartyInput.value.trim().toLowerCase();
+            if (!partyVal) return;
+            const matched = masterVendors.find(v => v.name.toLowerCase() === partyVal || partyVal.includes(v.name.toLowerCase()) || v.name.toLowerCase().includes(partyVal));
+            if (matched) {
+                mbGstinInput.value = matched.gstin;
+            }
+        });
     }
 
     manualBillForm.addEventListener('submit', (e) => {

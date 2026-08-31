@@ -15,6 +15,7 @@ import psycopg2
 import psycopg2.extras
 from werkzeug.security import generate_password_hash, check_password_hash
 from functools import wraps
+from master_data import MASTER_BRANCHES, MASTER_VENDORS, get_branch_state, match_master_vendor, normalize_gstin
 
 # Load environment variables
 load_dotenv()
@@ -982,6 +983,14 @@ def admin_delete_user(user_id):
     return redirect(url_for('admin_users'))
 
 # API Endpoints
+@app.route('/api/master-data', methods=['GET'])
+@login_required
+def get_master_data():
+    return jsonify({
+        "branches": MASTER_BRANCHES,
+        "vendors": MASTER_VENDORS
+    })
+
 @app.route('/api/get-invoices', methods=['GET'])
 @login_required
 def get_invoices():
@@ -1100,9 +1109,11 @@ def save_invoice():
     inv_date = inv.get('invoice_date', '')
     payment_date = inv.get('payment_date') or None
     vendor = inv.get('vendor_name', '')
-    gstin = normalize_gstin(inv.get('gstin', '') or 'N/A')
+    gstin = normalize_gstin(inv.get('gstin', '') or 'N/A', vendor)
     branch = inv.get('branch', '') or 'Unassigned'
     state = inv.get('state', '') or 'Unassigned'
+    if (state == 'Unassigned' or not state) and branch != 'Unassigned':
+        state = get_branch_state(branch)
     taxable = float(inv.get('taxable_value', 0.0))
     cgst = float(inv.get('cgst', 0.0))
     sgst = float(inv.get('sgst', 0.0))
@@ -1596,9 +1607,11 @@ def process_invoices():
                 inv["invoice_date"] = inv.get("invoice_date") or "N/A"
                 inv["payment_date"] = inv.get("payment_date") or None
                 inv["vendor_name"] = inv.get("vendor_name") or "Unknown Vendor"
-                inv["gstin"] = normalize_gstin(inv.get("gstin") or "N/A")
+                inv["gstin"] = normalize_gstin(inv.get("gstin") or "N/A", inv["vendor_name"])
                 inv["branch"] = inv.get("branch") or batch_branch or "Unassigned"
                 inv["state"] = inv.get("state") or batch_state or "Unassigned"
+                if (inv["state"] == 'Unassigned' or not inv["state"]) and inv["branch"] != 'Unassigned':
+                    inv["state"] = get_branch_state(inv["branch"])
                 inv["itc_blocked"] = bool(inv.get("itc_blocked", False))
                 for field in ("taxable_value", "cgst", "sgst", "igst"):
                     try:
