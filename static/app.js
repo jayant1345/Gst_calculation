@@ -169,11 +169,53 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // Progress UI Elements
+    const progressTimer = document.getElementById('progress-timer');
     const progressCounter = document.getElementById('progress-counter');
     const progressBarFill = document.getElementById('progress-bar-fill');
     const uploadSummaryBanner = document.getElementById('upload-summary-banner');
     const summaryBannerText = document.getElementById('summary-banner-text');
     const dismissSummaryBtn = document.getElementById('dismiss-summary-btn');
+
+    // Scanning Stopwatch / Live Timer
+    let scanStartTime = null;
+    let scanTimerIntervalId = null;
+
+    function startScanTimer() {
+        if (scanTimerIntervalId) {
+            clearInterval(scanTimerIntervalId);
+            scanTimerIntervalId = null;
+        }
+        scanStartTime = performance.now();
+        if (progressTimer) {
+            progressTimer.style.display = 'inline-flex';
+            progressTimer.className = 'progress-timer-badge active';
+            progressTimer.innerHTML = '<i class="fa-solid fa-stopwatch fa-spin"></i> 0.0s';
+        }
+        scanTimerIntervalId = setInterval(() => {
+            if (!scanStartTime) return;
+            const elapsed = ((performance.now() - scanStartTime) / 1000).toFixed(1);
+            if (progressTimer) {
+                progressTimer.innerHTML = `<i class="fa-solid fa-stopwatch fa-spin"></i> ${elapsed}s`;
+            }
+        }, 100);
+    }
+
+    function stopScanTimer() {
+        if (scanTimerIntervalId) {
+            clearInterval(scanTimerIntervalId);
+            scanTimerIntervalId = null;
+        }
+        let elapsed = '0.0';
+        if (scanStartTime) {
+            elapsed = ((performance.now() - scanStartTime) / 1000).toFixed(2);
+            scanStartTime = null;
+        }
+        if (progressTimer) {
+            progressTimer.className = 'progress-timer-badge done';
+            progressTimer.innerHTML = `<i class="fa-solid fa-bolt" style="color: #eab308;"></i> ${elapsed}s`;
+        }
+        return elapsed;
+    }
 
     if (dismissSummaryBtn) {
         dismissSummaryBtn.addEventListener('click', () => {
@@ -338,6 +380,7 @@ document.addEventListener('DOMContentLoaded', () => {
             itemIndexCounter: 0
         };
         updateProgressBar();
+        startScanTimer();
 
         if (progressHeading) {
             progressHeading.innerHTML = `<i class="fa-solid fa-folder-tree" style="color: var(--accent-blue);"></i> Uploading Branch Folder: ${totalBranches} Branch(es), ${totalFiles} File(s)...`;
@@ -346,14 +389,16 @@ document.addEventListener('DOMContentLoaded', () => {
         let index = 0;
         function next() {
             if (index >= totalBranches) {
-                // Complete! Show summary report banner
+                // Complete! Show summary report banner with total elapsed time
+                const elapsedSec = stopScanTimer();
+                const avgPerBill = (parseFloat(elapsedSec) / Math.max(1, globalBatchState.processedFiles)).toFixed(2);
                 if (progressHeading) {
-                    progressHeading.innerHTML = `<i class="fa-solid fa-circle-check" style="color: var(--accent-green);"></i> Branch Folder Upload Complete`;
+                    progressHeading.innerHTML = `<i class="fa-solid fa-circle-check" style="color: var(--accent-green);"></i> Branch Folder Upload Complete • ${elapsedSec}s`;
                 }
                 if (uploadSummaryBanner && summaryBannerText) {
                     const errCount = globalBatchState.errorFiles;
                     uploadSummaryBanner.className = errCount > 0 ? 'upload-summary-card error' : 'upload-summary-card';
-                    summaryBannerText.innerHTML = `<strong><i class="fa-solid ${errCount > 0 ? 'fa-triangle-exclamation' : 'fa-circle-check'}"></i> Upload Finished:</strong> Processed ${globalBatchState.processedFiles} bill(s) across ${totalBranches} branch(es) (${globalBatchState.successFiles} succeeded${errCount > 0 ? `, ${errCount} failed` : ''}).`;
+                    summaryBannerText.innerHTML = `<strong><i class="fa-solid ${errCount > 0 ? 'fa-triangle-exclamation' : 'fa-circle-check'}"></i> Upload Finished:</strong> Processed ${globalBatchState.processedFiles} bill(s) across ${totalBranches} branch(es) in <strong>${elapsedSec}s</strong> (${avgPerBill}s/bill, ${globalBatchState.successFiles} succeeded${errCount > 0 ? `, ${errCount} failed` : ''}).`;
                     uploadSummaryBanner.style.display = 'flex';
                 }
 
@@ -368,6 +413,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 ...options,
                 branch: branch,
                 appendProgress: true,
+                skipTimerStart: true,
                 onSuccess: next,
                 onError: (err) => {
                     console.error(`Folder upload failed for branch "${branch}":`, err);
@@ -422,7 +468,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    // File Upload handling with real-time progress updates
+    // File Upload handling with real-time progress updates & live scanning timer
     function handleFileUpload(files, options = {}) {
         if (hideProgressTimeoutId) {
             clearTimeout(hideProgressTimeoutId);
@@ -441,6 +487,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 itemIndexCounter: 0
             };
             updateProgressBar();
+            if (!options.skipTimerStart) {
+                startScanTimer();
+            }
             if (progressHeading) {
                 progressHeading.innerHTML = `<i class="fa-solid fa-spinner fa-spin" style="color: var(--accent-blue);"></i> Processing ${files.length} File(s)...`;
             }
@@ -520,20 +569,19 @@ document.addEventListener('DOMContentLoaded', () => {
                 updateBranchSuggestions();
 
                 // Reflect which AI model actually handled the most recent
-                // scan in this batch (Grok primary, the Opus fallback, or
-                // Sonnet for a bill with a clean text layer) -- the badge
-                // previously always said "Sonnet 4.6" regardless of which
-                // model did the real work.
+                // scan in this batch
                 const modelUsed = [...data.invoices].reverse().map(inv => inv.ai_model_used).find(Boolean);
                 if (modelUsed) updateApiModelBadge(modelUsed);
             }
 
             if (!options.appendProgress) {
+                const elapsedSec = stopScanTimer();
+                const avgPerBill = (parseFloat(elapsedSec) / Math.max(1, files.length)).toFixed(2);
                 if (progressHeading) {
-                    progressHeading.innerHTML = `<i class="fa-solid fa-circle-check" style="color: var(--accent-green);"></i> Upload Complete`;
+                    progressHeading.innerHTML = `<i class="fa-solid fa-circle-check" style="color: var(--accent-green);"></i> Upload Complete • ${elapsedSec}s`;
                 }
                 if (uploadSummaryBanner && summaryBannerText) {
-                    summaryBannerText.innerHTML = `<strong><i class="fa-solid fa-circle-check"></i> Upload Successful:</strong> Processed ${files.length} file(s).`;
+                    summaryBannerText.innerHTML = `<strong><i class="fa-solid fa-circle-check"></i> Upload Successful:</strong> Processed ${files.length} file(s) in <strong>${elapsedSec}s</strong> (${avgPerBill}s/bill).`;
                     uploadSummaryBanner.className = 'upload-summary-card';
                     uploadSummaryBanner.style.display = 'flex';
                 }
@@ -543,6 +591,9 @@ document.addEventListener('DOMContentLoaded', () => {
         })
         .catch(error => {
             console.error('Error uploading invoices:', error);
+            if (!options.appendProgress) {
+                stopScanTimer();
+            }
             itemIds.forEach(itemId => {
                 const statusSpan = document.getElementById(`status-${itemId}`);
                 if (statusSpan) {
