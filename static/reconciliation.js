@@ -410,7 +410,13 @@ document.addEventListener('DOMContentLoaded', function() {
             ? reconData
             : reconData.filter(item => (item.state || 'Unassigned') === activeStateFilter);
 
-        const counts = { matched: 0, mismatched: 0, missing_in_portal: 0, missing_in_books: 0 };
+        const counts = { 
+            matched: 0, 
+            mismatched: 0, 
+            missing_in_portal: 0, 
+            missing_in_books: 0,
+            total_books: subset.filter(i => i.book).length || subset.length
+        };
         subset.forEach(item => {
             if (item.status === 'Matched') counts.matched++;
             else if (item.status === 'Value Mismatched') counts.mismatched++;
@@ -972,7 +978,9 @@ document.addEventListener('DOMContentLoaded', function() {
     const modalEmailView = document.getElementById('modal-email-view');
     const modalWaView = document.getElementById('modal-wa-view');
     const modalBtnWaLink = document.getElementById('modal-btn-wa-link');
+    const modalBtnMailto = document.getElementById('modal-btn-mailto');
     const modalBtnCopy = document.getElementById('modal-btn-copy');
+    const copyBtnText = document.getElementById('copy-btn-text');
     const modalCloseBtn = document.getElementById('modal-close-btn');
     const modalBtnClose = document.getElementById('modal-btn-close');
 
@@ -1001,12 +1009,11 @@ document.addEventListener('DOMContentLoaded', function() {
             modalVendorName.innerText = data.vendor_name;
             modalVendorGstin.innerText = `GSTIN: ${data.gstin}`;
 
-            modalEmailSubject.value = data.email_subject;
-            modalEmailBody.value = data.email_body;
-            modalWaBody.value = data.whatsapp_text;
+            modalEmailSubject.value = data.email_subject || '';
+            modalEmailBody.value = data.email_body || '';
+            modalWaBody.value = data.whatsapp_text || '';
 
-            const encodedWa = encodeURIComponent(data.whatsapp_text);
-            modalBtnWaLink.href = `https://wa.me/?text=${encodedWa}`;
+            updateNoticeActionLinks();
 
             if (isWa) {
                 switchModalTab('wa');
@@ -1022,6 +1029,21 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
+    function updateNoticeActionLinks() {
+        if (modalBtnWaLink && modalWaBody) {
+            const encodedWa = encodeURIComponent(modalWaBody.value);
+            modalBtnWaLink.href = `https://wa.me/?text=${encodedWa}`;
+        }
+        if (modalBtnMailto && modalEmailSubject && modalEmailBody) {
+            const subj = encodeURIComponent(modalEmailSubject.value);
+            const body = encodeURIComponent(modalEmailBody.value);
+            modalBtnMailto.href = `mailto:?subject=${subj}&body=${body}`;
+        }
+    }
+
+    if (modalEmailBody) modalEmailBody.addEventListener('input', updateNoticeActionLinks);
+    if (modalWaBody) modalWaBody.addEventListener('input', updateNoticeActionLinks);
+
     function switchModalTab(tab) {
         activeModalTab = tab;
         if (tab === 'email') {
@@ -1029,13 +1051,15 @@ document.addEventListener('DOMContentLoaded', function() {
             modalTabWa.classList.remove('active');
             modalEmailView.style.display = 'block';
             modalWaView.style.display = 'none';
-            modalBtnWaLink.style.display = 'none';
+            if (modalBtnWaLink) modalBtnWaLink.style.display = 'none';
+            if (modalBtnMailto) modalBtnMailto.style.display = 'inline-flex';
         } else {
             modalTabWa.classList.add('active');
             modalTabEmail.classList.remove('active');
             modalEmailView.style.display = 'none';
             modalWaView.style.display = 'block';
-            modalBtnWaLink.style.display = 'inline-flex';
+            if (modalBtnWaLink) modalBtnWaLink.style.display = 'inline-flex';
+            if (modalBtnMailto) modalBtnMailto.style.display = 'none';
         }
     }
 
@@ -1055,7 +1079,12 @@ document.addEventListener('DOMContentLoaded', function() {
                 ? `Subject: ${modalEmailSubject.value}\n\n${modalEmailBody.value}` 
                 : modalWaBody.value;
             navigator.clipboard.writeText(textToCopy).then(() => {
-                alert("Notice text copied to clipboard!");
+                if (copyBtnText) {
+                    copyBtnText.innerText = "✓ Copied!";
+                    setTimeout(() => { copyBtnText.innerText = "Copy to Clipboard"; }, 2000);
+                } else {
+                    alert("Notice text copied to clipboard!");
+                }
             });
         });
     }

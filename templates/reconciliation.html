@@ -527,36 +527,40 @@
     <div class="modal-backdrop" id="notice-modal" style="display: none;">
         <div class="modal-card">
             <div class="modal-header">
-                <h3><i class="fa-solid fa-paper-plane"></i> Vendor Discrepancy Notice Draft</h3>
-                <button class="modal-close-btn" id="modal-close-btn">&times;</button>
+                <h3><i class="fa-solid fa-paper-plane" style="color: var(--accent-blue);"></i> Vendor Discrepancy Notice Draft</h3>
+                <button class="modal-close-btn" id="modal-close-btn" title="Close dialog">&times;</button>
             </div>
             <div class="modal-body">
                 <div class="notice-vendor-details">
-                    <strong id="modal-vendor-name">Supplier Name</strong>
-                    <span id="modal-vendor-gstin" class="gstin-sub">GSTIN: 24AAAAA0000A1Z5</span>
+                    <div>
+                        <strong id="modal-vendor-name">Supplier Name</strong>
+                        <div id="modal-vendor-gstin" class="gstin-sub" style="margin-top: 2px; font-weight: 600; color: #475569;">GSTIN: 24AAAAA0000A1Z5</div>
+                    </div>
+                    <span style="font-size: 12px; color: #2563eb; font-weight: 600; background: #dbeafe; padding: 4px 10px; border-radius: 20px;">Automated Notice Template</span>
                 </div>
 
                 <div class="modal-tab-bar">
-                    <button class="modal-tab active" id="modal-tab-email">Email Draft</button>
-                    <button class="modal-tab" id="modal-tab-wa">WhatsApp Message</button>
+                    <button class="modal-tab active" id="modal-tab-email"><i class="fa-solid fa-envelope"></i> Email Draft</button>
+                    <button class="modal-tab" id="modal-tab-wa"><i class="fa-brands fa-whatsapp" style="color: #10b981;"></i> WhatsApp Message</button>
                 </div>
 
                 <div id="modal-email-view">
-                    <label style="font-weight:600; font-size:13px; margin-top:8px; display:block;">Email Subject:</label>
-                    <input type="text" id="modal-email-subject" class="form-control" readonly style="margin-bottom: 10px; font-weight:600;">
+                    <label style="font-weight:700; font-size:12.5px; color:#475569; text-transform:uppercase; margin-bottom:6px; display:block;">Email Subject:</label>
+                    <input type="text" id="modal-email-subject" class="notice-input-subject" readonly>
                     
-                    <label style="font-weight:600; font-size:13px; display:block;">Email Body:</label>
-                    <textarea id="modal-email-body" class="form-control" rows="12" style="font-family: monospace; font-size: 13px;"></textarea>
+                    <label style="font-weight:700; font-size:12.5px; color:#475569; text-transform:uppercase; margin-bottom:6px; display:block;">Email Body:</label>
+                    <textarea id="modal-email-body" class="notice-textarea-body" rows="14"></textarea>
                 </div>
 
                 <div id="modal-wa-view" style="display: none;">
-                    <label style="font-weight:600; font-size:13px; margin-top:8px; display:block;">WhatsApp Message Text:</label>
-                    <textarea id="modal-wa-body" class="form-control" rows="8" style="font-family: monospace; font-size: 13px;"></textarea>
+                    <label style="font-weight:700; font-size:12.5px; color:#475569; text-transform:uppercase; margin-bottom:6px; display:block;">WhatsApp Message Text:</label>
+                    <textarea id="modal-wa-body" class="notice-textarea-body" rows="12"></textarea>
                 </div>
             </div>
             <div class="modal-footer">
-                <button class="btn btn-secondary" id="modal-btn-copy"><i class="fa-solid fa-copy"></i> Copy to Clipboard</button>
-                <a href="#" target="_blank" class="btn btn-primary" id="modal-btn-wa-link" style="display:none;"><i class="fa-brands fa-whatsapp"></i> Open in WhatsApp</a>
+                <button class="btn btn-secondary" id="modal-btn-copy" style="font-weight: 600;"><i class="fa-solid fa-copy"></i> <span id="copy-btn-text">Copy to Clipboard</span></button>
+                <a href="#" class="btn btn-primary" id="modal-btn-mailto" style="background: #2563eb; border-color: #2563eb; font-weight: 600; display: inline-flex; align-items: center; gap: 8px;"><i class="fa-solid fa-envelope-open-text"></i> Open in Mail App</a>
+                <a href="#" target="_blank" class="btn btn-primary" id="modal-btn-wa-link" style="background: #10b981; border-color: #10b981; font-weight: 600; display: none; align-items: center; gap: 8px;"><i class="fa-brands fa-whatsapp"></i> Open in WhatsApp</a>
                 <button class="btn btn-dark" id="modal-btn-close">Close</button>
             </div>
         </div>
