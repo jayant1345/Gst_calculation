@@ -40,7 +40,7 @@ AI_MODEL_DISPLAY_NAME = "Gemini 2.5 Flash (Ultra-Fast)"
 
 # Reliable fallback vision models if primary provider is unreachable.
 AI_VISION_FALLBACK_MODEL_NAME = "x-ai/grok-4.6"
-AI_VISION_SECONDARY_FALLBACK = "claude-opus-5"
+AI_VISION_SECONDARY_FALLBACK = "claude-3-5-sonnet-20241022"
 
 @app.context_processor
 def inject_global_template_vars():
@@ -509,8 +509,31 @@ def extract_from_text(text):
     }}
     """
     
+    # 1. Primary: Gemini 2.5 Flash via OpenRouter (~0.3s)
+    if OPENROUTER_API_KEY:
+        try:
+            openrouter_payload = {
+                "model": AI_VISION_MODEL_NAME,
+                "max_tokens": 1200,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ]
+            }
+            result = call_openrouter_api(openrouter_payload)
+            if "```json" in result:
+                result = result.split("```json")[1].split("```")[0].strip()
+            elif "```" in result:
+                result = result.split("```")[1].split("```")[0].strip()
+            parsed = json.loads(result)
+            parsed["_ai_model"] = AI_VISION_MODEL_NAME
+            return parsed
+        except Exception as e:
+            print(f"OpenRouter text extraction failed: {e}")
+
+    # 2. Fallback: Anthropic direct API (Claude Sonnet)
     payload = {
-        "model": AI_MODEL_NAME,
+        "model": "claude-3-5-sonnet-20241022",
         "max_tokens": 1000,
         "system": system_prompt,
         "messages": [
@@ -524,7 +547,7 @@ def extract_from_text(text):
     elif "```" in result:
         result = result.split("```")[1].split("```")[0].strip()
     parsed = json.loads(result)
-    parsed["_ai_model"] = AI_MODEL_NAME
+    parsed["_ai_model"] = "claude-3-5-sonnet-20241022"
     return parsed
 
 def extract_from_image(base64_data, mime_type):
