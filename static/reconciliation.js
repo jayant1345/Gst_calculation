@@ -328,6 +328,11 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
             } else if (item.status === 'Missing in GSTR-2B' || item.status === 'Value Mismatched') {
                 actionBtn = `<button class="btn-action-small notify" data-action="notify" title="Notify Vendor"><i class="fa-solid fa-envelope"></i></button>`;
+            } else if (item.status === 'Missing in Books') {
+                actionBtn = `
+                    <button class="btn-action-small hold" data-action="hold" title="Put on Hold"><i class="fa-solid fa-pause"></i></button>
+                    <button class="btn-action-small delete" data-action="delete-portal-entry" data-id="${item.portal ? item.portal.id : ''}" title="Delete GSTR-2B Entry" style="background: #fef2f2; color: #dc2626; border: 1px solid #fca5a5;"><i class="fa-solid fa-trash"></i></button>
+                `;
             } else {
                 actionBtn = `<button class="btn-action-small hold" data-action="hold" title="Hold"><i class="fa-solid fa-pause"></i></button>`;
             }
@@ -363,6 +368,29 @@ document.addEventListener('DOMContentLoaded', function() {
                     else if (kind === 'confirm-match') confirmPossibleMatch(item.book.id, item.portal.invoice_number, item.portal.gstin, supplier);
                     else if (kind === 'rescan') rescanInvoice(item.book.id, actionEl);
                     else if (kind === 'notify') alert(`Sending follow-up to vendor: ${supplier}`);
+                    else if (kind === 'delete-portal-entry') {
+                        const entryId = actionEl.dataset.id;
+                        if (!entryId) return;
+                        if (confirm(`Delete GSTR-2B entry for "${supplier}"? This will permanently remove it from reconciliation.`)) {
+                            fetch('/api/delete-gstr2b-entry', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ id: parseInt(entryId) })
+                            })
+                            .then(res => res.json())
+                            .then(data => {
+                                if (data.success) {
+                                    runReconciliation();
+                                } else {
+                                    alert(data.error || 'Failed to delete GSTR-2B entry.');
+                                }
+                            })
+                            .catch(err => {
+                                console.error('Error deleting GSTR-2B entry:', err);
+                                alert('Failed to delete GSTR-2B entry.');
+                            });
+                        }
+                    }
                     else alert('Put invoice on hold.');
                 });
             });
@@ -401,6 +429,11 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (item.book && item.book.has_file) {
                     actionHtml += `<button class="mobile-action-btn notify" data-action="rescan"><i class="fa-solid fa-arrows-rotate"></i> Re-scan Bill</button>`;
                 }
+            } else if (item.status === 'Missing in Books') {
+                actionHtml = `
+                    <button class="mobile-action-btn hold" data-action="hold"><i class="fa-solid fa-pause"></i> Hold</button>
+                    <button class="mobile-action-btn delete" data-action="delete-portal-entry" data-id="${item.portal ? item.portal.id : ''}" style="background: #fef2f2; color: #dc2626; border-color: #fca5a5;"><i class="fa-solid fa-trash"></i> Delete Entry</button>
+                `;
             } else {
                 actionHtml = `<button class="mobile-action-btn notify" data-action="notify"><i class="fa-solid fa-envelope"></i> Send Notice</button>`;
             }
@@ -441,6 +474,30 @@ document.addEventListener('DOMContentLoaded', function() {
                     if (kind === 'approve') alert('ITC Approved!');
                     else if (kind === 'confirm-match') confirmPossibleMatch(item.book.id, item.portal.invoice_number, item.portal.gstin, supplier);
                     else if (kind === 'rescan') rescanInvoice(item.book.id, cardActionEl);
+                    else if (kind === 'delete-portal-entry') {
+                        const entryId = cardActionEl.dataset.id;
+                        if (!entryId) return;
+                        if (confirm(`Delete GSTR-2B entry for "${supplier}"? This will permanently remove it from reconciliation.`)) {
+                            fetch('/api/delete-gstr2b-entry', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ id: parseInt(entryId) })
+                            })
+                            .then(res => res.json())
+                            .then(data => {
+                                if (data.success) {
+                                    runReconciliation();
+                                } else {
+                                    alert(data.error || 'Failed to delete GSTR-2B entry.');
+                                }
+                            })
+                            .catch(err => {
+                                console.error('Error deleting GSTR-2B entry:', err);
+                                alert('Failed to delete GSTR-2B entry.');
+                            });
+                        }
+                    }
+                    else if (kind === 'hold') alert('Put invoice on hold.');
                     else alert(`Notifying vendor: ${supplier}`);
                 });
             });

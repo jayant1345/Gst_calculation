@@ -2408,6 +2408,49 @@ def delete_gstr2b():
         print(f"Error deleting GSTR-2B entries: {e}")
         return jsonify({"error": str(e)}), 500
 
+@app.route('/api/delete-gstr2b-entry', methods=['POST'])
+@login_required
+def delete_gstr2b_entry():
+    """Deletes an individual GSTR-2B entry directly by its ID from the reconciliation table."""
+    user_id = session['user_id']
+    is_admin = is_admin_user()
+    data = request.json or {}
+    entry_id = data.get('id')
+    if not entry_id:
+        return jsonify({"error": "Entry ID is required"}), 400
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        if is_admin:
+            cur.execute('SELECT supplier_name, invoice_number, financial_year, month FROM gstr2b_entries WHERE id = %s', (entry_id,))
+        else:
+            cur.execute('SELECT supplier_name, invoice_number, financial_year, month FROM gstr2b_entries WHERE id = %s AND user_id = %s', (entry_id, user_id))
+        row = cur.fetchone()
+        if not row:
+            cur.close()
+            conn.close()
+            return jsonify({"error": "GSTR-2B entry not found"}), 404
+
+        supp_name = row['supplier_name']
+        inv_no = row['invoice_number']
+        fy = row['financial_year']
+        m = row['month']
+
+        if is_admin:
+            cur.execute('DELETE FROM gstr2b_entries WHERE id = %s', (entry_id,))
+        else:
+            cur.execute('DELETE FROM gstr2b_entries WHERE id = %s AND user_id = %s', (entry_id, user_id))
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        log_activity(user_id, 'gstr2b_entry_deleted', f"Deleted GSTR-2B entry for '{supp_name}' (Invoice #{inv_no})", fy, m, 1)
+        return jsonify({"success": True, "message": "GSTR-2B entry deleted successfully"})
+    except Exception as e:
+        print(f"Error deleting single GSTR-2B entry: {e}")
+        return jsonify({"error": str(e)}), 500
+
 def execute_reconciliation(fy, months, user_id, is_admin):
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
