@@ -1180,6 +1180,7 @@ def save_invoice():
         return jsonify({
             "success": True,
             "id": ret_id,
+            "username": session.get('username', ''),
             "eligible_itc": eligible,
             "ineligible_itc": ineligible,
             "financial_year": fy,
@@ -1693,6 +1694,7 @@ def process_invoices():
                     "financial_year": fy,
                     "month": m,
                     "filename": filename,
+                    "username": session.get('username', ''),
                     "ai_model_used": inv.get("_ai_model")
                 })
         conn.commit()

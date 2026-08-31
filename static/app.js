@@ -595,6 +595,9 @@ document.addEventListener('DOMContentLoaded', () => {
             if (data.invoices && data.invoices.length > 0) {
                 const validInvoices = data.invoices.filter(inv => inv.id !== null);
                 if (validInvoices.length > 0) {
+                    validInvoices.forEach(inv => {
+                        inv.username = inv.username || window.CURRENT_USERNAME || '';
+                    });
                     invoices = [...validInvoices, ...invoices];
                     populateFilters();
                     renderTable();
@@ -743,7 +746,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 <td class="checkbox-cell"><input type="checkbox" class="field-itc-blocked" title="Section 17(5) blocked credit / fully ineligible" ${inv.itc_blocked ? 'checked' : ''}></td>
                 <td class="numeric eligible-column font-bold" id="row-eligible-${index}">₹${(inv.eligible_itc || 0).toFixed(2)}</td>
                 <td class="numeric ineligible-column" id="row-ineligible-${index}">₹${(inv.ineligible_itc || 0).toFixed(2)}</td>
-                ${window.IS_ADMIN ? `<td class="col-owner">${inv.username || ''}</td>` : ''}
+                ${window.IS_ADMIN ? `<td class="col-owner">${inv.username || window.CURRENT_USERNAME || ''}</td>` : ''}
                 <td class="actions-cell">
                     ${inv.has_file ? `
                     <button class="btn-view-file" title="View original bill" data-id="${inv.id}">
