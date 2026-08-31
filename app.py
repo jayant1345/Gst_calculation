@@ -2445,6 +2445,12 @@ def delete_gstr2b_entry():
         cur.close()
         conn.close()
 
+        log_activity(user_id, 'gstr2b_entry_deleted', f"Deleted GSTR-2B entry for '{supp_name}' (Invoice #{inv_no})", fy, m, 1)
+        return jsonify({"success": True, "message": "GSTR-2B entry deleted successfully"})
+    except Exception as e:
+        print(f"Error deleting single GSTR-2B entry: {e}")
+        return jsonify({"error": str(e)}), 500
+
 @app.route('/api/gstr2b-status', methods=['GET'])
 @login_required
 def gstr2b_status():
