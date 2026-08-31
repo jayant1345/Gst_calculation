@@ -721,14 +721,16 @@ body {
 .btn {
     display: inline-flex;
     align-items: center;
+    justify-content: center;
     gap: 8px;
-    padding: 12px 28px;
+    padding: 10px 20px;
     border-radius: 30px;
     font-weight: 700;
-    font-size: 14px;
+    font-size: 13.5px;
     cursor: pointer;
     border: none;
     transition: all 0.25s ease;
+    white-space: nowrap;
 }
 
 .btn-primary {
@@ -767,6 +769,7 @@ body {
 .btn-danger {
     background-color: #dc2626;
     color: #ffffff;
+    border: 1px solid #b91c1c;
     box-shadow: 0 4px 12px rgba(220, 38, 38, 0.2);
 }
 
@@ -777,12 +780,13 @@ body {
 
 .btn-danger:disabled,
 .btn-danger[disabled] {
-    background-color: #94a3b8;
-    color: #f1f5f9;
+    background-color: #f1f5f9;
+    color: #94a3b8;
+    border: 1px solid var(--border-color);
     cursor: not-allowed;
     transform: none;
     box-shadow: none;
-    opacity: 0.6;
+    opacity: 0.85;
 }
 
 /* Progress List & Visual Progress Bar */
@@ -995,7 +999,14 @@ body {
 .toolbar-right {
     display: flex;
     align-items: center;
-    gap: 16px;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.toolbar-right .btn {
+    padding: 8px 16px;
+    font-size: 13px;
+    white-space: nowrap;
 }
 
 .search-box {

@@ -1050,6 +1050,16 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function calculateAuditCounts() {
+        const fyValue = fyFilter ? fyFilter.value.trim() : '';
+        const monthValue = monthFilter ? monthFilter.value.trim().toLowerCase() : '';
+
+        // Filter invoices by the selected FY and Month period
+        const periodInvoices = invoices.filter(inv => {
+            const matchesFy = !fyValue || String(inv.financial_year || '').trim() === fyValue;
+            const matchesMonth = !monthValue || String(inv.month || '').trim().toLowerCase() === monthValue;
+            return matchesFy && matchesMonth;
+        });
+
         let countIncomplete = 0;
         let countGstin = 0;
         let countInv = 0;
@@ -1058,7 +1068,7 @@ document.addEventListener('DOMContentLoaded', () => {
         let countDate = 0;
         let countTax = 0;
 
-        invoices.forEach(inv => {
+        periodInvoices.forEach(inv => {
             const missingGstin = isFieldBlank(inv.gstin) || String(inv.gstin).trim().length !== 15;
             const missingInv = isFieldBlank(inv.invoice_number);
             const missingBranch = isFieldBlank(inv.branch) || isFieldBlank(inv.state);
@@ -1087,7 +1097,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const pillDate = document.getElementById('count-pill-date');
         const pillTax = document.getElementById('count-pill-tax');
 
-        if (pillAll) pillAll.textContent = invoices.length;
+        if (pillAll) pillAll.textContent = periodInvoices.length;
         if (pillIncomplete) pillIncomplete.textContent = countIncomplete;
         if (pillGstin) pillGstin.textContent = countGstin;
         if (pillInv) pillInv.textContent = countInv;
@@ -1136,12 +1146,20 @@ document.addEventListener('DOMContentLoaded', () => {
         popup.className = 'col-filter-popup show';
         popup.dataset.col = colKey;
 
-        // Collect unique values and counts
+        const fyValue = fyFilter ? fyFilter.value.trim() : '';
+        const monthValue = monthFilter ? monthFilter.value.trim().toLowerCase() : '';
+        const periodInvoices = invoices.filter(inv => {
+            const matchesFy = !fyValue || String(inv.financial_year || '').trim() === fyValue;
+            const matchesMonth = !monthValue || String(inv.month || '').trim().toLowerCase() === monthValue;
+            return matchesFy && matchesMonth;
+        });
+
+        // Collect unique values and counts within active period
         const valueCounts = new Map();
         let blankCount = 0;
         let nonBlankCount = 0;
 
-        invoices.forEach(inv => {
+        periodInvoices.forEach(inv => {
             const rawVal = inv[colKey];
             if (isFieldBlank(rawVal)) {
                 blankCount++;
@@ -1159,7 +1177,7 @@ document.addEventListener('DOMContentLoaded', () => {
             <ul class="col-filter-options">
                 <li class="col-filter-option" data-val="__ALL__">
                     <input type="radio" name="col_val" ${currentVal === '__ALL__' ? 'checked' : ''}>
-                    <span><strong>(All)</strong> (${invoices.length})</span>
+                    <span><strong>(All)</strong> (${periodInvoices.length})</span>
                 </li>
                 <li class="col-filter-option" data-val="__BLANKS__" style="color: #b45309; font-weight: 600;">
                     <input type="radio" name="col_val" ${currentVal === '__BLANKS__' ? 'checked' : ''}>
@@ -1240,8 +1258,8 @@ document.addEventListener('DOMContentLoaded', () => {
     // uploaded.
     function getFilteredInvoices() {
         const query = searchInput ? searchInput.value.toLowerCase().trim() : '';
-        const fyValue = fyFilter ? fyFilter.value : '';
-        const monthValue = monthFilter ? monthFilter.value : '';
+        const fyValue = fyFilter ? fyFilter.value.trim() : '';
+        const monthValue = monthFilter ? monthFilter.value.trim().toLowerCase() : '';
 
         return invoices.filter(inv => {
             // 1. Text Search across vendor, invoice number, GSTIN, branch, state
@@ -1257,8 +1275,8 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             // 2. Financial Year & Month Filters
-            if (fyValue && inv.financial_year !== fyValue) return false;
-            if (monthValue && inv.month !== monthValue) return false;
+            if (fyValue && String(inv.financial_year || '').trim() !== fyValue) return false;
+            if (monthValue && String(inv.month || '').trim().toLowerCase() !== monthValue) return false;
 
             // 3. Quick Audit Rectification filter
             const missingGstin = isFieldBlank(inv.gstin) || String(inv.gstin).trim().length !== 15;
@@ -1338,6 +1356,13 @@ document.addEventListener('DOMContentLoaded', () => {
         const filteredInvoices = getFilteredInvoices();
         const colCount = window.IS_ADMIN ? 17 : 16;
         const query = searchInput ? searchInput.value.toLowerCase().trim() : '';
+        const fyValue = fyFilter ? fyFilter.value.trim() : '';
+        const monthValue = monthFilter ? monthFilter.value.trim().toLowerCase() : '';
+        const periodInvoices = invoices.filter(inv => {
+            const matchesFy = !fyValue || String(inv.financial_year || '').trim() === fyValue;
+            const matchesMonth = !monthValue || String(inv.month || '').trim().toLowerCase() === monthValue;
+            return matchesFy && matchesMonth;
+        });
 
         if (filteredInvoices.length === 0) {
             tableBody.innerHTML = `
@@ -1345,17 +1370,17 @@ document.addEventListener('DOMContentLoaded', () => {
                     <td colspan="${colCount}">
                         <div class="empty-state">
                             <i class="fa-solid fa-receipt"></i>
-                            <p>${(query || currentAuditFilter !== 'all' || Object.keys(columnFilters).length > 0) ? 'No matching invoices found for the selected filter.' : 'No invoices processed yet. Drag & drop or upload files above.'}</p>
+                            <p>${(query || currentAuditFilter !== 'all' || Object.keys(columnFilters).length > 0 || fyValue || monthValue) ? 'No matching invoices found for the selected filter.' : 'No invoices processed yet. Drag & drop or upload files above.'}</p>
                         </div>
                     </td>
                 </tr>
             `;
-            invoiceCountText.textContent = `0 of ${invoices.length} Invoice(s) Loaded`;
+            invoiceCountText.textContent = `0 of ${periodInvoices.length} Invoice(s) Loaded`;
             updateDeleteSelectedState();
             return;
         }
 
-        invoiceCountText.textContent = `${filteredInvoices.length} of ${invoices.length} Invoice(s) Loaded`;
+        invoiceCountText.textContent = `${filteredInvoices.length} of ${periodInvoices.length} Invoice(s) Loaded`;
         tableBody.innerHTML = '';
 
         filteredInvoices.forEach((inv) => {
