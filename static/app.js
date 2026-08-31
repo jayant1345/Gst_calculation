@@ -889,20 +889,10 @@ document.addEventListener('DOMContentLoaded', () => {
             globalBatchState.duplicateFiles = (globalBatchState.duplicateFiles || 0) + duplicateCount;
             updateProgressBar();
 
-            // Add newly saved invoices to state
-            if (data.invoices && data.invoices.length > 0) {
-                const validInvoices = data.invoices.filter(inv => inv.id !== null);
-                if (validInvoices.length > 0) {
-                    validInvoices.forEach(inv => {
-                        inv.username = inv.username || window.CURRENT_USERNAME || '';
-                    });
-                    invoices = [...validInvoices, ...invoices];
-                    populateFilters();
-                    renderTable();
-                    updateMetrics();
-                    updateBranchSuggestions();
-                }
+            // Add newly saved invoices to state & re-sync from PostgreSQL database
+            loadInvoices();
 
+            if (data.invoices && data.invoices.length > 0) {
                 // Reflect which AI model actually handled the scan
                 const modelUsed = [...data.invoices].reverse().map(inv => inv.ai_model_used).find(Boolean);
                 if (modelUsed) updateApiModelBadge(modelUsed);
