@@ -32,7 +32,22 @@ document.addEventListener('DOMContentLoaded', function() {
     monthChecks.forEach(cb => cb.addEventListener('change', fetchReconciliationData));
     reconSearch.addEventListener('input', applyFilters);
 
-    // Annual Export Button
+    // Export Filtered Reconciliation Ledger Button
+    const btnExportFiltered = document.getElementById('btn-export-filtered');
+    if (btnExportFiltered) {
+        btnExportFiltered.addEventListener('click', function() {
+            const fy = fySelect.value;
+            const selectedMonths = Array.from(monthChecks)
+                .filter(cb => cb.checked)
+                .map(cb => cb.value);
+            const monthsQuery = selectedMonths.join(',');
+            const search = encodeURIComponent(reconSearch.value.trim());
+            const url = `/api/export-filtered-reconciliation?financial_year=${fy}&months=${monthsQuery}&state=${activeStateFilter}&status=${activeFilter}&search=${search}`;
+            window.location.href = url;
+        });
+    }
+
+    // Annual Export Button (All Books + Portal sheets)
     const btnExportAnnual = document.getElementById('btn-export-annual');
     if (btnExportAnnual) {
         btnExportAnnual.addEventListener('click', function() {
@@ -47,9 +62,50 @@ document.addEventListener('DOMContentLoaded', function() {
             statusBtns.forEach(b => b.classList.remove('active'));
             this.classList.add('active');
             activeFilter = this.getAttribute('data-status');
+            syncKpiCardHighlights();
             applyFilters();
         });
     });
+
+    // Interactive KPI Cards (Click to Filter Ledger)
+    const kpiCards = document.querySelectorAll('.clickable-kpi');
+    kpiCards.forEach(card => {
+        card.addEventListener('click', function() {
+            const targetStatus = this.getAttribute('data-kpi-status');
+            if (activeFilter === targetStatus) {
+                activeFilter = 'all';
+            } else {
+                activeFilter = targetStatus;
+            }
+
+            // Sync status filter buttons
+            statusBtns.forEach(btn => {
+                if (btn.getAttribute('data-status') === activeFilter) {
+                    btn.classList.add('active');
+                } else {
+                    btn.classList.remove('active');
+                }
+            });
+
+            syncKpiCardHighlights();
+            applyFilters();
+        });
+    });
+
+    function syncKpiCardHighlights() {
+        kpiCards.forEach(card => {
+            const status = card.getAttribute('data-kpi-status');
+            if (activeFilter === status) {
+                card.style.transform = 'translateY(-2px)';
+                card.style.boxShadow = '0 6px 14px rgba(37, 99, 235, 0.2)';
+                card.style.outline = '2px solid var(--accent-blue)';
+            } else {
+                card.style.transform = 'none';
+                card.style.boxShadow = 'none';
+                card.style.outline = 'none';
+            }
+        });
+    }
 
     // State Filter Buttons -- also drives the KPI cards, since KPIs should
     // reflect whichever state (or "All States") is currently selected.

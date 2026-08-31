@@ -2320,6 +2320,173 @@ def export_annual_report():
         print(f"Error exporting annual report: {e}")
         return jsonify({"error": str(e)}), 500
 
+@app.route('/api/export-filtered-reconciliation', methods=['GET'])
+@login_required
+def export_filtered_reconciliation():
+    """Exports the exact currently filtered reconciliation ledger as an Excel spreadsheet."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+
+    user_id = session['user_id']
+    is_admin = is_admin_user()
+    fy = request.args.get('financial_year', '2026-27').strip()
+    months_param = request.args.get('months', '').strip()
+    state_filter = request.args.get('state', 'all').strip()
+    status_filter = request.args.get('status', 'all').strip()
+    search_query = request.args.get('search', '').strip().lower()
+
+    months = [m.strip() for m in months_param.split(',') if m.strip()]
+    if not months:
+        months = ['April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December', 'January', 'February', 'March']
+
+    try:
+        items, summary = execute_reconciliation(fy, months, user_id, is_admin)
+
+        # 1. Apply State filter
+        if state_filter and state_filter.lower() != 'all':
+            items = [i for i in items if (i.get('state') or 'Unassigned').lower() == state_filter.lower()]
+
+        # 2. Apply Status filter
+        if status_filter and status_filter.lower() != 'all':
+            items = [i for i in items if (i.get('status') or '').lower() == status_filter.lower()]
+
+        # 3. Apply Search query
+        if search_query:
+            filtered = []
+            for i in items:
+                b = i.get('book') or {}
+                p = i.get('portal') or {}
+                vendor = (b.get('vendor_name') or p.get('vendor_name') or '').lower()
+                gstin = (b.get('gstin') or p.get('gstin') or '').lower()
+                b_inv = (b.get('invoice_number') or '').lower()
+                p_inv = (p.get('invoice_number') or '').lower()
+                branch = (b.get('branch') or '').lower()
+                if (search_query in vendor or search_query in gstin or 
+                    search_query in b_inv or search_query in p_inv or 
+                    search_query in branch):
+                    filtered.append(i)
+            items = filtered
+
+        # Generate Excel Workbook
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Reconciliation Ledger"
+
+        header_fill = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
+        title_font = Font(name="Calibri", size=13, bold=True, color="1F4E79")
+        subtitle_font = Font(name="Calibri", size=10, italic=True, color="475569")
+        white_font = Font(name="Calibri", size=10, bold=True, color="FFFFFF")
+        bold_font = Font(name="Calibri", size=10, bold=True)
+        regular_font = Font(name="Calibri", size=10)
+        border_thin = Border(left=Side(style='thin', color='DDDDDD'), right=Side(style='thin', color='DDDDDD'),
+                             top=Side(style='thin', color='DDDDDD'), bottom=Side(style='thin', color='DDDDDD'))
+        num_fmt = '#,##0.00'
+
+        # Title Block
+        ws.merge_cells("A1:L1")
+        ws["A1"] = f"NUTAN NAGRIK SAHAKARI BANK LTD. - GST RECONCILIATION LEDGER (FY {fy})"
+        ws["A1"].font = title_font
+        ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
+
+        ws.merge_cells("A2:L2")
+        ws["A2"] = f"Active Filters: Months: {', '.join(months)} | State: {state_filter.title()} | Status: {status_filter.title()} | Total Records: {len(items)}"
+        ws["A2"].font = subtitle_font
+        ws["A2"].alignment = Alignment(horizontal="center", vertical="center")
+
+        headers = [
+            "State", "Supplier / Vendor", "Supplier GSTIN",
+            "Books Branch", "Books Invoice No", "Books Date", "Books GST (₹)",
+            "Portal Invoice No", "Portal Date", "Portal GST (₹)", "Portal Taxable (₹)",
+            "Match Status"
+        ]
+
+        ws.append([]) # Empty row 3
+        ws.append(headers) # Row 4
+        header_row_idx = 4
+
+        for col_idx in range(1, len(headers) + 1):
+            cell = ws.cell(row=header_row_idx, column=col_idx)
+            cell.fill = header_fill
+            cell.font = white_font
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            cell.border = border_thin
+
+        status_fills = {
+            'Matched': PatternFill(start_color="D1FAE5", end_color="D1FAE5", fill_type="solid"),
+            'Value Mismatched': PatternFill(start_color="FEF3C7", end_color="FEF3C7", fill_type="solid"),
+            'Possible Match': PatternFill(start_color="EDE9FE", end_color="EDE9FE", fill_type="solid"),
+            'Missing in GSTR-2B': PatternFill(start_color="FEE2E2", end_color="FEE2E2", fill_type="solid"),
+            'Missing in Books': PatternFill(start_color="DBEAFE", end_color="DBEAFE", fill_type="solid"),
+        }
+
+        row_idx = header_row_idx + 1
+        for item in items:
+            b = item.get('book') or {}
+            p = item.get('portal') or {}
+            state = item.get('state') or 'Unassigned'
+            supplier = b.get('vendor_name') or p.get('vendor_name') or 'Unknown'
+            gstin = b.get('gstin') or p.get('gstin') or 'N/A'
+            b_branch = b.get('branch') or '-'
+            b_inv = b.get('invoice_number') or '-'
+            b_date = b.get('invoice_date') or '-'
+            b_gst = b.get('total_gst') if b.get('total_gst') is not None else ''
+            p_inv = p.get('invoice_number') or '-'
+            p_date = p.get('invoice_date') or '-'
+            p_gst = p.get('total_gst') if p.get('total_gst') is not None else ''
+            p_taxable = p.get('taxable_value') if p.get('taxable_value') is not None else ''
+            status = item.get('status') or 'Unknown'
+
+            row_data = [
+                state, supplier, gstin,
+                b_branch, b_inv, b_date, b_gst,
+                p_inv, p_date, p_gst, p_taxable,
+                status
+            ]
+            ws.append(row_data)
+
+            for col_idx in range(1, len(headers) + 1):
+                cell = ws.cell(row=row_idx, column=col_idx)
+                cell.font = regular_font
+                cell.border = border_thin
+                if col_idx in [7, 10, 11]:
+                    cell.number_format = num_fmt
+                    cell.alignment = Alignment(horizontal="right")
+                elif col_idx in [1, 4, 5, 6, 8, 9]:
+                    cell.alignment = Alignment(horizontal="center")
+                elif col_idx == 12:
+                    cell.alignment = Alignment(horizontal="center")
+                    cell.font = bold_font
+                    fill = status_fills.get(status)
+                    if fill:
+                        cell.fill = fill
+
+            row_idx += 1
+
+        # Adjust column widths
+        for col in ws.columns:
+            max_len = 0
+            col_letter = get_column_letter(col[0].column)
+            for cell in col:
+                if cell.row > 2 and cell.value is not None:
+                    max_len = max(max_len, len(str(cell.value)))
+            ws.column_dimensions[col_letter].width = max(max_len + 4, 12)
+
+        output = io.BytesIO()
+        wb.save(output)
+        output.seek(0)
+
+        filename = f"GST_Reconciliation_{fy}_{state_filter}_{status_filter}.xlsx".replace(' ', '_')
+        return send_file(
+            output,
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            as_attachment=True,
+            download_name=filename
+        )
+    except Exception as e:
+        print(f"Error exporting filtered reconciliation: {e}")
+        return jsonify({"error": str(e)}), 500
+
 @app.route('/api/upload-gstr2b', methods=['POST'])
 @login_required
 def upload_gstr2b():

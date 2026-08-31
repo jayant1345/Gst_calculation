@@ -250,9 +250,9 @@
 
             <!-- VIEW STAGE 2: RECONCILIATION LEDGER -->
             <div id="view-stage2">
-                <!-- Swipeable/Scrollable KPI Row -->
+                <!-- Swipeable/Scrollable KPI Row with Clickable Filter Capability -->
                 <section class="metrics-grid kpi-scroll-container" style="margin-top: 1.5rem;">
-                    <div class="metric-card kpi-matched">
+                    <div class="metric-card kpi-matched clickable-kpi" data-kpi-status="Matched" title="Click to filter by Fully Matched" style="cursor: pointer;">
                         <div class="card-icon green"><i class="fa-solid fa-circle-check"></i></div>
                         <div class="card-data">
                             <h3>Fully Matched</h3>
@@ -260,7 +260,7 @@
                         </div>
                     </div>
                     
-                    <div class="metric-card kpi-mismatched">
+                    <div class="metric-card kpi-mismatched clickable-kpi" data-kpi-status="Value Mismatched" title="Click to filter by Value Mismatched" style="cursor: pointer;">
                         <div class="card-icon yellow"><i class="fa-solid fa-triangle-exclamation"></i></div>
                         <div class="card-data">
                             <h3>Value Mismatched</h3>
@@ -268,7 +268,7 @@
                         </div>
                     </div>
                     
-                    <div class="metric-card kpi-missing-portal">
+                    <div class="metric-card kpi-missing-portal clickable-kpi" data-kpi-status="Missing in GSTR-2B" title="Click to filter by Missing in Portal" style="cursor: pointer;">
                         <div class="card-icon red"><i class="fa-solid fa-circle-xmark"></i></div>
                         <div class="card-data">
                             <h3>Missing in Portal</h3>
@@ -276,7 +276,7 @@
                         </div>
                     </div>
                     
-                    <div class="metric-card kpi-missing-books">
+                    <div class="metric-card kpi-missing-books clickable-kpi" data-kpi-status="Missing in Books" title="Click to filter by Missing in Books" style="cursor: pointer;">
                         <div class="card-icon blue"><i class="fa-solid fa-circle-question"></i></div>
                         <div class="card-data">
                             <h3>Missing in Books</h3>
@@ -287,27 +287,48 @@
 
                 <!-- Reconciliation ledger -->
                 <section class="dashboard-panel table-panel" style="margin-top: 1.5rem;">
-                    <div class="panel-toolbar">
+                    <!-- Top Action Bar -->
+                    <div class="panel-toolbar" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 14px; margin-bottom: 14px;">
                         <div class="toolbar-left">
-                            <h2><i class="fa-solid fa-list-check"></i> Reconciliation ledger</h2>
-                            <span class="row-count" id="recon-count">0 items found</span>
+                            <h2 style="margin: 0; font-size: 20px; font-weight: 700; color: #0f172a; display: flex; align-items: center; gap: 10px;">
+                                <i class="fa-solid fa-list-check" style="color: var(--accent-blue);"></i> Reconciliation Ledger
+                            </h2>
+                            <span class="row-count" id="recon-count" style="font-size: 13px; color: #64748b; margin-top: 4px;">0 items found</span>
                         </div>
                         
-                        <div class="toolbar-right">
-                            <div class="search-box">
-                                <i class="fa-solid fa-magnifying-glass"></i>
-                                <input type="text" id="recon-search" placeholder="Search GSTIN, invoice no...">
-                            </div>
-                            <button class="btn btn-gold" id="btn-export-annual">
-                                <i class="fa-solid fa-file-excel"></i> Export Annual Report
+                        <div class="toolbar-actions" style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+                            <button class="btn btn-primary" id="btn-export-filtered" style="background: #059669; border-color: #059669; color: #ffffff; padding: 9px 16px; border-radius: 8px; font-weight: 600; font-size: 13px; display: inline-flex; align-items: center; gap: 8px; box-shadow: 0 2px 4px rgba(5,150,105,0.2); cursor: pointer;" title="Download currently filtered matching/mismatching rows as Excel">
+                                <i class="fa-solid fa-file-excel"></i> Export Filtered Ledger (.xlsx)
                             </button>
-                            <div class="status-filters" id="state-filters">
+                            <button class="btn btn-secondary" id="btn-export-annual" style="padding: 9px 14px; border-radius: 8px; font-weight: 600; font-size: 13px; display: inline-flex; align-items: center; gap: 8px; cursor: pointer;" title="Download complete annual purchase book & portal workbook">
+                                <i class="fa-solid fa-download"></i> Annual Purchase Book
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Clean Structured Filter Strip -->
+                    <div class="recon-filter-strip" style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; background: #f8fafc; padding: 12px 16px; border-radius: 10px; border: 1px solid #e2e8f0; margin-bottom: 18px;">
+                        <!-- Search Box -->
+                        <div class="search-box" style="width: 250px; min-width: 200px;">
+                            <i class="fa-solid fa-magnifying-glass"></i>
+                            <input type="text" id="recon-search" placeholder="Search supplier, GSTIN, invoice..." style="width: 100%; padding: 8px 12px 8px 36px; border-radius: 20px; border: 1px solid #cbd5e1; font-size: 13px;">
+                        </div>
+
+                        <!-- State Filters -->
+                        <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                            <span style="font-size: 12px; font-weight: 700; color: #475569; text-transform: uppercase; letter-spacing: 0.5px;"><i class="fa-solid fa-location-dot" style="color: var(--accent-blue);"></i> State:</span>
+                            <div class="status-filters" id="state-filters" style="display: inline-flex; background: #e2e8f0; padding: 3px; border-radius: 8px; gap: 3px;">
                                 <button class="filter-status-btn active" data-state="all">All States</button>
                                 <button class="filter-status-btn" data-state="Gujarat">Gujarat</button>
                                 <button class="filter-status-btn" data-state="Maharashtra">Maharashtra</button>
                                 <button class="filter-status-btn" data-state="Unassigned">Unassigned</button>
                             </div>
-                            <div class="status-filters" id="status-filters">
+                        </div>
+
+                        <!-- Status Filters -->
+                        <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                            <span style="font-size: 12px; font-weight: 700; color: #475569; text-transform: uppercase; letter-spacing: 0.5px;"><i class="fa-solid fa-filter" style="color: var(--accent-blue);"></i> Status:</span>
+                            <div class="status-filters" id="status-filters" style="display: inline-flex; background: #e2e8f0; padding: 3px; border-radius: 8px; gap: 3px; flex-wrap: wrap;">
                                 <button class="filter-status-btn active" data-status="all">All</button>
                                 <button class="filter-status-btn" data-status="Matched">Matched</button>
                                 <button class="filter-status-btn" data-status="Value Mismatched">Mismatched</button>
