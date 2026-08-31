@@ -97,10 +97,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function getAllBranches() {
         const branchMap = new Map();
-        masterBranches.forEach(b => branchMap.set(b.name, b.state));
+        masterBranches.forEach(b => {
+            const cleanName = b.name.trim().toUpperCase();
+            if (cleanName) branchMap.set(cleanName, b.state);
+        });
         invoices.forEach(inv => {
-            if (inv.branch && inv.branch !== 'Unassigned' && !branchMap.has(inv.branch)) {
-                branchMap.set(inv.branch, inv.state || 'Gujarat');
+            if (inv.branch && inv.branch !== 'Unassigned') {
+                const cleanName = inv.branch.trim().toUpperCase();
+                if (cleanName && !branchMap.has(cleanName)) {
+                    branchMap.set(cleanName, inv.state || 'Gujarat');
+                }
             }
         });
         return Array.from(branchMap.entries()).map(([name, state]) => ({ name, state }))
@@ -116,26 +122,38 @@ document.addEventListener('DOMContentLoaded', () => {
                 inputEl: mainBranchInput,
                 dropdownEl: mainBranchDropdown,
                 getItems: (query) => {
-                    const allBranches = getAllBranches();
-                    if (!query) return allBranches.map(b => ({
+                    let branches = getAllBranches();
+                    const currentState = stateInput ? stateInput.value.trim() : '';
+                    if (currentState) {
+                        branches = branches.filter(b => b.state === currentState);
+                    }
+                    if (query) {
+                        branches = branches.filter(b => b.name.toLowerCase().includes(query));
+                    }
+                    return branches.map(b => ({
                         text: b.name,
                         subtext: '',
                         badge: b.state,
                         badgeClass: b.state.toLowerCase()
                     }));
-                    return allBranches
-                        .filter(b => b.name.toLowerCase().includes(query) || (b.state && b.state.toLowerCase().includes(query)))
-                        .map(b => ({
-                            text: b.name,
-                            subtext: '',
-                            badge: b.state,
-                            badgeClass: b.state.toLowerCase()
-                        }));
                 },
                 onSelect: (item) => {
                     if (stateInput) stateInput.value = item.badge;
                 }
             });
+
+            if (stateInput) {
+                stateInput.addEventListener('change', () => {
+                    const st = stateInput.value.trim();
+                    if (st && mainBranchInput.value.trim()) {
+                        const val = mainBranchInput.value.trim().toUpperCase();
+                        const bObj = getAllBranches().find(b => b.name === val);
+                        if (bObj && bObj.state !== st) {
+                            mainBranchInput.value = '';
+                        }
+                    }
+                });
+            }
         }
 
         // 2. Manual Bill modal Branch input
@@ -147,26 +165,38 @@ document.addEventListener('DOMContentLoaded', () => {
                 inputEl: mbBranchInput,
                 dropdownEl: mbBranchDropdown,
                 getItems: (query) => {
-                    const allBranches = getAllBranches();
-                    if (!query) return allBranches.map(b => ({
+                    let branches = getAllBranches();
+                    const currentMbState = mbStateSelect ? mbStateSelect.value.trim() : '';
+                    if (currentMbState) {
+                        branches = branches.filter(b => b.state === currentMbState);
+                    }
+                    if (query) {
+                        branches = branches.filter(b => b.name.toLowerCase().includes(query));
+                    }
+                    return branches.map(b => ({
                         text: b.name,
                         subtext: '',
                         badge: b.state,
                         badgeClass: b.state.toLowerCase()
                     }));
-                    return allBranches
-                        .filter(b => b.name.toLowerCase().includes(query) || (b.state && b.state.toLowerCase().includes(query)))
-                        .map(b => ({
-                            text: b.name,
-                            subtext: '',
-                            badge: b.state,
-                            badgeClass: b.state.toLowerCase()
-                        }));
                 },
                 onSelect: (item) => {
                     if (mbStateSelect) mbStateSelect.value = item.badge;
                 }
             });
+
+            if (mbStateSelect) {
+                mbStateSelect.addEventListener('change', () => {
+                    const st = mbStateSelect.value.trim();
+                    if (st && mbBranchInput.value.trim()) {
+                        const val = mbBranchInput.value.trim().toUpperCase();
+                        const bObj = getAllBranches().find(b => b.name === val);
+                        if (bObj && bObj.state !== st) {
+                            mbBranchInput.value = '';
+                        }
+                    }
+                });
+            }
         }
 
         // 3. Manual Bill modal Party Name input
