@@ -418,11 +418,79 @@ document.addEventListener('DOMContentLoaded', () => {
         }, false);
     });
 
-    dropZone.addEventListener('drop', (e) => {
-        const dt = e.dataTransfer;
-        const files = dt.files;
+    async function getFilesFromDataTransfer(dataTransfer) {
+        const files = [];
+        const items = dataTransfer.items;
+
+        if (items && items.length > 0 && items[0].webkitGetAsEntry) {
+            const entries = [];
+            for (let i = 0; i < items.length; i++) {
+                const entry = items[i].webkitGetAsEntry();
+                if (entry) entries.push(entry);
+            }
+
+            async function readEntry(entry, path = '') {
+                if (entry.isFile) {
+                    return new Promise((resolve) => {
+                        entry.file((file) => {
+                            const relPath = path ? `${path}/${file.name}` : file.name;
+                            Object.defineProperty(file, 'webkitRelativePath', {
+                                value: relPath,
+                                writable: true
+                            });
+                            files.push(file);
+                            resolve();
+                        }, () => resolve());
+                    });
+                } else if (entry.isDirectory) {
+                    const dirReader = entry.createReader();
+                    const readBatch = async () => {
+                        return new Promise((resolve) => {
+                            dirReader.readEntries(async (subEntries) => {
+                                if (!subEntries || subEntries.length === 0) {
+                                    resolve();
+                                } else {
+                                    for (const subEntry of subEntries) {
+                                        await readEntry(subEntry, path ? `${path}/${entry.name}` : entry.name);
+                                    }
+                                    await readBatch();
+                                    resolve();
+                                }
+                            }, () => resolve());
+                        });
+                    };
+                    await readBatch();
+                }
+            }
+
+            for (const entry of entries) {
+                await readEntry(entry);
+            }
+        } else if (dataTransfer.files && dataTransfer.files.length > 0) {
+            for (let i = 0; i < dataTransfer.files.length; i++) {
+                files.push(dataTransfer.files[i]);
+            }
+        }
+
+        return files.filter(isSupportedBillFile);
+    }
+
+    dropZone.addEventListener('drop', async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dropZone.classList.remove('dragging');
+
+        const files = await getFilesFromDataTransfer(e.dataTransfer);
         if (files.length > 0) {
-            triggerUpload(files);
+            const hasBranchFolders = files.some(f => f.webkitRelativePath && f.webkitRelativePath.includes('/'));
+            if (hasBranchFolders) {
+                const groups = groupFilesByBranchFolder(files, '');
+                triggerFolderUpload(groups);
+            } else {
+                triggerUpload(files);
+            }
+        } else {
+            alert('No supported bill files (PDF, JPG, PNG, WEBP, XLSX, XLS, CSV, ZIP) were found.');
         }
     });
 
@@ -695,6 +763,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
 
                 if (options.onSuccess) options.onSuccess();
+                loadInvoices();
                 return;
             }
 
