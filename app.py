@@ -2341,7 +2341,7 @@ def export_filtered_reconciliation():
         months = ['April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December', 'January', 'February', 'March']
 
     try:
-        items, summary = execute_reconciliation(fy, months, user_id, is_admin)
+        summary, items, _, _ = execute_reconciliation(fy, months, user_id, is_admin)
 
         # 1. Apply State filter
         if state_filter and state_filter.lower() != 'all':
