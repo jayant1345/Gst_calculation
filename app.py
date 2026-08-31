@@ -1610,6 +1610,17 @@ def process_invoices():
                 inv["gstin"] = normalize_gstin(inv.get("gstin") or "N/A", inv["vendor_name"])
                 inv["branch"] = inv.get("branch") or batch_branch or "Unassigned"
                 inv["state"] = inv.get("state") or batch_state or "Unassigned"
+
+                # Auto-detect branch and state from folder path when uploading multi-branch directories
+                if (inv["branch"] == 'Unassigned' or not inv["branch"]) and not batch_branch:
+                    fn_norm = filename.replace("\\", "/").upper()
+                    for mb in MASTER_BRANCHES:
+                        b_name = mb['name'].upper()
+                        if f"{b_name}/" in fn_norm or f"/{b_name}" in fn_norm or fn_norm.startswith(f"{b_name}/"):
+                            inv["branch"] = mb['name']
+                            inv["state"] = mb['state']
+                            break
+
                 if (inv["state"] == 'Unassigned' or not inv["state"]) and inv["branch"] != 'Unassigned':
                     inv["state"] = get_branch_state(inv["branch"])
                 inv["itc_blocked"] = bool(inv.get("itc_blocked", False))

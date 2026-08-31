@@ -804,7 +804,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const itemIds = [];
         Array.from(files).forEach((file) => {
-            formData.append('files[]', file);
+            const uploadName = file.webkitRelativePath || file.name;
+            formData.append('files[]', file, uploadName);
             const itemId = `upload-item-${globalBatchState.itemIndexCounter++}`;
             itemIds.push(itemId);
 
