@@ -1503,6 +1503,25 @@ def _parse_single_invoice_file(filename, file_bytes, batch_branch, batch_state, 
         store_file_bytes = file_bytes
         store_mime_type = mime_type
         store_file_name = filename
+    # 4. ZIP Archive Processing
+    elif ext in ['zip']:
+        import zipfile
+        try:
+            with zipfile.ZipFile(io.BytesIO(file_bytes)) as z:
+                for zname in z.namelist():
+                    zname_lower = zname.lower()
+                    if zname_lower.endswith('/') or '__macosx' in zname_lower or 'thumbs.db' in zname_lower:
+                        continue
+                    zext = zname_lower.split('.')[-1]
+                    if zext in ['pdf', 'png', 'jpg', 'jpeg', 'webp', 'xlsx', 'xls', 'csv']:
+                        zbytes = z.read(zname)
+                        sub_res = _parse_single_invoice_file(zname, zbytes, batch_branch, batch_state, high_accuracy)
+                        if sub_res.get('parsed_list'):
+                            parsed_list.extend(sub_res['parsed_list'])
+        except Exception as ze:
+            print(f"Error extracting zip {filename}: {ze}")
+            parsed_list = []
+
     else:
         raise ValueError(f"Unsupported file format: {ext}")
 
@@ -1569,7 +1588,7 @@ def process_invoices():
             idx, res = future.result()
             file_results[idx] = res
 
-    # Save parsed records to PostgreSQL in a single clean transaction, skipping duplicates
+    # Save parsed records to PostgreSQL safely with savepoint per record
     results = []
     seen_in_batch = set()
     try:
@@ -1603,13 +1622,13 @@ def process_invoices():
                 continue
 
             for inv in parsed_res["parsed_list"]:
-                inv["invoice_number"] = inv.get("invoice_number") or "N/A"
-                inv["invoice_date"] = inv.get("invoice_date") or "N/A"
-                inv["payment_date"] = inv.get("payment_date") or None
-                inv["vendor_name"] = inv.get("vendor_name") or "Unknown Vendor"
-                inv["gstin"] = normalize_gstin(inv.get("gstin") or "N/A", inv["vendor_name"])
-                inv["branch"] = inv.get("branch") or batch_branch or "Unassigned"
-                inv["state"] = inv.get("state") or batch_state or "Unassigned"
+                inv["invoice_number"] = str(inv.get("invoice_number") or "N/A")[:100]
+                inv["invoice_date"] = str(inv.get("invoice_date") or "N/A")[:50]
+                inv["payment_date"] = str(inv["payment_date"])[:50] if inv.get("payment_date") else None
+                inv["vendor_name"] = str(inv.get("vendor_name") or "Unknown Vendor")[:255]
+                inv["gstin"] = normalize_gstin(str(inv.get("gstin") or "N/A")[:50], inv["vendor_name"])
+                inv["branch"] = str(inv.get("branch") or batch_branch or "Unassigned")[:100]
+                inv["state"] = str(inv.get("state") or batch_state or "Unassigned")[:100]
 
                 # Auto-detect branch and state from folder path when uploading multi-branch directories
                 if (inv["branch"] == 'Unassigned' or not inv["branch"]) and not batch_branch:
@@ -1687,40 +1706,68 @@ def process_invoices():
                     })
                     continue
 
-                cur.execute('''
-                    INSERT INTO invoices (user_id, invoice_number, invoice_date, payment_date, vendor_name, gstin, branch, state, taxable_value, cgst, sgst, igst, itc_blocked, eligible_itc, ineligible_itc, file_data, file_mime_type, file_name, financial_year, month)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
-                ''', (user_id, inv["invoice_number"], inv["invoice_date"], inv["payment_date"], inv["vendor_name"], inv["gstin"], inv["branch"], inv["state"],
-                      inv["taxable_value"], inv["cgst"], inv["sgst"], inv["igst"], inv["itc_blocked"],
-                      eligible, ineligible,
-                      psycopg2.Binary(parsed_res["store_file_bytes"]) if parsed_res["store_file_bytes"] else None,
-                      parsed_res["store_mime_type"], parsed_res["store_file_name"], fy, m))
+                try:
+                    cur.execute("SAVEPOINT sp_inv")
+                    cur.execute('''
+                        INSERT INTO invoices (user_id, invoice_number, invoice_date, payment_date, vendor_name, gstin, branch, state, taxable_value, cgst, sgst, igst, itc_blocked, eligible_itc, ineligible_itc, file_data, file_mime_type, file_name, financial_year, month)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
+                    ''', (user_id, inv["invoice_number"], inv["invoice_date"], inv["payment_date"], inv["vendor_name"], inv["gstin"], inv["branch"], inv["state"],
+                          inv["taxable_value"], inv["cgst"], inv["sgst"], inv["igst"], inv["itc_blocked"],
+                          eligible, ineligible,
+                          psycopg2.Binary(parsed_res["store_file_bytes"]) if parsed_res["store_file_bytes"] else None,
+                          parsed_res["store_mime_type"], parsed_res["store_file_name"], fy, m))
 
-                db_id = cur.fetchone()[0]
-                results.append({
-                    "id": db_id,
-                    "is_duplicate": False,
-                    "invoice_number": inv["invoice_number"],
-                    "invoice_date": inv["invoice_date"],
-                    "payment_date": inv["payment_date"],
-                    "vendor_name": inv["vendor_name"],
-                    "gstin": inv["gstin"],
-                    "branch": inv["branch"],
-                    "state": inv["state"],
-                    "taxable_value": inv["taxable_value"],
-                    "cgst": inv["cgst"],
-                    "sgst": inv["sgst"],
-                    "igst": inv["igst"],
-                    "itc_blocked": inv["itc_blocked"],
-                    "has_file": parsed_res["store_file_bytes"] is not None,
-                    "eligible_itc": eligible,
-                    "ineligible_itc": ineligible,
-                    "financial_year": fy,
-                    "month": m,
-                    "filename": filename,
-                    "username": session.get('username', ''),
-                    "ai_model_used": inv.get("_ai_model")
-                })
+                    db_id = cur.fetchone()[0]
+                    cur.execute("RELEASE SAVEPOINT sp_inv")
+                    results.append({
+                        "id": db_id,
+                        "is_duplicate": False,
+                        "invoice_number": inv["invoice_number"],
+                        "invoice_date": inv["invoice_date"],
+                        "payment_date": inv["payment_date"],
+                        "vendor_name": inv["vendor_name"],
+                        "gstin": inv["gstin"],
+                        "branch": inv["branch"],
+                        "state": inv["state"],
+                        "taxable_value": inv["taxable_value"],
+                        "cgst": inv["cgst"],
+                        "sgst": inv["sgst"],
+                        "igst": inv["igst"],
+                        "itc_blocked": inv["itc_blocked"],
+                        "has_file": parsed_res["store_file_bytes"] is not None,
+                        "eligible_itc": eligible,
+                        "ineligible_itc": ineligible,
+                        "financial_year": fy,
+                        "month": m,
+                        "filename": filename,
+                        "username": session.get('username', ''),
+                        "ai_model_used": inv.get("_ai_model")
+                    })
+                except Exception as ins_err:
+                    cur.execute("ROLLBACK TO SAVEPOINT sp_inv")
+                    print(f"Insert error for {filename}: {ins_err}")
+                    results.append({
+                        "id": None,
+                        "is_duplicate": False,
+                        "invoice_number": "ERROR",
+                        "invoice_date": inv.get("invoice_date", "-"),
+                        "payment_date": None,
+                        "vendor_name": inv.get("vendor_name", f"Failed {filename}"),
+                        "gstin": inv.get("gstin", "N/A"),
+                        "branch": inv.get("branch", "Unassigned"),
+                        "state": inv.get("state", "Unassigned"),
+                        "taxable_value": 0.0,
+                        "cgst": 0.0,
+                        "sgst": 0.0,
+                        "igst": 0.0,
+                        "itc_blocked": False,
+                        "has_file": False,
+                        "eligible_itc": 0.0,
+                        "ineligible_itc": 0.0,
+                        "filename": filename,
+                        "message": f"Database save error: {ins_err}"
+                    })
+
         conn.commit()
         cur.close()
         conn.close()
@@ -1729,6 +1776,7 @@ def process_invoices():
 
     success_count = sum(1 for r in results if r.get("id") is not None)
     duplicate_count = sum(1 for r in results if r.get("is_duplicate"))
+    failed_count = len(results) - success_count - duplicate_count
 
     if success_count > 0 or duplicate_count > 0:
         scan_mode = "High Accuracy Scan" if high_accuracy else "AI Scan"
@@ -1743,7 +1791,8 @@ def process_invoices():
     return jsonify({
         "invoices": results,
         "success_count": success_count,
-        "duplicate_count": duplicate_count
+        "duplicate_count": duplicate_count,
+        "failed_count": failed_count
     })
 
 @app.route('/api/export-excel', methods=['POST'])

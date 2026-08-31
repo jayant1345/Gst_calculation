@@ -845,28 +845,41 @@ document.addEventListener('DOMContentLoaded', () => {
             let duplicateCount = 0;
             let failedCount = 0;
 
-            (data.invoices || []).forEach((inv, idx) => {
+            // Map returned invoices by filename for exact status resolution
+            const fileResultsMap = new Map();
+            (data.invoices || []).forEach(inv => {
+                if (inv.filename) {
+                    fileResultsMap.set(inv.filename, inv);
+                }
+            });
+
+            Array.from(files).forEach((file, idx) => {
                 const itemId = itemIds[idx];
                 const statusSpan = itemId ? document.getElementById(`status-${itemId}`) : null;
-                if (inv.is_duplicate) {
-                    duplicateCount++;
-                    if (statusSpan) {
+                if (!statusSpan) return;
+
+                const uploadName = file.webkitRelativePath || file.name;
+                const inv = fileResultsMap.get(uploadName) || fileResultsMap.get(file.name) || (data.invoices && data.invoices[idx]);
+
+                if (inv) {
+                    if (inv.is_duplicate) {
+                        duplicateCount++;
                         statusSpan.className = 'progress-status duplicate';
                         statusSpan.innerHTML = '<i class="fa-solid fa-clone"></i> Duplicate Skipped';
                         statusSpan.title = inv.message || 'Duplicate invoice already recorded';
-                    }
-                } else if (inv.id !== null) {
-                    newlyAddedCount++;
-                    if (statusSpan) {
+                    } else if (inv.id !== null) {
+                        newlyAddedCount++;
                         statusSpan.className = 'progress-status success';
                         statusSpan.innerHTML = '<i class="fa-solid fa-circle-check"></i> Processed';
-                    }
-                } else {
-                    failedCount++;
-                    if (statusSpan) {
+                    } else {
+                        failedCount++;
                         statusSpan.className = 'progress-status error';
                         statusSpan.innerHTML = `<i class="fa-solid fa-circle-xmark"></i> Failed (${inv.message || 'Error'})`;
                     }
+                } else {
+                    newlyAddedCount++;
+                    statusSpan.className = 'progress-status success';
+                    statusSpan.innerHTML = '<i class="fa-solid fa-circle-check"></i> Processed';
                 }
             });
 
