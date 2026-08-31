@@ -2032,6 +2032,7 @@ def clean_invoice_number(num):
 _GSTIN_EXPECT_DIGIT = {0, 1, 7, 8, 9, 10, 12}
 _GSTIN_EXPECT_LETTER = {2, 3, 4, 5, 6, 11, 13}
 _GSTIN_TO_DIGIT = {'O': '0', 'I': '1', 'L': '1', 'S': '5', 'B': '8', 'G': '6', 'Z': '2'}
+_GSTIN_TO_LETTER = {'0': 'O', '1': 'I', '5': 'S', '8': 'B', '6': 'G', '2': 'Z'}
 def normalize_gstin(raw, vendor_name=""):
     """Corrects OCR letter/digit confusions (O/0, I or L/1, S/5, B/8, G/6,
     Z/2) in a GSTIN by position, and checks the 91 master vendors if incomplete."""
