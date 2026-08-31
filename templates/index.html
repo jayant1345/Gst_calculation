@@ -112,40 +112,66 @@
                 </div>
             </div>
 
-            <!-- Dashboard Metric Cards -->
-            <section class="metrics-grid">
-                <div class="metric-card">
-                    <div class="card-icon blue"><i class="fa-solid fa-money-bill-wave"></i></div>
-                    <div class="card-data">
-                        <h3>Total Billing Amount</h3>
-                        <span class="metric-value" id="metric-total-billing">₹0.00</span>
+            <!-- Dashboard Metric Cards & Top Period Filter Bar -->
+            <div class="metrics-section-container">
+                <div class="metrics-header-bar">
+                    <div class="metrics-title-block">
+                        <h2><i class="fa-solid fa-chart-pie"></i> ITC Overview & Billing Summary</h2>
+                        <span class="metrics-period-subtitle" id="metrics-period-label"><i class="fa-solid fa-circle-check" style="color: var(--accent-green);"></i> Showing All Financial Years & Months</span>
+                    </div>
+                    <div class="period-filter-controls">
+                        <div class="filter-group">
+                            <label for="fy-filter"><i class="fa-solid fa-calendar"></i> FY</label>
+                            <select id="fy-filter" class="form-control period-select" title="Filter metrics and invoices by financial year">
+                                <option value="">All Years</option>
+                            </select>
+                        </div>
+                        <div class="filter-group">
+                            <label for="month-filter"><i class="fa-solid fa-calendar-days"></i> Month</label>
+                            <select id="month-filter" class="form-control period-select" title="Filter metrics and invoices by month">
+                                <option value="">All Months</option>
+                            </select>
+                        </div>
+                        <button type="button" class="btn btn-secondary btn-sm" id="btn-reset-period" title="Reset filter to All Years and All Months" style="display: none; padding: 6px 12px; font-size: 12.5px;">
+                            <i class="fa-solid fa-rotate-left"></i> Reset
+                        </button>
                     </div>
                 </div>
-                
-                <div class="metric-card">
-                    <div class="card-icon yellow"><i class="fa-solid fa-file-lines"></i></div>
-                    <div class="card-data">
-                        <h3>Total Taxable Value</h3>
-                        <span class="metric-value" id="metric-total-taxable">₹0.00</span>
+
+                <section class="metrics-grid">
+                    <div class="metric-card">
+                        <div class="card-icon blue"><i class="fa-solid fa-money-bill-wave"></i></div>
+                        <div class="card-data">
+                            <h3>Total Billing Amount</h3>
+                            <span class="metric-value" id="metric-total-billing">₹0.00</span>
+                        </div>
                     </div>
-                </div>
-                
-                <div class="metric-card eligible-card">
-                    <div class="card-icon green"><i class="fa-solid fa-circle-check"></i></div>
-                    <div class="card-data">
-                        <h3>Eligible ITC (50%)</h3>
-                        <span class="metric-value text-green" id="metric-eligible-itc">₹0.00</span>
+                    
+                    <div class="metric-card">
+                        <div class="card-icon yellow"><i class="fa-solid fa-file-lines"></i></div>
+                        <div class="card-data">
+                            <h3>Total Taxable Value</h3>
+                            <span class="metric-value" id="metric-total-taxable">₹0.00</span>
+                        </div>
                     </div>
-                </div>
-                
-                <div class="metric-card ineligible-card">
-                    <div class="card-icon red"><i class="fa-solid fa-circle-xmark"></i></div>
-                    <div class="card-data">
-                        <h3>Ineligible ITC (50%)</h3>
-                        <span class="metric-value text-red" id="metric-ineligible-itc">₹0.00</span>
+                    
+                    <div class="metric-card eligible-card">
+                        <div class="card-icon green"><i class="fa-solid fa-circle-check"></i></div>
+                        <div class="card-data">
+                            <h3>Eligible ITC (50%)</h3>
+                            <span class="metric-value text-green" id="metric-eligible-itc">₹0.00</span>
+                        </div>
                     </div>
-                </div>
-            </section>
+                    
+                    <div class="metric-card ineligible-card">
+                        <div class="card-icon red"><i class="fa-solid fa-circle-xmark"></i></div>
+                        <div class="card-data">
+                            <h3>Ineligible ITC (50%)</h3>
+                            <span class="metric-value text-red" id="metric-ineligible-itc">₹0.00</span>
+                        </div>
+                    </div>
+                </section>
+            </div>
 
             <!-- File Upload Area -->
             <section class="dashboard-panel upload-panel">
@@ -230,12 +256,6 @@
                     </div>
                     
                     <div class="toolbar-right">
-                        <select id="fy-filter" class="form-control" style="width: auto; padding: 8px 12px;" title="Filter by financial year">
-                            <option value="">All Years</option>
-                        </select>
-                        <select id="month-filter" class="form-control" style="width: auto; padding: 8px 12px;" title="Filter by month">
-                            <option value="">All Months</option>
-                        </select>
                         <div class="search-box">
                             <i class="fa-solid fa-magnifying-glass"></i>
                             <input type="text" id="table-search" placeholder="Search vendor, invoice no, GSTIN...">

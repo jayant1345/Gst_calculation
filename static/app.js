@@ -19,11 +19,13 @@ document.addEventListener('DOMContentLoaded', () => {
     const branchSuggestions = document.getElementById('branch-suggestions');
     const stateInput = document.getElementById('state-input');
     
-    // Metric Elements
+    // Metric & Top Period Elements
     const billingMetric = document.getElementById('metric-total-billing');
     const taxableMetric = document.getElementById('metric-total-taxable');
     const eligibleMetric = document.getElementById('metric-eligible-itc');
     const ineligibleMetric = document.getElementById('metric-ineligible-itc');
+    const metricsPeriodLabel = document.getElementById('metrics-period-label');
+    const btnResetPeriod = document.getElementById('btn-reset-period');
     
     // Button Elements
     const btnClearAll = document.getElementById('btn-clear-all');
@@ -885,8 +887,18 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // Sum totals and refresh dashboard widgets
+    // Sum totals and refresh dashboard widgets based on selected FY and Month
     function updateMetrics() {
+        const fyValue = fyFilter ? fyFilter.value : '';
+        const monthValue = monthFilter ? monthFilter.value : '';
+
+        // Filter invoices by the active FY and Month period
+        const periodInvoices = invoices.filter(inv => {
+            const matchesFy = !fyValue || inv.financial_year === fyValue;
+            const matchesMonth = !monthValue || inv.month === monthValue;
+            return matchesFy && matchesMonth;
+        });
+
         let totalTaxable = 0;
         let totalCgst = 0;
         let totalSgst = 0;
@@ -894,7 +906,7 @@ document.addEventListener('DOMContentLoaded', () => {
         let totalEligible = 0;
         let totalIneligible = 0;
 
-        invoices.forEach(inv => {
+        periodInvoices.forEach(inv => {
             totalTaxable += inv.taxable_value || 0;
             totalCgst += inv.cgst || 0;
             totalSgst += inv.sgst || 0;
@@ -914,10 +926,27 @@ document.addEventListener('DOMContentLoaded', () => {
             }).format(val);
         };
 
-        billingMetric.textContent = formatCurrency(totalBilling);
-        taxableMetric.textContent = formatCurrency(totalTaxable);
-        eligibleMetric.textContent = formatCurrency(totalEligible);
-        ineligibleMetric.textContent = formatCurrency(totalIneligible);
+        if (billingMetric) billingMetric.textContent = formatCurrency(totalBilling);
+        if (taxableMetric) taxableMetric.textContent = formatCurrency(totalTaxable);
+        if (eligibleMetric) eligibleMetric.textContent = formatCurrency(totalEligible);
+        if (ineligibleMetric) ineligibleMetric.textContent = formatCurrency(totalIneligible);
+
+        // Update period indicator subtitle
+        if (metricsPeriodLabel) {
+            if (fyValue && monthValue) {
+                metricsPeriodLabel.innerHTML = `<i class="fa-solid fa-filter" style="color: var(--accent-blue);"></i> Filtered: <strong>FY ${fyValue} &bull; ${monthValue}</strong> (${periodInvoices.length} bill${periodInvoices.length === 1 ? '' : 's'})`;
+            } else if (fyValue) {
+                metricsPeriodLabel.innerHTML = `<i class="fa-solid fa-filter" style="color: var(--accent-blue);"></i> Filtered: <strong>FY ${fyValue}</strong> (${periodInvoices.length} bill${periodInvoices.length === 1 ? '' : 's'})`;
+            } else if (monthValue) {
+                metricsPeriodLabel.innerHTML = `<i class="fa-solid fa-filter" style="color: var(--accent-blue);"></i> Filtered: <strong>${monthValue} (All Years)</strong> (${periodInvoices.length} bill${periodInvoices.length === 1 ? '' : 's'})`;
+            } else {
+                metricsPeriodLabel.innerHTML = `<i class="fa-solid fa-circle-check" style="color: var(--accent-green);"></i> Showing <strong>All Financial Years & Months</strong> (${invoices.length} total bill${invoices.length === 1 ? '' : 's'})`;
+            }
+        }
+
+        if (btnResetPeriod) {
+            btnResetPeriod.style.display = (fyValue || monthValue) ? 'inline-flex' : 'none';
+        }
     }
 
     // Search bar functionality
@@ -926,17 +955,34 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // FY filter dropdown -- changing the year narrows the month dropdown to
-    // just the months present within that year, then re-renders.
-    fyFilter.addEventListener('change', () => {
-        monthFilter.value = '';
-        populateFilters();
-        renderTable();
-    });
+    // just the months present within that year, then re-renders table and updates metrics.
+    if (fyFilter) {
+        fyFilter.addEventListener('change', () => {
+            if (monthFilter) monthFilter.value = '';
+            populateFilters();
+            renderTable();
+            updateMetrics();
+        });
+    }
 
-    // Month filter dropdown
-    monthFilter.addEventListener('change', () => {
-        renderTable();
-    });
+    // Month filter dropdown -- updates table and re-calculates top metrics
+    if (monthFilter) {
+        monthFilter.addEventListener('change', () => {
+            renderTable();
+            updateMetrics();
+        });
+    }
+
+    // Reset period button
+    if (btnResetPeriod) {
+        btnResetPeriod.addEventListener('click', () => {
+            if (fyFilter) fyFilter.value = '';
+            if (monthFilter) monthFilter.value = '';
+            populateFilters();
+            renderTable();
+            updateMetrics();
+        });
+    }
 
     // ---- Clear All (Password Protected & Admin Only) ----
     const clearAllOverlay = document.getElementById('clear-all-modal-overlay');

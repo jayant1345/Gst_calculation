@@ -316,6 +316,98 @@ body {
     color: #475569;
 }
 
+/* Metrics Section Header & Top Period Selector */
+.metrics-section-container {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.metrics-header-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    background: #ffffff;
+    border: 1px solid var(--border-color);
+    border-radius: 14px;
+    padding: 14px 20px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.03);
+    flex-wrap: wrap;
+}
+
+.metrics-title-block h2 {
+    font-family: var(--font-heading);
+    font-size: 16.5px;
+    font-weight: 700;
+    color: #0f172a;
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.metrics-title-block h2 i {
+    color: var(--accent-blue);
+}
+
+.metrics-period-subtitle {
+    font-size: 12.5px;
+    color: #64748b;
+    font-weight: 500;
+    margin-top: 3px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.period-filter-controls {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.period-filter-controls .filter-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.period-filter-controls .filter-group label {
+    font-size: 12.5px;
+    font-weight: 600;
+    color: #334155;
+    white-space: nowrap;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.period-filter-controls .filter-group label i {
+    color: var(--accent-blue);
+}
+
+.period-select {
+    min-width: 135px;
+    padding: 7px 12px;
+    font-size: 13px;
+    font-weight: 600;
+    border-radius: 8px;
+    border: 1.5px solid #cbd5e1;
+    background-color: #f8fafc;
+    color: #0f172a;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.period-select:focus {
+    outline: none;
+    border-color: var(--accent-blue);
+    background-color: #ffffff;
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
 /* Metrics Cards (Vibrant Gradients) */
 .metrics-grid {
     display: grid;
