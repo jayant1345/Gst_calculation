@@ -1,6 +1,9 @@
 document.addEventListener('DOMContentLoaded', () => {
     // State management
     let invoices = [];
+    let currentAuditFilter = 'all';
+    const columnFilters = {};
+    let activeFilterPopup = null;
     
     // DOM Elements
     const dropZone = document.getElementById('drop-zone');
@@ -54,11 +57,6 @@ document.addEventListener('DOMContentLoaded', () => {
     let pendingHighAccuracyFiles = null;
     let pendingHighAccuracyFolderGroups = null;
     let hideProgressTimeoutId = null;
-
-    // Load saved invoices from PostgreSQL on initial load
-    setupAuditPills();
-    setupColumnFilterTriggers();
-    loadInvoices();
 
     function loadInvoices() {
         fetch('/api/get-invoices')
@@ -1033,10 +1031,6 @@ document.addEventListener('DOMContentLoaded', () => {
         badge.textContent = API_MODEL_DISPLAY_NAMES[modelId] || modelId;
     }
 
-    // Current Active Filters for Quick Audit & Column Header Filtering
-    let currentAuditFilter = 'all';
-    const columnFilters = {}; // colKey -> '__ALL__' | '__BLANKS__' | '__NON_BLANKS__' | specificString
-
     function isFieldBlank(val) {
         if (val === null || val === undefined) return true;
         const str = String(val).trim().toUpperCase();
@@ -1106,8 +1100,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Active Column Header Filter Dropdown Popup
-    let activeFilterPopup = null;
-
     function closeColumnFilterPopup() {
         if (activeFilterPopup) {
             activeFilterPopup.remove();
@@ -1459,17 +1451,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const index = invoices.findIndex(i => i.id === invoiceId);
         if (index === -1) return;
-        const paymentDate = rowEl.querySelector('.field-payment-date').value.trim() || null;
-        const vendor = rowEl.querySelector('.field-vendor').value;
-        const taxable = parseFloat(rowEl.querySelector('.field-taxable').value) || 0;
-        const cgst = parseFloat(rowEl.querySelector('.field-cgst').value) || 0;
-        const sgst = parseFloat(rowEl.querySelector('.field-sgst').value) || 0;
-        const igst = parseFloat(rowEl.querySelector('.field-igst').value) || 0;
-        const itcBlocked = rowEl.querySelector('.field-itc-blocked').checked;
-
-        const totalGst = cgst + sgst + igst;
-        const eligible = itcBlocked ? 0 : totalGst * 0.5;
-        const ineligible = itcBlocked ? totalGst : totalGst * 0.5;
 
         // Update local state
         invoices[index] = {
@@ -2004,4 +1985,10 @@ document.addEventListener('DOMContentLoaded', () => {
             btnExportExcel.disabled = false;
         });
     });
+
+    // Initial Data & UI Setup
+    loadMasterData();
+    setupAuditPills();
+    setupColumnFilterTriggers();
+    loadInvoices();
 });
