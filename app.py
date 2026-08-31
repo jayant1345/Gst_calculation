@@ -2445,10 +2445,65 @@ def delete_gstr2b_entry():
         cur.close()
         conn.close()
 
-        log_activity(user_id, 'gstr2b_entry_deleted', f"Deleted GSTR-2B entry for '{supp_name}' (Invoice #{inv_no})", fy, m, 1)
-        return jsonify({"success": True, "message": "GSTR-2B entry deleted successfully"})
+@app.route('/api/gstr2b-status', methods=['GET'])
+@login_required
+def gstr2b_status():
+    """Returns a summary of all uploaded GSTR-2B batches (by State, Month, and FY)
+    with total entry counts and tax amounts so users can clearly see what's loaded."""
+    user_id = session['user_id']
+    is_admin = is_admin_user()
+    fy = request.args.get('financial_year', '').strip()
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        if is_admin:
+            if fy:
+                cur.execute('''
+                    SELECT state, month, financial_year, COUNT(*) as count,
+                           COALESCE(SUM(taxable_value), 0)::float as total_taxable,
+                           COALESCE(SUM(cgst + sgst + igst), 0)::float as total_gst
+                    FROM gstr2b_entries
+                    WHERE financial_year = %s
+                    GROUP BY state, month, financial_year
+                    ORDER BY state, month
+                ''', (fy,))
+            else:
+                cur.execute('''
+                    SELECT state, month, financial_year, COUNT(*) as count,
+                           COALESCE(SUM(taxable_value), 0)::float as total_taxable,
+                           COALESCE(SUM(cgst + sgst + igst), 0)::float as total_gst
+                    FROM gstr2b_entries
+                    GROUP BY state, month, financial_year
+                    ORDER BY financial_year, state, month
+                ''')
+        else:
+            if fy:
+                cur.execute('''
+                    SELECT state, month, financial_year, COUNT(*) as count,
+                           COALESCE(SUM(taxable_value), 0)::float as total_taxable,
+                           COALESCE(SUM(cgst + sgst + igst), 0)::float as total_gst
+                    FROM gstr2b_entries
+                    WHERE user_id = %s AND financial_year = %s
+                    GROUP BY state, month, financial_year
+                    ORDER BY state, month
+                ''', (user_id, fy))
+            else:
+                cur.execute('''
+                    SELECT state, month, financial_year, COUNT(*) as count,
+                           COALESCE(SUM(taxable_value), 0)::float as total_taxable,
+                           COALESCE(SUM(cgst + sgst + igst), 0)::float as total_gst
+                    FROM gstr2b_entries
+                    WHERE user_id = %s
+                    GROUP BY state, month, financial_year
+                    ORDER BY financial_year, state, month
+                ''', (user_id,))
+        rows = [dict(r) for r in cur.fetchall()]
+        cur.close()
+        conn.close()
+        return jsonify({"success": True, "batches": rows})
     except Exception as e:
-        print(f"Error deleting single GSTR-2B entry: {e}")
+        print(f"Error fetching GSTR-2B status: {e}")
         return jsonify({"error": str(e)}), 500
 
 def execute_reconciliation(fy, months, user_id, is_admin):

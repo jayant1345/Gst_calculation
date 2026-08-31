@@ -25,7 +25,10 @@ document.addEventListener('DOMContentLoaded', function() {
     const reconCountText = document.getElementById('recon-count');
 
     // Trigger reconciliation on filter parameter change
-    fySelect.addEventListener('change', fetchReconciliationData);
+    fySelect.addEventListener('change', () => {
+        loadGstr2bStatus();
+        fetchReconciliationData();
+    });
     monthChecks.forEach(cb => cb.addEventListener('change', fetchReconciliationData));
     reconSearch.addEventListener('input', applyFilters);
 
@@ -129,6 +132,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 .then(data => {
                     if (data.success) {
                         showUploadStatus(statusDiv, `Deleted ${data.count} ${panel.state} GSTR-2B entr${data.count === 1 ? 'y' : 'ies'} for ${month} (${fy}).`, 'success');
+                        loadGstr2bStatus();
                         fetchReconciliationData();
                         if (activeStage === 3) loadStage3Data();
                     } else {
@@ -142,6 +146,115 @@ document.addEventListener('DOMContentLoaded', function() {
             });
         }
     });
+
+    const ALL_MONTH_NAMES = ['April', 'May', 'June', 'July', 'August', 'September',
+        'October', 'November', 'December', 'January', 'February', 'March'];
+
+    function loadGstr2bStatus() {
+        const fy = fySelect ? fySelect.value : '';
+        if (!fy) return;
+
+        fetch(`/api/gstr2b-status?financial_year=${fy}`)
+            .then(res => res.json())
+            .then(data => {
+                const batches = data.batches || [];
+                const gjBatches = batches.filter(b => b.state === 'Gujarat');
+                const mhBatches = batches.filter(b => b.state === 'Maharashtra');
+
+                updateStateGstr2bPanel('Gujarat', 'gj', gjBatches);
+                updateStateGstr2bPanel('Maharashtra', 'mh', mhBatches);
+                updateMonthPillsWithGstr2b(batches);
+            })
+            .catch(err => console.error('Error fetching GSTR-2B status:', err));
+    }
+
+    function updateStateGstr2bPanel(stateName, suffix, stateBatches) {
+        const monthSelect = document.getElementById(`upload-month-${suffix}`);
+        const summaryContainer = document.getElementById(`gstr2b-loaded-summary-${suffix}`);
+        const countBadge = document.getElementById(`gstr2b-badge-count-${suffix}`);
+        if (!monthSelect || !summaryContainer) return;
+
+        const batchMap = new Map();
+        stateBatches.forEach(b => batchMap.set(b.month, b));
+
+        // 1. Update month dropdown options with clear indicators
+        const currentVal = monthSelect.value;
+        let optionsHtml = '<option value="">-- Select Month --</option>';
+        ALL_MONTH_NAMES.forEach(m => {
+            const batch = batchMap.get(m);
+            if (batch && batch.count > 0) {
+                optionsHtml += `<option value="${m}" style="font-weight: 700; color: #047857;">${m} (✓ ${batch.count} bills loaded)</option>`;
+            } else {
+                optionsHtml += `<option value="${m}">${m}</option>`;
+            }
+        });
+        monthSelect.innerHTML = optionsHtml;
+        monthSelect.value = currentVal;
+
+        // 2. Update summary badges list
+        if (stateBatches.length === 0) {
+            if (countBadge) countBadge.textContent = 'No Data';
+            summaryContainer.innerHTML = `<span style="font-size: 12px; color: #94a3b8; font-style: italic;">No GSTR-2B files uploaded for ${stateName} in FY ${fySelect.value}</span>`;
+        } else {
+            const totalCount = stateBatches.reduce((acc, b) => acc + (b.count || 0), 0);
+            if (countBadge) countBadge.textContent = `${stateBatches.length} Month${stateBatches.length === 1 ? '' : 's'} (${totalCount} bills)`;
+            
+            summaryContainer.innerHTML = stateBatches.map(b => `
+                <div class="gstr2b-batch-chip" style="display: inline-flex; align-items: center; gap: 6px; background: #f0fdf4; border: 1px solid #bbf7d0; color: #166534; padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 600;">
+                    <i class="fa-solid fa-circle-check" style="color: #16a34a; font-size: 10px;"></i>
+                    <span><strong>${b.month}:</strong> ${b.count} bill${b.count === 1 ? '' : 's'} (₹${(b.total_gst || 0).toFixed(2)})</span>
+                    <button type="button" class="btn-quick-del-gstr2b" data-state="${stateName}" data-month="${b.month}" title="Delete ${b.month} GSTR-2B data" style="background: none; border: none; color: #dc2626; cursor: pointer; padding: 0 2px; margin-left: 2px; font-size: 12px;">
+                        <i class="fa-solid fa-xmark"></i>
+                    </button>
+                </div>
+            `).join('');
+
+            // Attach quick delete listeners
+            summaryContainer.querySelectorAll('.btn-quick-del-gstr2b').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const state = btn.dataset.state;
+                    const month = btn.dataset.month;
+                    const fy = fySelect.value;
+                    if (confirm(`Delete uploaded GSTR-2B data for ${state} - ${month} (${fy})?`)) {
+                        fetch('/api/delete-gstr2b', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ financial_year: fy, month: month, state: state })
+                        })
+                        .then(res => res.json())
+                        .then(data => {
+                            if (data.success) {
+                                loadGstr2bStatus();
+                                fetchReconciliationData();
+                                if (activeStage === 3) loadStage3Data();
+                            } else {
+                                alert(data.error || 'Failed to delete GSTR-2B data.');
+                            }
+                        })
+                        .catch(err => {
+                            console.error('Error deleting GSTR-2B:', err);
+                            alert('Network error while deleting GSTR-2B data.');
+                        });
+                    }
+                });
+            });
+        }
+    }
+
+    function updateMonthPillsWithGstr2b(batches) {
+        const loadedMonths = new Set(batches.map(b => b.month));
+        monthChecks.forEach(cb => {
+            const pillSpan = cb.parentElement.querySelector('span');
+            if (!pillSpan) return;
+            const originalShort = cb.value.slice(0, 3);
+            if (loadedMonths.has(cb.value)) {
+                pillSpan.innerHTML = `${originalShort} <span style="display: inline-block; width: 6px; height: 6px; background-color: #22c55e; border-radius: 50%; margin-left: 2px;" title="GSTR-2B Uploaded for ${cb.value}"></span>`;
+            } else {
+                pillSpan.textContent = originalShort;
+            }
+        });
+    }
 
     // Handle GSTR-2B Upload for one state's panel
     function handleGstr2bUpload(file, state, monthSelect, statusDiv) {
@@ -174,6 +287,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (matchingCheckbox && !matchingCheckbox.checked) {
                     matchingCheckbox.checked = true;
                 }
+                loadGstr2bStatus();
                 fetchReconciliationData();
             } else {
                 showUploadStatus(statusDiv, data.error || 'Failed to upload GSTR-2B file.', 'error');
@@ -889,5 +1003,9 @@ document.addEventListener('DOMContentLoaded', function() {
             });
         });
     }
+
+    // Initial load on page ready
+    loadGstr2bStatus();
+    fetchReconciliationData();
 });
 
