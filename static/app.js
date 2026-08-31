@@ -563,6 +563,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // ai_model_used, so the sidebar badge reads clearly instead of showing
     // an internal id like "x-ai/grok-4.6" or "claude-opus-5" verbatim.
     const API_MODEL_DISPLAY_NAMES = {
+        'google/gemini-2.5-flash': 'Gemini 2.5 Flash (Ultra-Fast)',
         'claude-sonnet-4-6': 'Claude Sonnet 4.6',
         'x-ai/grok-4.6': 'Grok 4.6 (OpenRouter)',
         'claude-opus-5': 'Claude Opus 5 (Fallback)'
