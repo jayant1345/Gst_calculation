@@ -2032,23 +2032,35 @@ def clean_invoice_number(num):
 _GSTIN_EXPECT_DIGIT = {0, 1, 7, 8, 9, 10, 12}
 _GSTIN_EXPECT_LETTER = {2, 3, 4, 5, 6, 11, 13}
 _GSTIN_TO_DIGIT = {'O': '0', 'I': '1', 'L': '1', 'S': '5', 'B': '8', 'G': '6', 'Z': '2'}
-_GSTIN_TO_LETTER = {'0': 'O', '1': 'I', '5': 'S', '8': 'B', '6': 'G', '2': 'Z'}
-
-def normalize_gstin(raw):
+def normalize_gstin(raw, vendor_name=""):
     """Corrects OCR letter/digit confusions (O/0, I or L/1, S/5, B/8, G/6,
-    Z/2) in a GSTIN by position, using the fixed format above."""
-    if not raw or len(raw) != 15:
-        return raw
-    chars = list(raw.strip().upper())
-    for i in _GSTIN_EXPECT_DIGIT:
-        c = chars[i]
-        if not c.isdigit() and c in _GSTIN_TO_DIGIT:
-            chars[i] = _GSTIN_TO_DIGIT[c]
-    for i in _GSTIN_EXPECT_LETTER:
-        c = chars[i]
-        if not c.isalpha() and c in _GSTIN_TO_LETTER:
-            chars[i] = _GSTIN_TO_LETTER[c]
-    return ''.join(chars)
+    Z/2) in a GSTIN by position, and checks the 91 master vendors if incomplete."""
+    if not raw or str(raw).strip() in ('', 'N/A', '-', 'None', 'null'):
+        if vendor_name:
+            mv = match_master_vendor(vendor_name)
+            if mv:
+                return mv['gstin']
+        return 'N/A'
+
+    cleaned = re.sub(r'[^A-Za-z0-9]', '', str(raw)).strip().upper()
+    if len(cleaned) == 15:
+        chars = list(cleaned)
+        for i in _GSTIN_EXPECT_DIGIT:
+            c = chars[i]
+            if not c.isdigit() and c in _GSTIN_TO_DIGIT:
+                chars[i] = _GSTIN_TO_DIGIT[c]
+        for i in _GSTIN_EXPECT_LETTER:
+            c = chars[i]
+            if not c.isalpha() and c in _GSTIN_TO_LETTER:
+                chars[i] = _GSTIN_TO_LETTER[c]
+        return ''.join(chars)
+
+    if vendor_name or cleaned:
+        mv = match_master_vendor(vendor_name, cleaned)
+        if mv:
+            return mv['gstin']
+
+    return cleaned if cleaned else 'N/A'
 
 def levenshtein(a, b):
     """Edit distance between two strings, used to spot a likely OCR misread
