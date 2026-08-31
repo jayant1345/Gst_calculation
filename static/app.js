@@ -16,7 +16,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const monthFilter = document.getElementById('month-filter');
     const invoiceCountText = document.getElementById('invoice-count');
     const branchInput = document.getElementById('branch-input');
-    const branchSuggestions = document.getElementById('branch-suggestions');
     const stateInput = document.getElementById('state-input');
     
     // Metric & Top Period Elements
@@ -1031,12 +1030,6 @@ document.addEventListener('DOMContentLoaded', () => {
         badge.textContent = API_MODEL_DISPLAY_NAMES[modelId] || modelId;
     }
 
-    // Populate the branch datalist with previously used branch names
-    function updateBranchSuggestions() {
-        const branches = [...new Set(invoices.map(inv => inv.branch).filter(b => b && b !== 'Unassigned'))].sort();
-        branchSuggestions.innerHTML = branches.map(b => `<option value="${b}"></option>`).join('');
-    }
-
     // Shared by the table render and the Excel export, so "export" always
     // means "export exactly what's currently shown", not everything ever
     // uploaded.
@@ -1090,7 +1083,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     <option value="">-- Select --</option>
                     ${stateOptions.map(s => `<option value="${s}" ${s === stateVal ? 'selected' : ''}>${s}</option>`).join('')}
                 </select></td>
-                <td><input type="text" class="field-branch" list="branch-suggestions" value="${inv.branch || ''}"></td>
+                <td><input type="text" class="field-branch" value="${inv.branch || ''}"></td>
                 <td><input type="text" class="field-gstin" value="${inv.gstin || ''}"></td>
                 <td><input type="text" class="field-number" value="${inv.invoice_number || ''}"></td>
                 <td><input type="text" class="field-date" value="${inv.invoice_date || ''}"></td>
