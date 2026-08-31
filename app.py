@@ -30,16 +30,24 @@ ctx.verify_mode = ssl.CERT_NONE
 # Read API Key
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-AI_MODEL_NAME = "claude-sonnet-4-6"
 
 # Ultra-fast high-accuracy vision model via OpenRouter for OCR scanning.
 # google/gemini-2.5-flash achieves ~1.5s response times with state-of-the-art
 # OCR resolution and exact 15-character GSTIN pattern precision.
 AI_VISION_MODEL_NAME = "google/gemini-2.5-flash"
+AI_MODEL_NAME = "google/gemini-2.5-flash"
+AI_MODEL_DISPLAY_NAME = "Gemini 2.5 Flash (Ultra-Fast)"
 
 # Reliable fallback vision models if primary provider is unreachable.
 AI_VISION_FALLBACK_MODEL_NAME = "x-ai/grok-4.6"
 AI_VISION_SECONDARY_FALLBACK = "claude-opus-5"
+
+@app.context_processor
+def inject_global_template_vars():
+    return {
+        'api_key_configured': bool(ANTHROPIC_API_KEY or OPENROUTER_API_KEY),
+        'ai_model_name': AI_MODEL_DISPLAY_NAME
+    }
 
 def render_pdf_page_to_png_base64(file_bytes, page_index=0, dpi=150):
     """Renders one PDF page to a base64 JPEG at an optimized 150 DPI and 85% quality,
@@ -690,7 +698,7 @@ def parse_excel_register(file_bytes):
 @app.route('/')
 @login_required
 def home():
-    return render_template('index.html', is_admin=is_admin_user(), api_key_configured=bool(ANTHROPIC_API_KEY and OPENROUTER_API_KEY), ai_model_name=AI_MODEL_NAME)
+    return render_template('index.html', is_admin=is_admin_user(), api_key_configured=bool(ANTHROPIC_API_KEY or OPENROUTER_API_KEY), ai_model_name=AI_MODEL_DISPLAY_NAME)
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -807,7 +815,7 @@ def settings():
             except Exception as e:
                 error = f"Database connection error: {e}"
 
-    return render_template('settings.html', error=error, is_admin=is_admin_user(), api_key_configured=bool(ANTHROPIC_API_KEY and OPENROUTER_API_KEY), ai_model_name=AI_MODEL_NAME)
+    return render_template('settings.html', error=error, is_admin=is_admin_user(), api_key_configured=bool(ANTHROPIC_API_KEY or OPENROUTER_API_KEY), ai_model_name=AI_MODEL_DISPLAY_NAME)
 
 # Admin User Management Routes
 @app.route('/admin/users', methods=['GET'])
@@ -835,7 +843,7 @@ def admin_users():
     except Exception as e:
         error = f"Database connection error: {e}"
 
-    return render_template('users.html', users=users, error=error, is_admin=True, api_key_configured=bool(ANTHROPIC_API_KEY and OPENROUTER_API_KEY), ai_model_name=AI_MODEL_NAME)
+    return render_template('users.html', users=users, error=error, is_admin=True, api_key_configured=bool(ANTHROPIC_API_KEY or OPENROUTER_API_KEY), ai_model_name=AI_MODEL_DISPLAY_NAME)
 
 @app.route('/admin/users/create', methods=['POST'])
 @admin_required
@@ -2100,7 +2108,7 @@ def parse_gstr2b_excel(file_bytes):
 @login_required
 def reconciliation():
     current_fy, _ = _dt_to_fy_and_month(datetime.datetime.now())
-    return render_template('reconciliation.html', is_admin=is_admin_user(), api_key_configured=bool(ANTHROPIC_API_KEY and OPENROUTER_API_KEY), ai_model_name=AI_MODEL_NAME, current_fy=current_fy)
+    return render_template('reconciliation.html', is_admin=is_admin_user(), api_key_configured=bool(ANTHROPIC_API_KEY or OPENROUTER_API_KEY), ai_model_name=AI_MODEL_DISPLAY_NAME, current_fy=current_fy)
 
 @app.route('/api/export-annual-report', methods=['GET'])
 @login_required
@@ -2978,7 +2986,7 @@ def export_vendor_discrepancies():
 @app.route('/filing-history')
 @login_required
 def filing_history():
-    return render_template('filing_history.html', is_admin=is_admin_user(), api_key_configured=bool(ANTHROPIC_API_KEY and OPENROUTER_API_KEY), ai_model_name=AI_MODEL_NAME)
+    return render_template('filing_history.html', is_admin=is_admin_user(), api_key_configured=bool(ANTHROPIC_API_KEY or OPENROUTER_API_KEY), ai_model_name=AI_MODEL_DISPLAY_NAME)
 
 @app.route('/api/filing-history', methods=['GET'])
 @login_required
