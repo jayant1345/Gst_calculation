@@ -698,6 +698,12 @@ body {
     color: #991b1b;
 }
 
+.upload-summary-card.duplicate-warning {
+    background-color: #fffbeb;
+    border-color: #fde68a;
+    color: #92400e;
+}
+
 .progress-list {
     display: flex;
     flex-direction: column;
@@ -745,6 +751,7 @@ body {
 
 .progress-status.success { color: var(--accent-green); }
 .progress-status.error { color: var(--accent-red); }
+.progress-status.duplicate { color: #b45309; }
 
 /* Table Toolbar */
 .panel-toolbar {

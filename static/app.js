@@ -377,6 +377,7 @@ document.addEventListener('DOMContentLoaded', () => {
             processedFiles: 0,
             successFiles: 0,
             errorFiles: 0,
+            duplicateFiles: 0,
             itemIndexCounter: 0
         };
         updateProgressBar();
@@ -397,8 +398,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
                 if (uploadSummaryBanner && summaryBannerText) {
                     const errCount = globalBatchState.errorFiles;
-                    uploadSummaryBanner.className = errCount > 0 ? 'upload-summary-card error' : 'upload-summary-card';
-                    summaryBannerText.innerHTML = `<strong><i class="fa-solid ${errCount > 0 ? 'fa-triangle-exclamation' : 'fa-circle-check'}"></i> Upload Finished:</strong> Processed ${globalBatchState.processedFiles} bill(s) across ${totalBranches} branch(es) in <strong>${elapsedSec}s</strong> (${avgPerBill}s/bill, ${globalBatchState.successFiles} succeeded${errCount > 0 ? `, ${errCount} failed` : ''}).`;
+                    const dupCount = globalBatchState.duplicateFiles || 0;
+                    uploadSummaryBanner.className = errCount > 0 ? 'upload-summary-card error' : (globalBatchState.successFiles === 0 && dupCount > 0 ? 'upload-summary-card duplicate-warning' : 'upload-summary-card');
+                    let summaryMsg = `<strong>Upload Finished:</strong> Processed ${globalBatchState.processedFiles} bill(s) across ${totalBranches} branch(es) in <strong>${elapsedSec}s</strong> (${avgPerBill}s/bill) &mdash; ${globalBatchState.successFiles} added`;
+                    if (dupCount > 0) summaryMsg += `, <span style="color: #b45309; font-weight: 600;">${dupCount} duplicate(s) skipped</span>`;
+                    if (errCount > 0) summaryMsg += `, <span style="color: #b91c1c; font-weight: 600;">${errCount} failed</span>`;
+                    summaryMsg += '.';
+                    summaryBannerText.innerHTML = summaryMsg;
                     uploadSummaryBanner.style.display = 'flex';
                 }
 
@@ -468,7 +474,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    // File Upload handling with real-time progress updates & live scanning timer
+    // File Upload handling with real-time progress updates, live timer & duplicate protection
     function handleFileUpload(files, options = {}) {
         if (hideProgressTimeoutId) {
             clearTimeout(hideProgressTimeoutId);
@@ -484,6 +490,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 processedFiles: 0,
                 successFiles: 0,
                 errorFiles: 0,
+                duplicateFiles: 0,
                 itemIndexCounter: 0
             };
             updateProgressBar();
@@ -547,29 +554,53 @@ document.addEventListener('DOMContentLoaded', () => {
             return response.json();
         })
         .then(data => {
-            itemIds.forEach(itemId => {
-                const statusSpan = document.getElementById(`status-${itemId}`);
-                if (statusSpan) {
-                    statusSpan.className = 'progress-status success';
-                    statusSpan.innerHTML = '<i class="fa-solid fa-circle-check"></i> Processed';
+            let newlyAddedCount = 0;
+            let duplicateCount = 0;
+            let failedCount = 0;
+
+            (data.invoices || []).forEach((inv, idx) => {
+                const itemId = itemIds[idx];
+                const statusSpan = itemId ? document.getElementById(`status-${itemId}`) : null;
+                if (inv.is_duplicate) {
+                    duplicateCount++;
+                    if (statusSpan) {
+                        statusSpan.className = 'progress-status duplicate';
+                        statusSpan.innerHTML = '<i class="fa-solid fa-clone"></i> Duplicate Skipped';
+                        statusSpan.title = inv.message || 'Duplicate invoice already recorded';
+                    }
+                } else if (inv.id !== null) {
+                    newlyAddedCount++;
+                    if (statusSpan) {
+                        statusSpan.className = 'progress-status success';
+                        statusSpan.innerHTML = '<i class="fa-solid fa-circle-check"></i> Processed';
+                    }
+                } else {
+                    failedCount++;
+                    if (statusSpan) {
+                        statusSpan.className = 'progress-status error';
+                        statusSpan.innerHTML = `<i class="fa-solid fa-circle-xmark"></i> Failed (${inv.message || 'Error'})`;
+                    }
                 }
             });
 
             globalBatchState.processedFiles += files.length;
-            globalBatchState.successFiles += files.length;
+            globalBatchState.successFiles += newlyAddedCount;
+            globalBatchState.errorFiles += failedCount;
+            globalBatchState.duplicateFiles = (globalBatchState.duplicateFiles || 0) + duplicateCount;
             updateProgressBar();
 
             // Add newly saved invoices to state
             if (data.invoices && data.invoices.length > 0) {
                 const validInvoices = data.invoices.filter(inv => inv.id !== null);
-                invoices = [...validInvoices, ...invoices];
-                populateFilters();
-                renderTable();
-                updateMetrics();
-                updateBranchSuggestions();
+                if (validInvoices.length > 0) {
+                    invoices = [...validInvoices, ...invoices];
+                    populateFilters();
+                    renderTable();
+                    updateMetrics();
+                    updateBranchSuggestions();
+                }
 
-                // Reflect which AI model actually handled the most recent
-                // scan in this batch
+                // Reflect which AI model actually handled the scan
                 const modelUsed = [...data.invoices].reverse().map(inv => inv.ai_model_used).find(Boolean);
                 if (modelUsed) updateApiModelBadge(modelUsed);
             }
@@ -581,8 +612,20 @@ document.addEventListener('DOMContentLoaded', () => {
                     progressHeading.innerHTML = `<i class="fa-solid fa-circle-check" style="color: var(--accent-green);"></i> Upload Complete • ${elapsedSec}s`;
                 }
                 if (uploadSummaryBanner && summaryBannerText) {
-                    summaryBannerText.innerHTML = `<strong><i class="fa-solid fa-circle-check"></i> Upload Successful:</strong> Processed ${files.length} file(s) in <strong>${elapsedSec}s</strong> (${avgPerBill}s/bill).`;
-                    uploadSummaryBanner.className = 'upload-summary-card';
+                    if (newlyAddedCount > 0 && duplicateCount === 0 && failedCount === 0) {
+                        summaryBannerText.innerHTML = `<strong><i class="fa-solid fa-circle-check"></i> Upload Successful:</strong> Processed ${files.length} file(s) in <strong>${elapsedSec}s</strong> (${avgPerBill}s/bill).`;
+                        uploadSummaryBanner.className = 'upload-summary-card';
+                    } else if (newlyAddedCount === 0 && duplicateCount > 0) {
+                        summaryBannerText.innerHTML = `<strong><i class="fa-solid fa-clone"></i> Duplicates Skipped:</strong> All ${duplicateCount} bill(s) already exist in your records and were not uploaded.`;
+                        uploadSummaryBanner.className = 'upload-summary-card duplicate-warning';
+                    } else {
+                        let summaryMsg = `<strong>Upload Finished:</strong> Processed ${files.length} file(s) in <strong>${elapsedSec}s</strong> (${avgPerBill}s/bill) &mdash; ${newlyAddedCount} added`;
+                        if (duplicateCount > 0) summaryMsg += `, <span style="color: #b45309; font-weight: 600;">${duplicateCount} duplicate(s) skipped</span>`;
+                        if (failedCount > 0) summaryMsg += `, <span style="color: #b91c1c; font-weight: 600;">${failedCount} failed</span>`;
+                        summaryMsg += '.';
+                        summaryBannerText.innerHTML = summaryMsg;
+                        uploadSummaryBanner.className = failedCount > 0 ? 'upload-summary-card error' : 'upload-summary-card';
+                    }
                     uploadSummaryBanner.style.display = 'flex';
                 }
             }

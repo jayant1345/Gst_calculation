@@ -988,6 +988,76 @@ def get_invoices():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+def find_duplicate_invoice(cur, user_id, gstin, inv_num, vendor_name, inv_date, taxable_value, financial_year=None, exclude_id=None):
+    """Checks if a matching invoice already exists in the database for the user.
+    Returns (duplicate_id, reason_str) or (None, None)."""
+    clean_num = (inv_num or '').strip()
+    clean_gstin = normalize_gstin(gstin or 'N/A')
+    clean_vendor = (vendor_name or '').strip()
+
+    # 1. Primary rule: Same user, valid GSTIN, and recognized Invoice Number
+    if clean_gstin != 'N/A' and clean_num not in ('', 'N/A', '-'):
+        query = '''
+            SELECT id, invoice_number, vendor_name, invoice_date, financial_year
+            FROM invoices
+            WHERE user_id = %s
+              AND UPPER(TRIM(gstin)) = UPPER(%s)
+              AND UPPER(TRIM(invoice_number)) = UPPER(%s)
+        '''
+        params = [user_id, clean_gstin, clean_num]
+        if financial_year:
+            query += ' AND (financial_year IS NULL OR financial_year = %s)'
+            params.append(financial_year)
+        if exclude_id:
+            query += ' AND id != %s'
+            params.append(exclude_id)
+        cur.execute(query, params)
+        row = cur.fetchone()
+        if row:
+            return row[0], f"Invoice #{row[1]} already exists for vendor GSTIN {clean_gstin}"
+
+    # 2. Secondary rule: Same user, recognized Vendor Name and Invoice Number
+    if clean_vendor not in ('', 'Unknown Vendor') and clean_num not in ('', 'N/A', '-'):
+        query = '''
+            SELECT id, invoice_number, vendor_name, invoice_date, financial_year
+            FROM invoices
+            WHERE user_id = %s
+              AND UPPER(TRIM(vendor_name)) = UPPER(%s)
+              AND UPPER(TRIM(invoice_number)) = UPPER(%s)
+        '''
+        params = [user_id, clean_vendor, clean_num]
+        if financial_year:
+            query += ' AND (financial_year IS NULL OR financial_year = %s)'
+            params.append(financial_year)
+        if exclude_id:
+            query += ' AND id != %s'
+            params.append(exclude_id)
+        cur.execute(query, params)
+        row = cur.fetchone()
+        if row:
+            return row[0], f"Invoice #{row[1]} already exists for vendor '{row[2]}'"
+
+    # 3. Rule for bills without invoice number: match identical vendor, date, and taxable amount
+    if clean_num in ('', 'N/A', '-') and clean_vendor not in ('', 'Unknown Vendor') and inv_date not in ('', 'N/A', '-'):
+        query = '''
+            SELECT id, invoice_number, vendor_name, invoice_date, taxable_value
+            FROM invoices
+            WHERE user_id = %s
+              AND UPPER(TRIM(vendor_name)) = UPPER(%s)
+              AND invoice_date = %s
+              AND taxable_value = %s
+        '''
+        params = [user_id, clean_vendor, inv_date, float(taxable_value or 0.0)]
+        if exclude_id:
+            query += ' AND id != %s'
+            params.append(exclude_id)
+        cur.execute(query, params)
+        row = cur.fetchone()
+        if row:
+            return row[0], f"Bill from '{row[2]}' dated {inv_date} for amount ₹{taxable_value} already recorded"
+
+    return None, None
+
 @app.route('/api/save-invoice', methods=['POST'])
 @login_required
 def save_invoice():
@@ -1028,6 +1098,13 @@ def save_invoice():
         cur = conn.cursor()
 
         if db_id:
+            # Check if updated values duplicate another existing invoice
+            dup_id, dup_reason = find_duplicate_invoice(cur, user_id, gstin, inv_num, vendor, inv_date, taxable, fy, exclude_id=db_id)
+            if dup_id:
+                cur.close()
+                conn.close()
+                return jsonify({"error": f"Cannot update: {dup_reason} (Bill ID #{dup_id})."}), 409
+
             # Update existing invoice (admins may edit any user's invoice)
             if is_admin:
                 cur.execute('''
@@ -1047,6 +1124,13 @@ def save_invoice():
                 ''', (inv_num, inv_date, payment_date, vendor, gstin, branch, state, taxable, cgst, sgst, igst, itc_blocked, eligible, ineligible, fy, m, db_id, user_id))
             ret_id = db_id
         else:
+            # Check if new invoice duplicates an existing record
+            dup_id, dup_reason = find_duplicate_invoice(cur, user_id, gstin, inv_num, vendor, inv_date, taxable, fy)
+            if dup_id:
+                cur.close()
+                conn.close()
+                return jsonify({"error": f"Duplicate bill detected: {dup_reason} (Bill ID #{dup_id})."}), 409
+
             # Insert new invoice
             cur.execute('''
                 INSERT INTO invoices (user_id, invoice_number, invoice_date, payment_date, vendor_name, gstin, branch, state, taxable_value, cgst, sgst, igst, itc_blocked, eligible_itc, ineligible_itc, financial_year, month)
@@ -1442,8 +1526,9 @@ def process_invoices():
             idx, res = future.result()
             file_results[idx] = res
 
-    # Save parsed records to PostgreSQL in a single clean transaction
+    # Save parsed records to PostgreSQL in a single clean transaction, skipping duplicates
     results = []
+    seen_in_batch = set()
     try:
         conn = get_db_connection()
         cur = conn.cursor()
@@ -1453,6 +1538,7 @@ def process_invoices():
             if parsed_res.get("error") or not parsed_res.get("parsed_list"):
                 results.append({
                     "id": None,
+                    "is_duplicate": False,
                     "invoice_number": "ERROR",
                     "invoice_date": "-",
                     "payment_date": None,
@@ -1468,7 +1554,8 @@ def process_invoices():
                     "has_file": False,
                     "eligible_itc": 0.0,
                     "ineligible_itc": 0.0,
-                    "filename": filename
+                    "filename": filename,
+                    "message": parsed_res.get("error") or "No readable invoice data"
                 })
                 continue
 
@@ -1497,6 +1584,53 @@ def process_invoices():
 
                 fy, m = parse_date_to_fy_and_month(inv["invoice_date"])
 
+                # Check duplicate against existing records in PostgreSQL
+                dup_id, dup_reason = find_duplicate_invoice(
+                    cur, user_id, inv["gstin"], inv["invoice_number"],
+                    inv["vendor_name"], inv["invoice_date"], inv["taxable_value"], fy
+                )
+
+                # Check duplicate within the same uploaded batch
+                batch_key = (
+                    (inv["gstin"].upper() if inv["gstin"] != "N/A" else inv["vendor_name"].upper()),
+                    (inv["invoice_number"].upper() if inv["invoice_number"] != "N/A" else f"{inv['invoice_date']}_{inv['taxable_value']}")
+                )
+                if not dup_id:
+                    if batch_key in seen_in_batch:
+                        dup_id = "BATCH_DUP"
+                        dup_reason = f"Duplicate bill within the same uploaded batch for {inv['vendor_name']} #{inv['invoice_number']}"
+                    else:
+                        seen_in_batch.add(batch_key)
+
+                if dup_id:
+                    # Duplicate detected: skip database insertion and flag as duplicate
+                    results.append({
+                        "id": None,
+                        "is_duplicate": True,
+                        "duplicate_of_id": dup_id if isinstance(dup_id, int) else None,
+                        "invoice_number": inv["invoice_number"],
+                        "invoice_date": inv["invoice_date"],
+                        "payment_date": inv["payment_date"],
+                        "vendor_name": inv["vendor_name"],
+                        "gstin": inv["gstin"],
+                        "branch": inv["branch"],
+                        "state": inv["state"],
+                        "taxable_value": inv["taxable_value"],
+                        "cgst": inv["cgst"],
+                        "sgst": inv["sgst"],
+                        "igst": inv["igst"],
+                        "itc_blocked": inv["itc_blocked"],
+                        "has_file": False,
+                        "eligible_itc": eligible,
+                        "ineligible_itc": ineligible,
+                        "financial_year": fy,
+                        "month": m,
+                        "filename": filename,
+                        "ai_model_used": inv.get("_ai_model"),
+                        "message": dup_reason
+                    })
+                    continue
+
                 cur.execute('''
                     INSERT INTO invoices (user_id, invoice_number, invoice_date, payment_date, vendor_name, gstin, branch, state, taxable_value, cgst, sgst, igst, itc_blocked, eligible_itc, ineligible_itc, file_data, file_mime_type, file_name, financial_year, month)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
@@ -1509,6 +1643,7 @@ def process_invoices():
                 db_id = cur.fetchone()[0]
                 results.append({
                     "id": db_id,
+                    "is_duplicate": False,
                     "invoice_number": inv["invoice_number"],
                     "invoice_date": inv["invoice_date"],
                     "payment_date": inv["payment_date"],
@@ -1536,12 +1671,23 @@ def process_invoices():
         print(f"Database error during batch invoice insert: {e}")
 
     success_count = sum(1 for r in results if r.get("id") is not None)
-    if success_count > 0:
+    duplicate_count = sum(1 for r in results if r.get("is_duplicate"))
+
+    if success_count > 0 or duplicate_count > 0:
         scan_mode = "High Accuracy Scan" if high_accuracy else "AI Scan"
-        desc = f'Uploaded {success_count} bill(s) via {scan_mode}' + (f' for branch {batch_branch}' if batch_branch else '')
+        desc = f'Processed {len(results)} bill(s): {success_count} uploaded'
+        if duplicate_count > 0:
+            desc += f', {duplicate_count} duplicate(s) skipped'
+        if batch_branch:
+            desc += f' for branch {batch_branch}'
+        desc += f' via {scan_mode}'
         log_activity(user_id, 'bill_upload', desc, record_count=success_count)
 
-    return jsonify({"invoices": results})
+    return jsonify({
+        "invoices": results,
+        "success_count": success_count,
+        "duplicate_count": duplicate_count
+    })
 
 @app.route('/api/export-excel', methods=['POST'])
 @login_required
