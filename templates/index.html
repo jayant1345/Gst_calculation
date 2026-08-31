@@ -182,43 +182,16 @@
 
                 <div class="branch-input-row">
                     <label for="state-input"><i class="fa-solid fa-map-location-dot"></i> State</label>
-                    <select id="state-input">
+                    <select id="state-input" style="max-width: 170px;">
                         <option value="">-- Select State --</option>
                         <option value="Gujarat">Gujarat</option>
                         <option value="Maharashtra">Maharashtra</option>
                     </select>
                     <label for="branch-input"><i class="fa-solid fa-code-branch"></i> Branch</label>
-                    <input type="text" id="branch-input" list="branch-suggestions" placeholder="Select or type branch (e.g. Ashram Road)" autocomplete="off">
-                    <datalist id="branch-suggestions">
-                        <option value="ASHRAM ROAD">ASHRAM ROAD (Gujarat)</option>
-                        <option value="BAPUNAGAR">BAPUNAGAR (Gujarat)</option>
-                        <option value="BOPAL">BOPAL (Gujarat)</option>
-                        <option value="CHANDKHEDA">CHANDKHEDA (Gujarat)</option>
-                        <option value="CHANGODAR">CHANGODAR (Gujarat)</option>
-                        <option value="DEMAT">DEMAT (Gujarat)</option>
-                        <option value="DRIVE IN">DRIVE IN (Gujarat)</option>
-                        <option value="HO">HO (Head Office - Gujarat)</option>
-                        <option value="ISANPUR">ISANPUR (Gujarat)</option>
-                        <option value="LAW GARDEN">LAW GARDEN (Gujarat)</option>
-                        <option value="MANINAGAR">MANINAGAR (Gujarat)</option>
-                        <option value="MASKATI">MASKATI (Gujarat)</option>
-                        <option value="NARANPURA">NARANPURA (Gujarat)</option>
-                        <option value="NARAYANNAGAR">NARAYANNAGAR (Gujarat)</option>
-                        <option value="NEW CLOTH">NEW CLOTH (Gujarat)</option>
-                        <option value="ODHAV">ODHAV (Gujarat)</option>
-                        <option value="PANJARAPOLE">PANJARAPOLE (Gujarat)</option>
-                        <option value="RAKHIAL">RAKHIAL (Gujarat)</option>
-                        <option value="SATTELITE">SATTELITE (Gujarat)</option>
-                        <option value="SHANTI COMMERCIAL">SHANTI COMMERCIAL (Gujarat)</option>
-                        <option value="SHARDA MANDIR">SHARDA MANDIR (Gujarat)</option>
-                        <option value="SURAT">SURAT (Gujarat)</option>
-                        <option value="THALTEJ">THALTEJ (Gujarat)</option>
-                        <option value="VASANA">VASANA (Gujarat)</option>
-                        <option value="VASTRAL">VASTRAL (Gujarat)</option>
-                        <option value="VEJALPUR">VEJALPUR (Gujarat)</option>
-                        <option value="ANDHERI-MAHARASTRA">ANDHERI-MAHARASTRA (Maharashtra)</option>
-                    </datalist>
-                    <datalist id="vendor-suggestions"></datalist>
+                    <div class="autocomplete-wrapper" id="branch-autocomplete-wrapper">
+                        <input type="text" id="branch-input" placeholder="Select or type branch (e.g. Ashram Road, Changodar)" autocomplete="off">
+                        <ul class="autocomplete-dropdown" id="branch-dropdown-list"></ul>
+                    </div>
                     <span class="branch-input-hint">Applied to all files uploaded together below</span>
                 </div>
 
@@ -365,11 +338,17 @@
                     </div>
                     <div class="form-field">
                         <label for="mb-branch">Branch</label>
-                        <input type="text" id="mb-branch" list="branch-suggestions" placeholder="Select or type branch" autocomplete="off">
+                        <div class="autocomplete-wrapper" id="mb-branch-wrapper">
+                            <input type="text" id="mb-branch" placeholder="Select or type branch (e.g. Ashram Road)" autocomplete="off">
+                            <ul class="autocomplete-dropdown" id="mb-branch-dropdown"></ul>
+                        </div>
                     </div>
                     <div class="form-field">
                         <label for="mb-party">Party Name</label>
-                        <input type="text" id="mb-party" list="vendor-suggestions" placeholder="Select or type party name" autocomplete="off">
+                        <div class="autocomplete-wrapper" id="mb-party-wrapper">
+                            <input type="text" id="mb-party" placeholder="Select or type vendor name" autocomplete="off">
+                            <ul class="autocomplete-dropdown" id="mb-party-dropdown"></ul>
+                        </div>
                     </div>
                     <div class="form-field">
                         <label for="mb-gstin">GST No</label>

@@ -89,34 +89,229 @@ document.addEventListener('DOMContentLoaded', () => {
             .then(data => {
                 if (data.branches) masterBranches = data.branches;
                 if (data.vendors) masterVendors = data.vendors;
-                updateBranchSuggestions();
-                updateVendorSuggestions();
+                initAutocompletes();
             })
             .catch(err => console.error("Error loading master data:", err));
     }
     loadMasterData();
 
-    function updateBranchSuggestions() {
-        if (!branchSuggestions) return;
-        const branchSet = new Set(masterBranches.map(b => b.name));
+    function getAllBranches() {
+        const branchMap = new Map();
+        masterBranches.forEach(b => branchMap.set(b.name, b.state));
         invoices.forEach(inv => {
-            if (inv.branch && inv.branch !== 'Unassigned') branchSet.add(inv.branch);
+            if (inv.branch && inv.branch !== 'Unassigned' && !branchMap.has(inv.branch)) {
+                branchMap.set(inv.branch, inv.state || 'Gujarat');
+            }
+        });
+        return Array.from(branchMap.entries()).map(([name, state]) => ({ name, state }))
+            .sort((a, b) => a.name.localeCompare(b.name));
+    }
+
+    function initAutocompletes() {
+        // 1. Main toolbar Branch input
+        const mainBranchInput = document.getElementById('branch-input');
+        const mainBranchDropdown = document.getElementById('branch-dropdown-list');
+        if (mainBranchInput && mainBranchDropdown) {
+            setupAutocomplete({
+                inputEl: mainBranchInput,
+                dropdownEl: mainBranchDropdown,
+                getItems: (query) => {
+                    const allBranches = getAllBranches();
+                    if (!query) return allBranches.map(b => ({
+                        text: b.name,
+                        subtext: '',
+                        badge: b.state,
+                        badgeClass: b.state.toLowerCase()
+                    }));
+                    return allBranches
+                        .filter(b => b.name.toLowerCase().includes(query) || (b.state && b.state.toLowerCase().includes(query)))
+                        .map(b => ({
+                            text: b.name,
+                            subtext: '',
+                            badge: b.state,
+                            badgeClass: b.state.toLowerCase()
+                        }));
+                },
+                onSelect: (item) => {
+                    if (stateInput) stateInput.value = item.badge;
+                }
+            });
+        }
+
+        // 2. Manual Bill modal Branch input
+        const mbBranchInput = document.getElementById('mb-branch');
+        const mbBranchDropdown = document.getElementById('mb-branch-dropdown');
+        const mbStateSelect = document.getElementById('mb-state');
+        if (mbBranchInput && mbBranchDropdown) {
+            setupAutocomplete({
+                inputEl: mbBranchInput,
+                dropdownEl: mbBranchDropdown,
+                getItems: (query) => {
+                    const allBranches = getAllBranches();
+                    if (!query) return allBranches.map(b => ({
+                        text: b.name,
+                        subtext: '',
+                        badge: b.state,
+                        badgeClass: b.state.toLowerCase()
+                    }));
+                    return allBranches
+                        .filter(b => b.name.toLowerCase().includes(query) || (b.state && b.state.toLowerCase().includes(query)))
+                        .map(b => ({
+                            text: b.name,
+                            subtext: '',
+                            badge: b.state,
+                            badgeClass: b.state.toLowerCase()
+                        }));
+                },
+                onSelect: (item) => {
+                    if (mbStateSelect) mbStateSelect.value = item.badge;
+                }
+            });
+        }
+
+        // 3. Manual Bill modal Party Name input
+        const mbPartyInput = document.getElementById('mb-party');
+        const mbPartyDropdown = document.getElementById('mb-party-dropdown');
+        const mbGstinInput = document.getElementById('mb-gstin');
+        if (mbPartyInput && mbPartyDropdown) {
+            setupAutocomplete({
+                inputEl: mbPartyInput,
+                dropdownEl: mbPartyDropdown,
+                getItems: (query) => {
+                    if (!query) return masterVendors.slice(0, 15).map(v => ({
+                        text: v.name,
+                        subtext: `GST: ${v.gstin}`,
+                        badge: 'Master Vendor',
+                        badgeClass: 'gujarat',
+                        data: v
+                    }));
+                    return masterVendors
+                        .filter(v => v.name.toLowerCase().includes(query) || v.gstin.toLowerCase().includes(query))
+                        .map(v => ({
+                            text: v.name,
+                            subtext: `GST: ${v.gstin}`,
+                            badge: 'Master Vendor',
+                            badgeClass: 'gujarat',
+                            data: v
+                        }));
+                },
+                onSelect: (item) => {
+                    if (mbGstinInput && item.data && item.data.gstin) {
+                        mbGstinInput.value = item.data.gstin;
+                    }
+                }
+            });
+        }
+    }
+
+    function setupAutocomplete({ inputEl, dropdownEl, getItems, onSelect }) {
+        let activeIndex = -1;
+        let currentItems = [];
+
+        function render(query = '') {
+            const q = query.trim().toLowerCase();
+            currentItems = getItems(q);
+            if (currentItems.length === 0) {
+                dropdownEl.style.display = 'none';
+                return;
+            }
+
+            activeIndex = -1;
+            dropdownEl.innerHTML = currentItems.map((item, idx) => {
+                let highlightedText = escapeHtml(item.text);
+                if (q) {
+                    const regex = new RegExp(`(${q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+                    highlightedText = highlightedText.replace(regex, '<mark>$1</mark>');
+                }
+                const subHtml = item.subtext ? `<div class="autocomplete-sub">${escapeHtml(item.subtext)}</div>` : '';
+                const badgeHtml = item.badge ? `<span class="autocomplete-badge ${item.badgeClass || ''}">${escapeHtml(item.badge)}</span>` : '';
+                return `
+                    <li class="autocomplete-item" data-index="${idx}">
+                        <div>
+                            <div class="autocomplete-main">${highlightedText}</div>
+                            ${subHtml}
+                        </div>
+                        ${badgeHtml}
+                    </li>
+                `;
+            }).join('');
+            dropdownEl.style.display = 'block';
+        }
+
+        inputEl.addEventListener('input', () => {
+            render(inputEl.value);
         });
 
-        const sortedBranches = Array.from(branchSet).sort();
-        branchSuggestions.innerHTML = sortedBranches.map(b => {
-            const mb = masterBranches.find(item => item.name === b);
-            const stateHint = mb ? ` (${mb.state})` : '';
-            return `<option value="${escapeHtml(b)}">${escapeHtml(b)}${stateHint}</option>`;
-        }).join('');
+        inputEl.addEventListener('focus', () => {
+            render(inputEl.value);
+        });
+
+        dropdownEl.addEventListener('mousedown', (e) => {
+            const itemEl = e.target.closest('.autocomplete-item');
+            if (!itemEl) return;
+            const idx = parseInt(itemEl.dataset.index, 10);
+            if (currentItems[idx]) {
+                selectItem(currentItems[idx]);
+            }
+        });
+
+        inputEl.addEventListener('keydown', (e) => {
+            if (dropdownEl.style.display !== 'block') {
+                if (e.key === 'ArrowDown') {
+                    render(inputEl.value);
+                }
+                return;
+            }
+
+            const items = dropdownEl.querySelectorAll('.autocomplete-item');
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                activeIndex = (activeIndex + 1) % items.length;
+                updateActive(items);
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                activeIndex = (activeIndex - 1 + items.length) % items.length;
+                updateActive(items);
+            } else if (e.key === 'Enter' || e.key === 'Tab') {
+                if (activeIndex >= 0 && currentItems[activeIndex]) {
+                    e.preventDefault();
+                    selectItem(currentItems[activeIndex]);
+                }
+            } else if (e.key === 'Escape') {
+                dropdownEl.style.display = 'none';
+            }
+        });
+
+        function updateActive(items) {
+            items.forEach((it, idx) => {
+                if (idx === activeIndex) {
+                    it.classList.add('active');
+                    it.scrollIntoView({ block: 'nearest' });
+                } else {
+                    it.classList.remove('active');
+                }
+            });
+        }
+
+        function selectItem(item) {
+            inputEl.value = item.text;
+            dropdownEl.style.display = 'none';
+            if (onSelect) onSelect(item);
+        }
+
+        document.addEventListener('click', (e) => {
+            if (!inputEl.contains(e.target) && !dropdownEl.contains(e.target)) {
+                dropdownEl.style.display = 'none';
+            }
+        });
+    }
+
+    function updateBranchSuggestions() {
+        initAutocompletes();
     }
 
     function updateVendorSuggestions() {
-        const vendorSuggestions = document.getElementById('vendor-suggestions');
-        if (!vendorSuggestions) return;
-        vendorSuggestions.innerHTML = masterVendors.map(v => 
-            `<option value="${escapeHtml(v.name)}">${escapeHtml(v.name)} [${escapeHtml(v.gstin)}]</option>`
-        ).join('');
+        initAutocompletes();
     }
 
     // Auto-fill State when Branch is entered on main upload strip
