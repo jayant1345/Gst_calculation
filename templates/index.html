@@ -265,6 +265,9 @@
                         <button class="btn btn-secondary" id="btn-add-manual">
                             <i class="fa-solid fa-pen-to-square"></i> Add Manual Bill
                         </button>
+                        <button class="btn btn-danger" id="btn-delete-selected" disabled title="Delete selected invoices">
+                            <i class="fa-solid fa-trash-can"></i> Delete Selected (<span id="delete-selected-count">0</span>)
+                        </button>
                         <button class="btn btn-secondary" id="btn-clear-all">
                             <i class="fa-solid fa-trash-can"></i> Clear All
                         </button>
@@ -309,6 +312,9 @@
                     <table class="invoice-table" id="invoice-table">
                         <thead>
                             <tr>
+                                <th width="3%" class="col-select-header" style="text-align: center;">
+                                    <input type="checkbox" id="select-all-invoices" title="Select All Visible Bills" style="width: 16px; height: 16px; cursor: pointer;">
+                                </th>
                                 <th width="7%" data-col="state">
                                     <div class="th-content"><span>State</span><button type="button" class="col-filter-trigger" data-col="state" title="Filter State"><i class="fa-solid fa-filter"></i></button></div>
                                 </th>
@@ -345,7 +351,7 @@
                         </thead>
                         <tbody id="invoice-table-body">
                             <tr class="empty-state-row">
-                                <td colspan="{{ 16 if is_admin else 15 }}">
+                                <td colspan="{{ 17 if is_admin else 16 }}">
                                     <div class="empty-state">
                                         <i class="fa-solid fa-receipt"></i>
                                         <p>No invoices processed yet. Drag & drop or upload files above to automatically extract values and calculate 50% GST credit.</p>
@@ -519,6 +525,41 @@
                 </div>
             </form>
         </div>
+    </div>
+
+    <!-- Delete Selected Confirmation Modal -->
+    <div class="modal-overlay" id="delete-selected-modal-overlay" style="display: none;">
+        <div class="modal-card modal-card-small">
+            <div class="modal-header" style="border-bottom: 1px solid #fee2e2;">
+                <h3 style="color: #dc2626;"><i class="fa-solid fa-triangle-exclamation" style="color: #dc2626;"></i> Confirm Deletion</h3>
+                <button type="button" class="modal-close" id="delete-selected-modal-close" aria-label="Close">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+
+            <div class="modal-body">
+                <div style="background-color: #fef2f2; border: 1px solid #fca5a5; color: #991b1b; padding: 14px 16px; border-radius: 8px; font-size: 13.5px; margin-bottom: 16px; display: flex; gap: 12px; align-items: flex-start;">
+                    <i class="fa-solid fa-circle-exclamation" style="font-size: 22px; color: #dc2626; margin-top: 2px; flex-shrink: 0;"></i>
+                    <div>
+                        <strong style="display: block; font-size: 14px; margin-bottom: 4px; color: #991b1b;">Warning: Permanent Deletion</strong>
+                        You are about to delete <strong id="delete-selected-warning-count" style="color: #b91c1c; font-size: 16px; text-decoration: underline;">0</strong> selected bill(s).
+                    </div>
+                </div>
+                
+                <p style="font-size: 13px; color: #475569; margin-bottom: 16px; line-height: 1.5;">
+                    These records will be permanently removed from the database. This action cannot be undone. Are you sure you want to proceed?
+                </p>
+
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" id="delete-selected-cancel-btn">Cancel</button>
+                    <button type="button" class="btn btn-danger" id="delete-selected-confirm-btn" style="background-color: #dc2626; color: #ffffff; border: none;">
+                        <i class="fa-solid fa-trash-can"></i> Delete <span id="delete-selected-btn-count">0</span> Record(s)
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Clear All Bills Password Confirmation Modal -->
     <div class="modal-overlay" id="clear-all-modal-overlay" style="display: none;">
         <div class="modal-card modal-card-small">

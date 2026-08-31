@@ -33,6 +33,18 @@ document.addEventListener('DOMContentLoaded', () => {
     const btnClearAll = document.getElementById('btn-clear-all');
     const btnExportExcel = document.getElementById('btn-export-excel');
     const btnAddManual = document.getElementById('btn-add-manual');
+    const btnDeleteSelected = document.getElementById('btn-delete-selected');
+    const deleteSelectedCountText = document.getElementById('delete-selected-count');
+    const selectAllCheckbox = document.getElementById('select-all-invoices');
+
+    // Delete Selected Modal Elements
+    const deleteSelectedOverlay = document.getElementById('delete-selected-modal-overlay');
+    const deleteSelectedCloseBtn = document.getElementById('delete-selected-modal-close');
+    const deleteSelectedCancelBtn = document.getElementById('delete-selected-cancel-btn');
+    const deleteSelectedConfirmBtn = document.getElementById('delete-selected-confirm-btn');
+    const deleteSelectedWarningCount = document.getElementById('delete-selected-warning-count');
+    const deleteSelectedBtnCount = document.getElementById('delete-selected-btn-count');
+    const selectedInvoiceIds = new Set();
 
     // Manual Bill Modal Elements
     const manualBillOverlay = document.getElementById('manual-bill-overlay');
@@ -1291,11 +1303,40 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // Update Delete Selected button & master Select All checkbox states
+    function updateDeleteSelectedState() {
+        const count = selectedInvoiceIds.size;
+        if (deleteSelectedCountText) deleteSelectedCountText.textContent = count;
+        if (btnDeleteSelected) {
+            btnDeleteSelected.disabled = count === 0;
+        }
+
+        if (selectAllCheckbox) {
+            const filteredInvoices = getFilteredInvoices();
+            if (filteredInvoices.length === 0) {
+                selectAllCheckbox.checked = false;
+                selectAllCheckbox.indeterminate = false;
+            } else {
+                const selectedFilteredCount = filteredInvoices.filter(inv => inv.id && selectedInvoiceIds.has(inv.id)).length;
+                if (selectedFilteredCount === filteredInvoices.length) {
+                    selectAllCheckbox.checked = true;
+                    selectAllCheckbox.indeterminate = false;
+                } else if (selectedFilteredCount > 0) {
+                    selectAllCheckbox.checked = false;
+                    selectAllCheckbox.indeterminate = true;
+                } else {
+                    selectAllCheckbox.checked = false;
+                    selectAllCheckbox.indeterminate = false;
+                }
+            }
+        }
+    }
+
     // Render Invoices Table
     function renderTable() {
         calculateAuditCounts();
         const filteredInvoices = getFilteredInvoices();
-        const colCount = window.IS_ADMIN ? 16 : 15;
+        const colCount = window.IS_ADMIN ? 17 : 16;
         const query = searchInput ? searchInput.value.toLowerCase().trim() : '';
 
         if (filteredInvoices.length === 0) {
@@ -1310,6 +1351,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 </tr>
             `;
             invoiceCountText.textContent = `0 of ${invoices.length} Invoice(s) Loaded`;
+            updateDeleteSelectedState();
             return;
         }
 
@@ -1319,6 +1361,10 @@ document.addEventListener('DOMContentLoaded', () => {
         filteredInvoices.forEach((inv) => {
             const tr = document.createElement('tr');
             tr.dataset.id = inv.id;
+            const isRowSelected = inv.id && selectedInvoiceIds.has(inv.id);
+            if (isRowSelected) {
+                tr.classList.add('row-selected');
+            }
 
             const stateVal = inv.state || '';
             const stateOptions = ['Gujarat', 'Maharashtra'];
@@ -1333,6 +1379,9 @@ document.addEventListener('DOMContentLoaded', () => {
             const isPayDateBlank = isFieldBlank(inv.payment_date);
 
             tr.innerHTML = `
+                <td class="checkbox-cell col-select">
+                    <input type="checkbox" class="row-select-checkbox" data-id="${inv.id || ''}" title="Select this bill" ${isRowSelected ? 'checked' : ''} style="width: 16px; height: 16px; cursor: pointer;">
+                </td>
                 <td><select class="field-state ${isStateBlank ? 'field-needs-rectification' : ''}" title="${isStateBlank ? 'Missing State - Click to select' : ''}">
                     <option value="">-- Select --</option>
                     ${stateOptions.map(s => `<option value="${s}" ${s === stateVal ? 'selected' : ''}>${s}</option>`).join('')}
@@ -1361,6 +1410,22 @@ document.addEventListener('DOMContentLoaded', () => {
                     </button>
                 </td>
             `;
+
+            // Row selection listener
+            const rowCheckbox = tr.querySelector('.row-select-checkbox');
+            if (rowCheckbox) {
+                rowCheckbox.addEventListener('change', (e) => {
+                    e.stopPropagation();
+                    if (rowCheckbox.checked) {
+                        if (inv.id) selectedInvoiceIds.add(inv.id);
+                        tr.classList.add('row-selected');
+                    } else {
+                        if (inv.id) selectedInvoiceIds.delete(inv.id);
+                        tr.classList.remove('row-selected');
+                    }
+                    updateDeleteSelectedState();
+                });
+            }
 
             // Row-level listeners to update state & save changes to Postgres database
             const vendorInput = tr.querySelector('.field-vendor');
@@ -1400,7 +1465,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 });
             }
 
-            const inputs = tr.querySelectorAll('input, select');
+            const inputs = tr.querySelectorAll('input:not(.row-select-checkbox), select');
             inputs.forEach(input => {
                 input.addEventListener('change', (e) => {
                     if (input.value.trim()) {
@@ -1423,6 +1488,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
             tableBody.appendChild(tr);
         });
+
+        updateDeleteSelectedState();
     }
 
     // Sync input values with invoice state, calculate 50% split, and POST update to database
@@ -1508,11 +1575,14 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Delete invoice from UI and PostgreSQL database
-    function deleteInvoice(index) {
+    function deleteInvoice(id) {
+        const index = invoices.findIndex(i => i.id === id);
+        if (index === -1) return;
         const inv = invoices[index];
         if (!inv.id) {
             // Unsaved error row
             invoices.splice(index, 1);
+            selectedInvoiceIds.delete(id);
             renderTable();
             updateMetrics();
             return;
@@ -1531,9 +1601,13 @@ document.addEventListener('DOMContentLoaded', () => {
         })
         .then(data => {
             if (data.success) {
+                selectedInvoiceIds.delete(inv.id);
                 invoices.splice(index, 1);
+                populateFilters();
+                calculateAuditCounts();
                 renderTable();
                 updateMetrics();
+                updateBranchSuggestions();
             }
         })
         .catch(error => {
@@ -1636,6 +1710,97 @@ document.addEventListener('DOMContentLoaded', () => {
             populateFilters();
             renderTable();
             updateMetrics();
+        });
+    }
+
+    // ---- Multi-Select "Select All" Master Checkbox ----
+    if (selectAllCheckbox) {
+        selectAllCheckbox.addEventListener('change', () => {
+            const filteredInvoices = getFilteredInvoices();
+            if (selectAllCheckbox.checked) {
+                filteredInvoices.forEach(inv => {
+                    if (inv.id) selectedInvoiceIds.add(inv.id);
+                });
+            } else {
+                filteredInvoices.forEach(inv => {
+                    if (inv.id) selectedInvoiceIds.delete(inv.id);
+                });
+            }
+            renderTable();
+        });
+    }
+
+    // ---- Delete Selected Records with Warning Modal ----
+    function closeDeleteSelectedModal() {
+        if (deleteSelectedOverlay) deleteSelectedOverlay.style.display = 'none';
+    }
+
+    if (btnDeleteSelected) {
+        btnDeleteSelected.addEventListener('click', () => {
+            const count = selectedInvoiceIds.size;
+            if (count === 0) {
+                alert('No invoices selected. Please select invoices using the checkboxes first.');
+                return;
+            }
+            if (deleteSelectedWarningCount) deleteSelectedWarningCount.textContent = count;
+            if (deleteSelectedBtnCount) deleteSelectedBtnCount.textContent = count;
+            if (deleteSelectedOverlay) deleteSelectedOverlay.style.display = 'flex';
+        });
+    }
+
+    if (deleteSelectedCloseBtn) deleteSelectedCloseBtn.addEventListener('click', closeDeleteSelectedModal);
+    if (deleteSelectedCancelBtn) deleteSelectedCancelBtn.addEventListener('click', closeDeleteSelectedModal);
+    if (deleteSelectedOverlay) {
+        deleteSelectedOverlay.addEventListener('click', (e) => {
+            if (e.target === deleteSelectedOverlay) closeDeleteSelectedModal();
+        });
+    }
+
+    if (deleteSelectedConfirmBtn) {
+        deleteSelectedConfirmBtn.addEventListener('click', () => {
+            const idsToDelete = Array.from(selectedInvoiceIds);
+            if (idsToDelete.length === 0) {
+                closeDeleteSelectedModal();
+                return;
+            }
+
+            deleteSelectedConfirmBtn.disabled = true;
+            deleteSelectedConfirmBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Deleting...';
+
+            fetch('/api/delete-selected-invoices', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ ids: idsToDelete })
+            })
+            .then(response => {
+                if (!response.ok) throw new Error('Failed to delete selected invoices');
+                return response.json();
+            })
+            .then(data => {
+                if (data.success) {
+                    // Remove deleted records from local array
+                    invoices = invoices.filter(inv => !selectedInvoiceIds.has(inv.id));
+                    selectedInvoiceIds.clear();
+                    closeDeleteSelectedModal();
+                    populateFilters();
+                    calculateAuditCounts();
+                    renderTable();
+                    updateMetrics();
+                    updateBranchSuggestions();
+                } else {
+                    alert(data.error || 'Failed to delete selected invoices.');
+                }
+            })
+            .catch(error => {
+                console.error('Error deleting selected invoices:', error);
+                alert('Failed to delete selected invoices from the database.');
+            })
+            .finally(() => {
+                deleteSelectedConfirmBtn.disabled = false;
+                deleteSelectedConfirmBtn.innerHTML = '<i class="fa-solid fa-trash-can"></i> Delete <span id="delete-selected-btn-count">0</span> Record(s)';
+            });
         });
     }
 

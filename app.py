@@ -1225,6 +1225,45 @@ def delete_invoice():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route('/api/delete-selected-invoices', methods=['POST'])
+@login_required
+def delete_selected_invoices():
+    user_id = session['user_id']
+    is_admin = is_admin_user()
+    data = request.json or {}
+    ids = data.get('ids', [])
+
+    if not ids or not isinstance(ids, list):
+        return jsonify({"error": "No invoices selected to delete"}), 400
+
+    clean_ids = []
+    for i in ids:
+        try:
+            clean_ids.append(int(i))
+        except (ValueError, TypeError):
+            continue
+
+    if not clean_ids:
+        return jsonify({"error": "Invalid invoice IDs provided"}), 400
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        if is_admin:
+            cur.execute('DELETE FROM invoices WHERE id = ANY(%s)', (clean_ids,))
+        else:
+            cur.execute('DELETE FROM invoices WHERE id = ANY(%s) AND user_id = %s', (clean_ids, user_id))
+        deleted_count = cur.rowcount
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        log_activity(user_id, 'bills_deleted_selected', f'Deleted {deleted_count} selected bill(s)', record_count=deleted_count)
+        return jsonify({"success": True, "count": deleted_count})
+    except Exception as e:
+        print(f"Error deleting selected invoices: {e}")
+        return jsonify({"error": str(e)}), 500
+
 @app.route('/api/apply-book-correction', methods=['POST'])
 @login_required
 def apply_book_correction():

@@ -764,6 +764,27 @@ body {
     transform: translateY(-1px);
 }
 
+.btn-danger {
+    background-color: #dc2626;
+    color: #ffffff;
+    box-shadow: 0 4px 12px rgba(220, 38, 38, 0.2);
+}
+
+.btn-danger:hover:not(:disabled) {
+    background-color: #b91c1c;
+    transform: translateY(-1px);
+}
+
+.btn-danger:disabled,
+.btn-danger[disabled] {
+    background-color: #94a3b8;
+    color: #f1f5f9;
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
+    opacity: 0.6;
+}
+
 /* Progress List & Visual Progress Bar */
 .upload-progress-container {
     margin-top: 24px;
@@ -1289,22 +1310,30 @@ body {
     white-space: nowrap;
 }
 
-.invoice-table th:nth-child(1), .invoice-table td:nth-child(1) { min-width: 85px; }   /* State */
-.invoice-table th:nth-child(2), .invoice-table td:nth-child(2) { min-width: 90px; }   /* Branch */
-.invoice-table th:nth-child(3), .invoice-table td:nth-child(3) { min-width: 130px; }  /* GST No */
-.invoice-table th:nth-child(4), .invoice-table td:nth-child(4) { min-width: 80px; }   /* Invoice # */
-.invoice-table th:nth-child(5), .invoice-table td:nth-child(5) { min-width: 95px; }   /* Invoice Date */
-.invoice-table th:nth-child(6), .invoice-table td:nth-child(6) { min-width: 95px; }   /* Payment Date */
-.invoice-table th:nth-child(7), .invoice-table td:nth-child(7) { min-width: 170px; }  /* Vendor Name */
-.invoice-table th:nth-child(8), .invoice-table td:nth-child(8) { min-width: 95px; }   /* Taxable Value */
-.invoice-table th:nth-child(9), .invoice-table td:nth-child(9) { min-width: 80px; }   /* CGST */
-.invoice-table th:nth-child(10), .invoice-table td:nth-child(10) { min-width: 80px; } /* SGST */
-.invoice-table th:nth-child(11), .invoice-table td:nth-child(11) { min-width: 75px; } /* IGST */
-.invoice-table th:nth-child(12), .invoice-table td:nth-child(12) { min-width: 65px; } /* ITC Blocked */
-.invoice-table th:nth-child(13), .invoice-table td:nth-child(13) { min-width: 95px; } /* Eligible ITC */
-.invoice-table th:nth-child(14), .invoice-table td:nth-child(14) { min-width: 95px; } /* Ineligible ITC */
-.invoice-table th:nth-child(15), .invoice-table td:nth-child(15) { min-width: 55px; } /* Uploaded By (admin) or Actions */
-.invoice-table th:nth-child(16), .invoice-table td:nth-child(16) { min-width: 55px; } /* Actions (admin) */
+.invoice-table th.col-select-header, .invoice-table td.col-select {
+    min-width: 40px;
+    width: 40px;
+    text-align: center;
+    padding-left: 12px;
+    padding-right: 6px;
+}
+
+.invoice-table th:nth-child(2), .invoice-table td:nth-child(2) { min-width: 85px; }   /* State */
+.invoice-table th:nth-child(3), .invoice-table td:nth-child(3) { min-width: 90px; }   /* Branch */
+.invoice-table th:nth-child(4), .invoice-table td:nth-child(4) { min-width: 130px; }  /* GST No */
+.invoice-table th:nth-child(5), .invoice-table td:nth-child(5) { min-width: 80px; }   /* Invoice # */
+.invoice-table th:nth-child(6), .invoice-table td:nth-child(6) { min-width: 95px; }   /* Invoice Date */
+.invoice-table th:nth-child(7), .invoice-table td:nth-child(7) { min-width: 95px; }   /* Payment Date */
+.invoice-table th:nth-child(8), .invoice-table td:nth-child(8) { min-width: 170px; }  /* Vendor Name */
+.invoice-table th:nth-child(9), .invoice-table td:nth-child(9) { min-width: 95px; }   /* Taxable Value */
+.invoice-table th:nth-child(10), .invoice-table td:nth-child(10) { min-width: 80px; }   /* CGST */
+.invoice-table th:nth-child(11), .invoice-table td:nth-child(11) { min-width: 80px; } /* SGST */
+.invoice-table th:nth-child(12), .invoice-table td:nth-child(12) { min-width: 75px; } /* IGST */
+.invoice-table th:nth-child(13), .invoice-table td:nth-child(13) { min-width: 65px; } /* ITC Blocked */
+.invoice-table th:nth-child(14), .invoice-table td:nth-child(14) { min-width: 95px; } /* Eligible ITC */
+.invoice-table th:nth-child(15), .invoice-table td:nth-child(15) { min-width: 95px; } /* Ineligible ITC */
+.invoice-table th:nth-child(16), .invoice-table td:nth-child(16) { min-width: 55px; } /* Uploaded By (admin) or Actions */
+.invoice-table th:nth-child(17), .invoice-table td:nth-child(17) { min-width: 55px; } /* Actions (admin) */
 .invoice-table th.col-owner, .invoice-table td.col-owner { min-width: 110px; }
 
 .checkbox-cell {
@@ -1326,6 +1355,14 @@ body {
     background-color: #f8fafc;
 }
 
+.invoice-table tbody tr.row-selected {
+    background-color: #eff6ff !important;
+}
+
+.invoice-table tbody tr.row-selected:hover {
+    background-color: #dbeafe !important;
+}
+
 /* Table Input Styling */
 .invoice-table td input,
 .invoice-table td select {
@@ -1344,7 +1381,7 @@ body {
     transition: all 0.2s ease;
 }
 
-.invoice-table td:nth-child(7) input {
+.invoice-table td:nth-child(8) input {
     text-overflow: ellipsis;
     overflow: hidden;
 }
