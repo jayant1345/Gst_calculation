@@ -1229,6 +1229,10 @@ body {
 /* Table Design */
 .table-container {
     overflow-x: auto;
+    overflow-y: auto;
+    max-height: calc(100vh - 220px);
+    min-height: 400px;
+    position: relative;
     max-width: 100%;
     border-radius: 12px;
     border: 1px solid var(--border-color);
@@ -1242,6 +1246,7 @@ body {
 }
 
 .table-container::-webkit-scrollbar {
+    width: 8px;
     height: 10px;
 }
 
@@ -1256,7 +1261,8 @@ body {
 
 .invoice-table {
     width: 100%;
-    border-collapse: collapse;
+    border-collapse: separate;
+    border-spacing: 0;
     font-size: 13.5px;
     text-align: left;
     background: #ffffff;
@@ -1264,14 +1270,18 @@ body {
 }
 
 .invoice-table th {
+    position: sticky;
+    top: 0;
+    z-index: 15;
     background-color: #f8fafc;
     font-family: var(--font-heading);
     font-weight: 700;
-    color: #475569;
+    color: #334155;
     font-size: 12.5px;
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    border-bottom: 2px solid var(--border-color);
+    border-bottom: 2px solid #cbd5e1;
+    box-shadow: 0 2px 5px -1px rgba(0, 0, 0, 0.08);
 }
 
 .invoice-table th, .invoice-table td {
