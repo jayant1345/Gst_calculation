@@ -56,6 +56,8 @@ document.addEventListener('DOMContentLoaded', () => {
     let hideProgressTimeoutId = null;
 
     // Load saved invoices from PostgreSQL on initial load
+    setupAuditPills();
+    setupColumnFilterTriggers();
     loadInvoices();
 
     function loadInvoices() {
@@ -68,6 +70,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (data.invoices) {
                     invoices = data.invoices;
                     populateFilters();
+                    calculateAuditCounts();
                     renderTable();
                     updateMetrics();
                     updateBranchSuggestions();
@@ -1030,29 +1033,278 @@ document.addEventListener('DOMContentLoaded', () => {
         badge.textContent = API_MODEL_DISPLAY_NAMES[modelId] || modelId;
     }
 
+    // Current Active Filters for Quick Audit & Column Header Filtering
+    let currentAuditFilter = 'all';
+    const columnFilters = {}; // colKey -> '__ALL__' | '__BLANKS__' | '__NON_BLANKS__' | specificString
+
+    function isFieldBlank(val) {
+        if (val === null || val === undefined) return true;
+        const str = String(val).trim().toUpperCase();
+        return str === '' || str === 'N/A' || str === '-' || str === 'NULL' || str === 'NONE' || str === 'UNASSIGNED' || str === 'ERROR';
+    }
+
+    function calculateAuditCounts() {
+        let countIncomplete = 0;
+        let countGstin = 0;
+        let countInv = 0;
+        let countBranch = 0;
+        let countPayment = 0;
+        let countDate = 0;
+        let countTax = 0;
+
+        invoices.forEach(inv => {
+            const missingGstin = isFieldBlank(inv.gstin) || String(inv.gstin).trim().length !== 15;
+            const missingInv = isFieldBlank(inv.invoice_number);
+            const missingBranch = isFieldBlank(inv.branch) || isFieldBlank(inv.state);
+            const missingPayment = isFieldBlank(inv.payment_date);
+            const missingDate = isFieldBlank(inv.invoice_date);
+            const zeroTax = (!inv.taxable_value || inv.taxable_value <= 0) && (!inv.cgst && !inv.sgst && !inv.igst);
+
+            if (missingGstin) countGstin++;
+            if (missingInv) countInv++;
+            if (missingBranch) countBranch++;
+            if (missingPayment) countPayment++;
+            if (missingDate) countDate++;
+            if (zeroTax) countTax++;
+
+            if (missingGstin || missingInv || missingBranch || missingPayment || missingDate || zeroTax) {
+                countIncomplete++;
+            }
+        });
+
+        const pillAll = document.getElementById('count-pill-all');
+        const pillIncomplete = document.getElementById('count-pill-incomplete');
+        const pillGstin = document.getElementById('count-pill-gstin');
+        const pillInv = document.getElementById('count-pill-inv');
+        const pillBranch = document.getElementById('count-pill-branch');
+        const pillPayment = document.getElementById('count-pill-payment');
+        const pillDate = document.getElementById('count-pill-date');
+        const pillTax = document.getElementById('count-pill-tax');
+
+        if (pillAll) pillAll.textContent = invoices.length;
+        if (pillIncomplete) pillIncomplete.textContent = countIncomplete;
+        if (pillGstin) pillGstin.textContent = countGstin;
+        if (pillInv) pillInv.textContent = countInv;
+        if (pillBranch) pillBranch.textContent = countBranch;
+        if (pillPayment) pillPayment.textContent = countPayment;
+        if (pillDate) pillDate.textContent = countDate;
+        if (pillTax) pillTax.textContent = countTax;
+    }
+
+    function setupAuditPills() {
+        const ribbon = document.getElementById('audit-filter-ribbon');
+        if (!ribbon) return;
+        const pills = ribbon.querySelectorAll('.audit-pill');
+        pills.forEach(pill => {
+            pill.addEventListener('click', () => {
+                pills.forEach(p => p.classList.remove('active'));
+                pill.classList.add('active');
+                currentAuditFilter = pill.dataset.auditFilter || 'all';
+                renderTable();
+            });
+        });
+    }
+
+    // Active Column Header Filter Dropdown Popup
+    let activeFilterPopup = null;
+
+    function closeColumnFilterPopup() {
+        if (activeFilterPopup) {
+            activeFilterPopup.remove();
+            activeFilterPopup = null;
+        }
+    }
+
+    document.addEventListener('click', (e) => {
+        if (activeFilterPopup && !e.target.closest('.col-filter-popup') && !e.target.closest('.col-filter-trigger')) {
+            closeColumnFilterPopup();
+        }
+    });
+
+    function openColumnFilter(colKey, triggerBtn) {
+        if (activeFilterPopup && activeFilterPopup.dataset.col === colKey) {
+            closeColumnFilterPopup();
+            return;
+        }
+        closeColumnFilterPopup();
+
+        const popup = document.createElement('div');
+        popup.className = 'col-filter-popup show';
+        popup.dataset.col = colKey;
+
+        // Collect unique values and counts
+        const valueCounts = new Map();
+        let blankCount = 0;
+        let nonBlankCount = 0;
+
+        invoices.forEach(inv => {
+            const rawVal = inv[colKey];
+            if (isFieldBlank(rawVal)) {
+                blankCount++;
+            } else {
+                nonBlankCount++;
+                const str = String(rawVal).trim();
+                valueCounts.set(str, (valueCounts.get(str) || 0) + 1);
+            }
+        });
+
+        const currentVal = columnFilters[colKey] || '__ALL__';
+
+        popup.innerHTML = `
+            <input type="text" class="col-filter-search" placeholder="Search values...">
+            <ul class="col-filter-options">
+                <li class="col-filter-option" data-val="__ALL__">
+                    <input type="radio" name="col_val" ${currentVal === '__ALL__' ? 'checked' : ''}>
+                    <span><strong>(All)</strong> (${invoices.length})</span>
+                </li>
+                <li class="col-filter-option" data-val="__BLANKS__" style="color: #b45309; font-weight: 600;">
+                    <input type="radio" name="col_val" ${currentVal === '__BLANKS__' ? 'checked' : ''}>
+                    <span><i class="fa-solid fa-triangle-exclamation" style="color: #f59e0b;"></i> (Blanks / Missing Only) (${blankCount})</span>
+                </li>
+                <li class="col-filter-option" data-val="__NON_BLANKS__">
+                    <input type="radio" name="col_val" ${currentVal === '__NON_BLANKS__' ? 'checked' : ''}>
+                    <span>(Filled / Valid Only) (${nonBlankCount})</span>
+                </li>
+                ${Array.from(valueCounts.entries()).sort((a, b) => b[1] - a[1]).slice(0, 35).map(([val, cnt]) => `
+                    <li class="col-filter-option" data-val="${val}">
+                        <input type="radio" name="col_val" ${currentVal.toLowerCase() === val.toLowerCase() ? 'checked' : ''}>
+                        <span>${val} (${cnt})</span>
+                    </li>
+                `).join('')}
+            </ul>
+            <div class="col-filter-actions">
+                <button type="button" class="col-filter-clear"><i class="fa-solid fa-rotate-left"></i> Reset</button>
+                <button type="button" class="btn btn-primary btn-sm" style="padding: 2px 8px; font-size: 11px;">Close</button>
+            </div>
+        `;
+
+        const searchInputEl = popup.querySelector('.col-filter-search');
+        const optionsList = popup.querySelector('.col-filter-options');
+        searchInputEl.addEventListener('input', () => {
+            const sq = searchInputEl.value.toLowerCase().trim();
+            optionsList.querySelectorAll('li').forEach(li => {
+                const text = li.textContent.toLowerCase();
+                li.style.display = (!sq || text.includes(sq)) ? 'flex' : 'none';
+            });
+        });
+
+        optionsList.querySelectorAll('.col-filter-option').forEach(li => {
+            li.addEventListener('click', (e) => {
+                const chosen = li.dataset.val;
+                if (chosen === '__ALL__') {
+                    delete columnFilters[colKey];
+                    triggerBtn.classList.remove('active');
+                } else {
+                    columnFilters[colKey] = chosen;
+                    triggerBtn.classList.add('active');
+                }
+                closeColumnFilterPopup();
+                renderTable();
+            });
+        });
+
+        popup.querySelector('.col-filter-clear').addEventListener('click', () => {
+            delete columnFilters[colKey];
+            triggerBtn.classList.remove('active');
+            closeColumnFilterPopup();
+            renderTable();
+        });
+
+        popup.querySelector('.btn-primary').addEventListener('click', () => {
+            closeColumnFilterPopup();
+        });
+
+        const th = triggerBtn.closest('th');
+        th.style.position = 'relative';
+        th.appendChild(popup);
+        activeFilterPopup = popup;
+        setTimeout(() => searchInputEl.focus(), 50);
+    }
+
+    function setupColumnFilterTriggers() {
+        document.querySelectorAll('.col-filter-trigger').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const colKey = btn.dataset.col;
+                openColumnFilter(colKey, btn);
+            });
+        });
+    }
+
     // Shared by the table render and the Excel export, so "export" always
     // means "export exactly what's currently shown", not everything ever
     // uploaded.
     function getFilteredInvoices() {
-        const query = searchInput.value.toLowerCase().trim();
-        const fyValue = fyFilter.value;
-        const monthValue = monthFilter.value;
+        const query = searchInput ? searchInput.value.toLowerCase().trim() : '';
+        const fyValue = fyFilter ? fyFilter.value : '';
+        const monthValue = monthFilter ? monthFilter.value : '';
+
         return invoices.filter(inv => {
-            const matchesSearch = (
-                (inv.vendor_name || '').toLowerCase().includes(query) ||
-                (inv.invoice_number || '').toLowerCase().includes(query) ||
-                (inv.gstin || '').toLowerCase().includes(query)
-            );
-            const matchesFy = !fyValue || inv.financial_year === fyValue;
-            const matchesMonth = !monthValue || inv.month === monthValue;
-            return matchesSearch && matchesFy && matchesMonth;
+            // 1. Text Search across vendor, invoice number, GSTIN, branch, state
+            if (query) {
+                const matchesSearch = (
+                    (inv.vendor_name || '').toLowerCase().includes(query) ||
+                    (inv.invoice_number || '').toLowerCase().includes(query) ||
+                    (inv.gstin || '').toLowerCase().includes(query) ||
+                    (inv.branch || '').toLowerCase().includes(query) ||
+                    (inv.state || '').toLowerCase().includes(query)
+                );
+                if (!matchesSearch) return false;
+            }
+
+            // 2. Financial Year & Month Filters
+            if (fyValue && inv.financial_year !== fyValue) return false;
+            if (monthValue && inv.month !== monthValue) return false;
+
+            // 3. Quick Audit Rectification filter
+            const missingGstin = isFieldBlank(inv.gstin) || String(inv.gstin).trim().length !== 15;
+            const missingInv = isFieldBlank(inv.invoice_number);
+            const missingBranch = isFieldBlank(inv.branch) || isFieldBlank(inv.state);
+            const missingPayment = isFieldBlank(inv.payment_date);
+            const missingDate = isFieldBlank(inv.invoice_date);
+            const zeroTax = (!inv.taxable_value || inv.taxable_value <= 0) && (!inv.cgst && !inv.sgst && !inv.igst);
+
+            if (currentAuditFilter === 'missing-all') {
+                if (!(missingGstin || missingInv || missingBranch || missingPayment || missingDate || zeroTax)) return false;
+            } else if (currentAuditFilter === 'missing-gstin') {
+                if (!missingGstin) return false;
+            } else if (currentAuditFilter === 'missing-inv') {
+                if (!missingInv) return false;
+            } else if (currentAuditFilter === 'missing-branch') {
+                if (!missingBranch) return false;
+            } else if (currentAuditFilter === 'missing-payment') {
+                if (!missingPayment) return false;
+            } else if (currentAuditFilter === 'missing-date') {
+                if (!missingDate) return false;
+            } else if (currentAuditFilter === 'zero-tax') {
+                if (!zeroTax) return false;
+            }
+
+            // 4. Column Header Filters
+            for (const [col, filterVal] of Object.entries(columnFilters)) {
+                if (!filterVal || filterVal === '__ALL__') continue;
+                const cellVal = inv[col];
+                const isBlank = isFieldBlank(cellVal);
+
+                if (filterVal === '__BLANKS__') {
+                    if (!isBlank) return false;
+                } else if (filterVal === '__NON_BLANKS__') {
+                    if (isBlank) return false;
+                } else if (typeof filterVal === 'string') {
+                    if (String(cellVal || '').trim().toLowerCase() !== filterVal.toLowerCase()) return false;
+                }
+            }
+
+            return true;
         });
     }
 
     // Render Invoices Table
     function renderTable() {
+        calculateAuditCounts();
         const filteredInvoices = getFilteredInvoices();
         const colCount = window.IS_ADMIN ? 16 : 15;
+        const query = searchInput ? searchInput.value.toLowerCase().trim() : '';
 
         if (filteredInvoices.length === 0) {
             tableBody.innerHTML = `
@@ -1060,42 +1312,52 @@ document.addEventListener('DOMContentLoaded', () => {
                     <td colspan="${colCount}">
                         <div class="empty-state">
                             <i class="fa-solid fa-receipt"></i>
-                            <p>${query ? 'No matching invoices found.' : 'No invoices processed yet. Drag & drop or upload files above.'}</p>
+                            <p>${(query || currentAuditFilter !== 'all' || Object.keys(columnFilters).length > 0) ? 'No matching invoices found for the selected filter.' : 'No invoices processed yet. Drag & drop or upload files above.'}</p>
                         </div>
                     </td>
                 </tr>
             `;
-            invoiceCountText.textContent = '0 Invoices Loaded';
+            invoiceCountText.textContent = `0 of ${invoices.length} Invoice(s) Loaded`;
             return;
         }
 
-        invoiceCountText.textContent = `${filteredInvoices.length} Invoice(s) Loaded`;
+        invoiceCountText.textContent = `${filteredInvoices.length} of ${invoices.length} Invoice(s) Loaded`;
         tableBody.innerHTML = '';
 
-        filteredInvoices.forEach((inv, index) => {
+        filteredInvoices.forEach((inv) => {
             const tr = document.createElement('tr');
-            tr.dataset.index = index;
+            tr.dataset.id = inv.id;
+
             const stateVal = inv.state || '';
             const stateOptions = ['Gujarat', 'Maharashtra'];
             if (stateVal && !stateOptions.includes(stateVal)) stateOptions.push(stateVal);
+
+            // Highlight missing or unassigned fields for instant rectification
+            const isGstinInvalid = isFieldBlank(inv.gstin) || String(inv.gstin).trim().length !== 15;
+            const isInvBlank = isFieldBlank(inv.invoice_number);
+            const isBranchBlank = isFieldBlank(inv.branch);
+            const isStateBlank = isFieldBlank(inv.state);
+            const isDateBlank = isFieldBlank(inv.invoice_date);
+            const isPayDateBlank = isFieldBlank(inv.payment_date);
+
             tr.innerHTML = `
-                <td><select class="field-state">
+                <td><select class="field-state ${isStateBlank ? 'field-needs-rectification' : ''}" title="${isStateBlank ? 'Missing State - Click to select' : ''}">
                     <option value="">-- Select --</option>
                     ${stateOptions.map(s => `<option value="${s}" ${s === stateVal ? 'selected' : ''}>${s}</option>`).join('')}
                 </select></td>
-                <td><input type="text" class="field-branch" value="${inv.branch || ''}"></td>
-                <td><input type="text" class="field-gstin" value="${inv.gstin || ''}"></td>
-                <td><input type="text" class="field-number" value="${inv.invoice_number || ''}"></td>
-                <td><input type="text" class="field-date" value="${inv.invoice_date || ''}"></td>
-                <td><input type="text" class="field-payment-date" placeholder="DD-MM-YYYY" value="${inv.payment_date || ''}"></td>
+                <td><input type="text" class="field-branch ${isBranchBlank ? 'field-needs-rectification' : ''}" title="${isBranchBlank ? 'Missing Branch - Click to edit' : ''}" value="${inv.branch || ''}"></td>
+                <td><input type="text" class="field-gstin ${isGstinInvalid ? 'field-needs-rectification' : ''}" title="${isGstinInvalid ? 'Missing / Incomplete GSTIN - Click to edit' : ''}" value="${inv.gstin || ''}"></td>
+                <td><input type="text" class="field-number ${isInvBlank ? 'field-needs-rectification' : ''}" title="${isInvBlank ? 'Missing Invoice # - Click to edit' : ''}" value="${inv.invoice_number || ''}"></td>
+                <td><input type="text" class="field-date ${isDateBlank ? 'field-needs-rectification' : ''}" title="${isDateBlank ? 'Missing Date - Click to edit' : ''}" value="${inv.invoice_date || ''}"></td>
+                <td><input type="text" class="field-payment-date ${isPayDateBlank ? 'field-needs-rectification' : ''}" placeholder="DD-MM-YYYY" title="${isPayDateBlank ? 'Missing Payment Date - Click to edit' : ''}" value="${inv.payment_date || ''}"></td>
                 <td><input type="text" class="field-vendor" list="vendor-suggestions" value="${inv.vendor_name || ''}"></td>
                 <td class="numeric"><input type="number" step="0.01" class="field-taxable" value="${(inv.taxable_value || 0).toFixed(2)}"></td>
                 <td class="numeric"><input type="number" step="0.01" class="field-cgst" value="${(inv.cgst || 0).toFixed(2)}"></td>
                 <td class="numeric"><input type="number" step="0.01" class="field-sgst" value="${(inv.sgst || 0).toFixed(2)}"></td>
                 <td class="numeric"><input type="number" step="0.01" class="field-igst" value="${(inv.igst || 0).toFixed(2)}"></td>
                 <td class="checkbox-cell"><input type="checkbox" class="field-itc-blocked" title="Section 17(5) blocked credit / fully ineligible" ${inv.itc_blocked ? 'checked' : ''}></td>
-                <td class="numeric eligible-column font-bold" id="row-eligible-${index}">₹${(inv.eligible_itc || 0).toFixed(2)}</td>
-                <td class="numeric ineligible-column" id="row-ineligible-${index}">₹${(inv.ineligible_itc || 0).toFixed(2)}</td>
+                <td class="numeric eligible-column font-bold" id="row-eligible-${inv.id}">₹${(inv.eligible_itc || 0).toFixed(2)}</td>
+                <td class="numeric ineligible-column" id="row-ineligible-${inv.id}">₹${(inv.ineligible_itc || 0).toFixed(2)}</td>
                 ${window.IS_ADMIN ? `<td class="col-owner">${inv.username || window.CURRENT_USERNAME || ''}</td>` : ''}
                 <td class="actions-cell">
                     ${inv.has_file ? `
@@ -1121,6 +1383,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     const matched = masterVendors.find(v => v.name.toLowerCase() === partyVal || partyVal.includes(v.name.toLowerCase()) || v.name.toLowerCase().includes(partyVal));
                     if (matched) {
                         gstinInput.value = matched.gstin;
+                        gstinInput.classList.remove('field-needs-rectification');
                     }
                 });
             }
@@ -1131,10 +1394,16 @@ document.addEventListener('DOMContentLoaded', () => {
                     const mb = masterBranches.find(b => b.name.toUpperCase() === val);
                     if (mb) {
                         stateSelectRow.value = mb.state;
+                        branchInputRow.classList.remove('field-needs-rectification');
+                        stateSelectRow.classList.remove('field-needs-rectification');
                     } else if (val.includes('ANDHERI') || val.includes('MAHARASHTRA') || val.includes('MAHARASTRA')) {
                         stateSelectRow.value = 'Maharashtra';
+                        branchInputRow.classList.remove('field-needs-rectification');
+                        stateSelectRow.classList.remove('field-needs-rectification');
                     } else if (val) {
                         stateSelectRow.value = 'Gujarat';
+                        branchInputRow.classList.remove('field-needs-rectification');
+                        stateSelectRow.classList.remove('field-needs-rectification');
                     }
                 });
             }
@@ -1142,12 +1411,15 @@ document.addEventListener('DOMContentLoaded', () => {
             const inputs = tr.querySelectorAll('input, select');
             inputs.forEach(input => {
                 input.addEventListener('change', (e) => {
-                    updateStateFromRow(tr, index);
+                    if (input.value.trim()) {
+                        input.classList.remove('field-needs-rectification');
+                    }
+                    updateStateFromRow(tr, inv.id);
                 });
             });
 
             tr.querySelector('.btn-delete').addEventListener('click', () => {
-                deleteInvoice(index);
+                deleteInvoice(inv.id);
             });
 
             const viewFileBtn = tr.querySelector('.btn-view-file');
@@ -1162,12 +1434,31 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Sync input values with invoice state, calculate 50% split, and POST update to database
-    function updateStateFromRow(rowEl, index) {
+    function updateStateFromRow(rowEl, invoiceId) {
         const state = rowEl.querySelector('.field-state').value.trim() || 'Unassigned';
         const branch = rowEl.querySelector('.field-branch').value.trim() || 'Unassigned';
         const gstin = rowEl.querySelector('.field-gstin').value.trim() || 'N/A';
         const invNum = rowEl.querySelector('.field-number').value;
         const invDate = rowEl.querySelector('.field-date').value;
+        const paymentDate = rowEl.querySelector('.field-payment-date').value.trim() || null;
+        const vendor = rowEl.querySelector('.field-vendor').value;
+        const taxable = parseFloat(rowEl.querySelector('.field-taxable').value) || 0;
+        const cgst = parseFloat(rowEl.querySelector('.field-cgst').value) || 0;
+        const sgst = parseFloat(rowEl.querySelector('.field-sgst').value) || 0;
+        const igst = parseFloat(rowEl.querySelector('.field-igst').value) || 0;
+        const itcBlocked = rowEl.querySelector('.field-itc-blocked').checked;
+
+        const totalGst = cgst + sgst + igst;
+        const eligible = itcBlocked ? 0 : totalGst * 0.5;
+        const ineligible = itcBlocked ? totalGst : totalGst * 0.5;
+
+        const elCell = rowEl.querySelector(`#row-eligible-${invoiceId}`);
+        const inelCell = rowEl.querySelector(`#row-ineligible-${invoiceId}`);
+        if (elCell) elCell.textContent = `₹${eligible.toFixed(2)}`;
+        if (inelCell) inelCell.textContent = `₹${ineligible.toFixed(2)}`;
+
+        const index = invoices.findIndex(i => i.id === invoiceId);
+        if (index === -1) return;
         const paymentDate = rowEl.querySelector('.field-payment-date').value.trim() || null;
         const vendor = rowEl.querySelector('.field-vendor').value;
         const taxable = parseFloat(rowEl.querySelector('.field-taxable').value) || 0;

@@ -274,22 +274,69 @@
                     </div>
                 </div>
 
+                <!-- Quick Rectification & Audit Filter Ribbon -->
+                <div class="audit-filter-ribbon" id="audit-filter-ribbon">
+                    <span class="audit-ribbon-label"><i class="fa-solid fa-wand-magic-sparkles"></i> Quick Rectification:</span>
+                    <div class="audit-pills">
+                        <button type="button" class="audit-pill active" data-audit-filter="all">
+                            <span>All Bills</span> <span class="pill-count" id="count-pill-all">0</span>
+                        </button>
+                        <button type="button" class="audit-pill warning" data-audit-filter="missing-all" title="Show all bills with ANY missing/blank/unassigned field">
+                            <i class="fa-solid fa-triangle-exclamation"></i> <span>All Incomplete</span> <span class="pill-count" id="count-pill-incomplete">0</span>
+                        </button>
+                        <button type="button" class="audit-pill warning" data-audit-filter="missing-gstin" title="Show bills with missing or invalid GSTIN">
+                            <i class="fa-solid fa-id-card"></i> <span>Missing GST No</span> <span class="pill-count" id="count-pill-gstin">0</span>
+                        </button>
+                        <button type="button" class="audit-pill warning" data-audit-filter="missing-inv" title="Show bills with missing or ERROR invoice number">
+                            <i class="fa-solid fa-hashtag"></i> <span>Missing Invoice #</span> <span class="pill-count" id="count-pill-inv">0</span>
+                        </button>
+                        <button type="button" class="audit-pill warning" data-audit-filter="missing-branch" title="Show bills with unassigned branch or state">
+                            <i class="fa-solid fa-code-branch"></i> <span>Unassigned Branch</span> <span class="pill-count" id="count-pill-branch">0</span>
+                        </button>
+                        <button type="button" class="audit-pill warning" data-audit-filter="missing-payment" title="Show bills with missing payment date">
+                            <i class="fa-solid fa-calendar-xmark"></i> <span>Missing Payment Date</span> <span class="pill-count" id="count-pill-payment">0</span>
+                        </button>
+                        <button type="button" class="audit-pill warning" data-audit-filter="missing-date" title="Show bills with missing invoice date">
+                            <i class="fa-solid fa-calendar"></i> <span>Missing Date</span> <span class="pill-count" id="count-pill-date">0</span>
+                        </button>
+                        <button type="button" class="audit-pill warning" data-audit-filter="zero-tax" title="Show bills with 0 or blank tax amounts">
+                            <i class="fa-solid fa-coins"></i> <span>Zero / Blank Tax</span> <span class="pill-count" id="count-pill-tax">0</span>
+                        </button>
+                    </div>
+                </div>
+
                 <div class="table-container">
                     <table class="invoice-table" id="invoice-table">
                         <thead>
                             <tr>
-                                <th width="7%">State</th>
-                                <th width="7%">Branch</th>
-                                <th width="9%">GST No</th>
-                                <th width="8%">Invoice #</th>
-                                <th width="8%">Date</th>
-                                <th width="8%">Payment Date</th>
-                                <th width="12%">Vendor Name</th>
+                                <th width="7%" data-col="state">
+                                    <div class="th-content"><span>State</span><button type="button" class="col-filter-trigger" data-col="state" title="Filter State"><i class="fa-solid fa-filter"></i></button></div>
+                                </th>
+                                <th width="8%" data-col="branch">
+                                    <div class="th-content"><span>Branch</span><button type="button" class="col-filter-trigger" data-col="branch" title="Filter Branch"><i class="fa-solid fa-filter"></i></button></div>
+                                </th>
+                                <th width="9%" data-col="gstin">
+                                    <div class="th-content"><span>GST No</span><button type="button" class="col-filter-trigger" data-col="gstin" title="Filter GST No"><i class="fa-solid fa-filter"></i></button></div>
+                                </th>
+                                <th width="8%" data-col="invoice_number">
+                                    <div class="th-content"><span>Invoice #</span><button type="button" class="col-filter-trigger" data-col="invoice_number" title="Filter Invoice #"><i class="fa-solid fa-filter"></i></button></div>
+                                </th>
+                                <th width="8%" data-col="invoice_date">
+                                    <div class="th-content"><span>Date</span><button type="button" class="col-filter-trigger" data-col="invoice_date" title="Filter Date"><i class="fa-solid fa-filter"></i></button></div>
+                                </th>
+                                <th width="8%" data-col="payment_date">
+                                    <div class="th-content"><span>Payment Date</span><button type="button" class="col-filter-trigger" data-col="payment_date" title="Filter Payment Date"><i class="fa-solid fa-filter"></i></button></div>
+                                </th>
+                                <th width="12%" data-col="vendor_name">
+                                    <div class="th-content"><span>Vendor Name</span><button type="button" class="col-filter-trigger" data-col="vendor_name" title="Filter Vendor Name"><i class="fa-solid fa-filter"></i></button></div>
+                                </th>
                                 <th width="9%">Taxable Value (₹)</th>
                                 <th width="8%">CGST (₹)</th>
                                 <th width="8%">SGST (₹)</th>
                                 <th width="7%">IGST (₹)</th>
-                                <th width="6%" title="Section 17(5) blocked credit / fully ineligible">ITC Blocked</th>
+                                <th width="6%" title="Section 17(5) blocked credit / fully ineligible" data-col="itc_blocked">
+                                    <div class="th-content"><span>Blocked</span><button type="button" class="col-filter-trigger" data-col="itc_blocked" title="Filter Blocked"><i class="fa-solid fa-filter"></i></button></div>
+                                </th>
                                 <th width="9%" class="th-green">Eligible ITC (50%)</th>
                                 <th width="9%" class="th-red">Ineligible ITC (50%)</th>
                                 {% if is_admin %}<th width="8%" class="col-owner">Uploaded By</th>{% endif %}

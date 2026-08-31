@@ -1010,6 +1010,222 @@ body {
     box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
 }
 
+/* Quick Rectification & Audit Filter Ribbon */
+.audit-filter-ribbon {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 16px;
+    padding: 10px 14px;
+    background: #f8fafc;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    flex-wrap: wrap;
+}
+
+.audit-ribbon-label {
+    font-size: 12.5px;
+    font-weight: 700;
+    color: #334155;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+}
+
+.audit-ribbon-label i {
+    color: var(--accent-blue);
+}
+
+.audit-pills {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.audit-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 12px;
+    background: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #475569;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.audit-pill:hover {
+    border-color: #94a3b8;
+    background: #f1f5f9;
+}
+
+.audit-pill.active {
+    background: #eff6ff;
+    border-color: #3b82f6;
+    color: #1d4ed8;
+    box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
+}
+
+.audit-pill.warning {
+    color: #92400e;
+    background: #fefce8;
+    border-color: #fde047;
+}
+
+.audit-pill.warning:hover {
+    background: #fef9c3;
+    border-color: #facc15;
+}
+
+.audit-pill.warning.active {
+    background: #fef08a;
+    border-color: #eab308;
+    color: #854d0e;
+    box-shadow: 0 0 0 2px rgba(234, 179, 8, 0.25);
+}
+
+.pill-count {
+    padding: 1px 6px;
+    background: #e2e8f0;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 700;
+    color: #334155;
+}
+
+.audit-pill.active .pill-count {
+    background: #3b82f6;
+    color: #ffffff;
+}
+
+.audit-pill.warning.active .pill-count {
+    background: #ca8a04;
+    color: #ffffff;
+}
+
+/* Table Header Filter Dropdown */
+.th-content {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    position: relative;
+}
+
+.col-filter-trigger {
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    font-size: 11px;
+    color: #94a3b8;
+    padding: 2px 4px;
+    border-radius: 4px;
+    transition: all 0.15s ease;
+}
+
+.col-filter-trigger:hover,
+.col-filter-trigger.active {
+    color: var(--accent-blue);
+    background: #dbeafe;
+}
+
+.col-filter-popup {
+    position: absolute;
+    top: calc(100% + 8px);
+    left: 0;
+    width: 220px;
+    background: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.2);
+    z-index: 1100;
+    padding: 8px;
+    display: none;
+    text-transform: none;
+    letter-spacing: normal;
+    font-family: var(--font-body);
+    font-weight: 400;
+}
+
+.col-filter-popup.show {
+    display: block;
+}
+
+.col-filter-search {
+    width: 100%;
+    padding: 6px 8px;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    font-size: 12px;
+    margin-bottom: 6px;
+    box-sizing: border-box;
+}
+
+.col-filter-options {
+    max-height: 160px;
+    overflow-y: auto;
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.col-filter-option {
+    padding: 4px 6px;
+    font-size: 12px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    border-radius: 4px;
+    color: #1e293b;
+}
+
+.col-filter-option:hover {
+    background: #f1f5f9;
+}
+
+.col-filter-actions {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-top: 1px solid #e2e8f0;
+    margin-top: 6px;
+    padding-top: 6px;
+}
+
+.col-filter-actions button {
+    background: none;
+    border: none;
+    font-size: 11.5px;
+    font-weight: 600;
+    cursor: pointer;
+    padding: 2px 4px;
+}
+
+.col-filter-clear {
+    color: #ef4444;
+}
+
+/* Missing Field Rectification Highlight */
+.field-needs-rectification {
+    background-color: #fffbeb !important;
+    border: 1px dashed #f59e0b !important;
+    color: #92400e !important;
+    font-weight: 600 !important;
+}
+
+.field-needs-rectification:focus {
+    border: 1px solid #d97706 !important;
+    background-color: #ffffff !important;
+    color: #1e293b !important;
+    box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.25) !important;
+}
+
 /* Table Design */
 .table-container {
     overflow-x: auto;
