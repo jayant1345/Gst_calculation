@@ -70,15 +70,69 @@ document.addEventListener('DOMContentLoaded', () => {
     let pendingHighAccuracyFolderGroups = null;
     let hideProgressTimeoutId = null;
 
+        // Multi-tenant client workspace state
+    let currentClientId = sessionStorage.getItem('active_client_id') || 'nutan_nagrik';
+
+    function updateClientUI(clientData) {
+        if (!clientData) return;
+        const ruleBannerText = document.querySelector('.rule-banner .banner-text');
+        if (ruleBannerText) {
+            ruleBannerText.innerHTML = `<strong>${clientData.rule_title || 'GST ITC Compliance'}:</strong> ${clientData.rule_description || ''}`;
+        }
+        const eligibleCardTitle = document.querySelector('#card-eligible-title');
+        if (eligibleCardTitle) {
+            eligibleCardTitle.innerText = clientData.eligible_card_title || 'Eligible ITC';
+        }
+        const ineligibleCardTitle = document.querySelector('#card-ineligible-title');
+        if (ineligibleCardTitle) {
+            ineligibleCardTitle.innerText = clientData.ineligible_card_title || 'Ineligible ITC';
+        }
+    }
+
+    function switchClientWorkspace(clientId) {
+        currentClientId = clientId;
+        sessionStorage.setItem('active_client_id', clientId);
+        
+        // Update active tab class
+        document.querySelectorAll('.client-tab-btn').forEach(btn => {
+            if (btn.getAttribute('data-client-id') === clientId) {
+                btn.classList.add('active');
+            } else {
+                btn.classList.remove('active');
+            }
+        });
+
+        // Notify backend of active client switch
+        fetch('/api/set-active-client', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ client_id: clientId })
+        })
+        .then(res => res.json())
+        .then(data => {
+            if (data.client) {
+                updateClientUI(data.client);
+            }
+            loadInvoices();
+        })
+        .catch(err => {
+            console.error('Error switching client:', err);
+            loadInvoices();
+        });
+    }
+
     function loadInvoices() {
-        fetch('/api/get-invoices')
+        fetch('/api/get-invoices?client_id=' + encodeURIComponent(currentClientId))
             .then(response => {
                 if (!response.ok) throw new Error('Failed to fetch invoices');
                 return response.json();
             })
             .then(data => {
                 if (data.invoices) {
-                    invoices = data.invoices;
+                    if (data.client) {
+                        updateClientUI(data.client);
+                    }
+                    invoices = data.invoices || [];
                     populateFilters();
                     calculateAuditCounts();
                     renderTable();
@@ -2527,17 +2581,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Client Entity Switcher Tabs Handler
     document.querySelectorAll('.client-tab-btn').forEach(btn => {
+        const cid = btn.getAttribute('data-client-id');
+        if (cid === currentClientId) {
+            btn.classList.add('active');
+        } else {
+            btn.classList.remove('active');
+        }
         btn.addEventListener('click', () => {
-            const clientId = btn.getAttribute('data-client-id');
-            if (clientId === 'nutan_nagrik') {
-                document.querySelectorAll('.client-tab-btn').forEach(b => b.classList.remove('active'));
-                btn.classList.add('active');
-            } else if (clientId === 'sun_builders') {
-                document.querySelectorAll('.client-tab-btn').forEach(b => b.classList.remove('active'));
-                btn.classList.add('active');
-                alert('Sun Builders: Connected to N. N. Shah & Co. GST audit workspace.');
-            } else {
-                alert('Client workspace under configuration. Additional client slots can be connected for multi-entity auditing.');
+            const selectedCid = btn.getAttribute('data-client-id');
+            if (selectedCid) {
+                switchClientWorkspace(selectedCid);
             }
         });
     });

@@ -210,7 +210,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const fy = fySelect ? fySelect.value : '';
         if (!fy) return;
 
-        fetch(`/api/gstr2b-status?financial_year=${fy}`)
+        fetch(`/api/gstr2b-status?financial_year=${fy}&client_id=${encodeURIComponent(currentClientId)}`)
             .then(res => res.json())
             .then(data => {
                 const batches = data.batches || [];
@@ -375,7 +375,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
         const monthsQuery = selectedMonths.join(',');
         
-        fetch(`/api/reconcile-data?financial_year=${fy}&months=${monthsQuery}`)
+        fetch(`/api/reconcile-data?financial_year=${fy}&months=${monthsQuery}&client_id=${encodeURIComponent(currentClientId)}`)
         .then(res => res.json())
         .then(data => {
             if (data.error) {
@@ -828,7 +828,7 @@ document.addEventListener('DOMContentLoaded', function() {
         if (selectedMonths.length === 0) return;
 
         const monthsQuery = selectedMonths.join(',');
-        fetch(`/api/vendor-discrepancies?financial_year=${fy}&months=${monthsQuery}`)
+        fetch(`/api/vendor-discrepancies?financial_year=${fy}&months=${monthsQuery}&client_id=${encodeURIComponent(currentClientId)}`)
             .then(res => res.json())
             .then(data => {
                 if (data.success) {
@@ -900,7 +900,7 @@ document.addEventListener('DOMContentLoaded', function() {
         if (selectedMonths.length === 0) return;
 
         const monthsQuery = selectedMonths.join(',');
-        fetch(`/api/gstr3b-summary?financial_year=${fy}&months=${monthsQuery}`)
+        fetch(`/api/gstr3b-summary?financial_year=${fy}&months=${monthsQuery}&client_id=${encodeURIComponent(currentClientId)}`)
             .then(res => res.json())
             .then(data => {
                 if (data.success && data.gstr3b) {

@@ -146,6 +146,71 @@ def parse_date_to_fy_and_month(date_str):
 
     return None, None
 
+
+CLIENTS_CONFIG = {
+    'nutan_nagrik': {
+        'id': 'nutan_nagrik',
+        'name': 'Nutan Nagrik Sahakari Bank Ltd.',
+        'short_name': 'Nutan Nagrik Bank',
+        'type': 'banking',
+        'itc_rule': 'section_17_4_50',
+        'itc_claim_pct': 50,
+        'rule_title': 'CGST Act Section 17(4) Compliance',
+        'rule_description': 'Banking companies opting for this method must claim exactly 50% of the eligible Input Tax Credit (ITC) on inputs, capital goods, and input services. The remaining 50% is treated as ineligible credit and lapses.',
+        'eligible_card_title': 'Eligible ITC (50%)',
+        'ineligible_card_title': 'Ineligible ITC (50%)',
+        'icon': 'fa-building-columns',
+        'tag': 'Active Client'
+    },
+    'sun_builders': {
+        'id': 'sun_builders',
+        'name': 'Sun Builders',
+        'short_name': 'Sun Builders',
+        'type': 'builder_realestate',
+        'itc_rule': 'standard_100',
+        'itc_claim_pct': 100,
+        'rule_title': 'CGST Act Section 16 & 17(5) Compliance (Real Estate)',
+        'rule_description': 'Standard Real Estate & Infrastructure ITC: Claim 100% eligible Input Tax Credit on qualifying commercial procurement and services, subject to Section 17(5) blocked credit rules (construction materials, motor vehicles, etc.).',
+        'eligible_card_title': 'Eligible ITC (100%)',
+        'ineligible_card_title': 'Blocked / Ineligible ITC',
+        'icon': 'fa-city',
+        'tag': 'Client 2'
+    },
+    'client_3': {
+        'id': 'client_3',
+        'name': 'Client 3',
+        'short_name': 'Client 3',
+        'type': 'commercial',
+        'itc_rule': 'standard_100',
+        'itc_claim_pct': 100,
+        'rule_title': 'Standard Corporate GST ITC Compliance',
+        'rule_description': 'Standard 100% ITC claim workspace for commercial trading and corporate operations.',
+        'eligible_card_title': 'Eligible ITC',
+        'ineligible_card_title': 'Blocked ITC',
+        'icon': 'fa-building',
+        'tag': 'Coming Soon'
+    }
+}
+
+def get_current_client_id():
+    client_id = request.args.get('client_id') or request.headers.get('X-Client-Id')
+    if not client_id and request.is_json:
+        try:
+            body = request.get_json(silent=True) or {}
+            client_id = body.get('client_id')
+        except Exception:
+            pass
+    if not client_id:
+        client_id = session.get('active_client_id')
+    if not client_id or client_id not in CLIENTS_CONFIG:
+        client_id = 'nutan_nagrik'
+    session['active_client_id'] = client_id
+    return client_id
+
+def get_client_config(client_id=None):
+    cid = client_id or get_current_client_id()
+    return CLIENTS_CONFIG.get(cid, CLIENTS_CONFIG['nutan_nagrik'])
+
 # Database Tables Initialization
 def init_db():
     try:
@@ -245,6 +310,16 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         ''')
+
+                # Multi-client data isolation schema
+        cur.execute("ALTER TABLE invoices ADD COLUMN IF NOT EXISTS client_id VARCHAR(50) NOT NULL DEFAULT 'nutan_nagrik';")
+        cur.execute("ALTER TABLE gstr2b_entries ADD COLUMN IF NOT EXISTS client_id VARCHAR(50) NOT NULL DEFAULT 'nutan_nagrik';")
+        cur.execute("ALTER TABLE activity_log ADD COLUMN IF NOT EXISTS client_id VARCHAR(50) NOT NULL DEFAULT 'nutan_nagrik';")
+        cur.execute("UPDATE invoices SET client_id = 'nutan_nagrik' WHERE client_id IS NULL OR client_id = '' OR client_id = 'default';")
+        cur.execute("UPDATE gstr2b_entries SET client_id = 'nutan_nagrik' WHERE client_id IS NULL OR client_id = '' OR client_id = 'default';")
+        cur.execute("UPDATE activity_log SET client_id = 'nutan_nagrik' WHERE client_id IS NULL OR client_id = '' OR client_id = 'default';")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_invoices_client ON invoices(client_id, user_id);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_gstr2b_client ON gstr2b_entries(client_id, user_id);")
 
         conn.commit()
 
@@ -1102,6 +1177,34 @@ def admin_delete_user(user_id):
     return redirect(url_for('admin_users'))
 
 # API Endpoints
+
+@app.route('/api/clients', methods=['GET'])
+@login_required
+def get_clients():
+    return jsonify({
+        "clients": CLIENTS_CONFIG,
+        "active_client_id": get_current_client_id()
+    })
+
+@app.route('/api/get-active-client', methods=['GET'])
+@login_required
+def get_active_client_api():
+    cid = get_current_client_id()
+    return jsonify({
+        "active_client_id": cid,
+        "client": CLIENTS_CONFIG.get(cid, CLIENTS_CONFIG['nutan_nagrik'])
+    })
+
+@app.route('/api/set-active-client', methods=['POST'])
+@login_required
+def set_active_client_api():
+    data = request.get_json(silent=True) or {}
+    cid = data.get('client_id')
+    if cid in CLIENTS_CONFIG:
+        session['active_client_id'] = cid
+        return jsonify({"success": True, "active_client_id": cid, "client": CLIENTS_CONFIG[cid]})
+    return jsonify({"success": False, "error": "Invalid client ID"}), 400
+
 @app.route('/api/master-data', methods=['GET'])
 @login_required
 def get_master_data():
@@ -1115,6 +1218,7 @@ def get_master_data():
 def get_invoices():
     user_id = session['user_id']
     is_admin = is_admin_user()
+    client_id = get_current_client_id()
     try:
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -1123,31 +1227,32 @@ def get_invoices():
                 SELECT invoices.id, invoice_number, invoice_date, payment_date, vendor_name, gstin, branch, state,
                        taxable_value::float, cgst::float, sgst::float, igst::float, itc_blocked,
                        eligible_itc::float, ineligible_itc::float, users.username,
-                       financial_year, month,
+                       financial_year, month, client_id,
                        (file_data IS NOT NULL) AS has_file
                 FROM invoices
                 JOIN users ON users.id = invoices.user_id
+                WHERE invoices.client_id = %s
                 ORDER BY invoices.created_at DESC
-            ''')
+            ''', (client_id,))
         else:
             cur.execute('''
                 SELECT id, invoice_number, invoice_date, payment_date, vendor_name, gstin, branch, state,
                        taxable_value::float, cgst::float, sgst::float, igst::float, itc_blocked,
                        eligible_itc::float, ineligible_itc::float,
-                       financial_year, month,
+                       financial_year, month, client_id,
                        (file_data IS NOT NULL) AS has_file
                 FROM invoices
-                WHERE user_id = %s
+                WHERE user_id = %s AND client_id = %s
                 ORDER BY created_at DESC
-            ''', (user_id,))
+            ''', (user_id, client_id))
         rows = cur.fetchall()
         cur.close()
         conn.close()
-        return jsonify({"invoices": rows})
+        return jsonify({"invoices": rows, "client_id": client_id, "client": get_client_config(client_id)})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-def find_duplicate_invoice(cur, user_id, gstin, inv_num, vendor_name, inv_date, taxable_value, financial_year=None, exclude_id=None):
+def find_duplicate_invoice(cur, user_id, gstin, inv_num, vendor_name, inv_date, taxable_value, financial_year=None, exclude_id=None, client_id='nutan_nagrik'):
     """Checks if a matching invoice already exists in the database for the user.
     Returns (duplicate_id, reason_str) or (None, None)."""
     clean_num = (inv_num or '').strip()
@@ -1159,11 +1264,11 @@ def find_duplicate_invoice(cur, user_id, gstin, inv_num, vendor_name, inv_date, 
         query = '''
             SELECT id, invoice_number, vendor_name, invoice_date, financial_year
             FROM invoices
-            WHERE user_id = %s
+            WHERE user_id = %s AND client_id = %s
               AND UPPER(TRIM(gstin)) = UPPER(%s)
               AND UPPER(TRIM(invoice_number)) = UPPER(%s)
         '''
-        params = [user_id, clean_gstin, clean_num]
+        params = [user_id, client_id, clean_gstin, clean_num]
         if financial_year:
             query += ' AND (financial_year IS NULL OR financial_year = %s)'
             params.append(financial_year)
@@ -1180,11 +1285,11 @@ def find_duplicate_invoice(cur, user_id, gstin, inv_num, vendor_name, inv_date, 
         query = '''
             SELECT id, invoice_number, vendor_name, invoice_date, financial_year
             FROM invoices
-            WHERE user_id = %s
+            WHERE user_id = %s AND client_id = %s
               AND UPPER(TRIM(vendor_name)) = UPPER(%s)
               AND UPPER(TRIM(invoice_number)) = UPPER(%s)
         '''
-        params = [user_id, clean_vendor, clean_num]
+        params = [user_id, client_id, clean_vendor, clean_num]
         if financial_year:
             query += ' AND (financial_year IS NULL OR financial_year = %s)'
             params.append(financial_year)
@@ -1201,12 +1306,12 @@ def find_duplicate_invoice(cur, user_id, gstin, inv_num, vendor_name, inv_date, 
         query = '''
             SELECT id, invoice_number, vendor_name, invoice_date, taxable_value
             FROM invoices
-            WHERE user_id = %s
+            WHERE user_id = %s AND client_id = %s
               AND UPPER(TRIM(vendor_name)) = UPPER(%s)
               AND invoice_date = %s
               AND taxable_value = %s
         '''
-        params = [user_id, clean_vendor, inv_date, float(taxable_value or 0.0)]
+        params = [user_id, client_id, clean_vendor, inv_date, float(taxable_value or 0.0)]
         if exclude_id:
             query += ' AND id != %s'
             params.append(exclude_id)
@@ -1239,13 +1344,15 @@ def save_invoice():
     igst = float(inv.get('igst', 0.0))
     itc_blocked = bool(inv.get('itc_blocked', False))
 
-    # Recalculate the ITC split on the server to ensure precision. Bills
-    # marked ITC-blocked (e.g. Section 17(5) blocked credits) get 0%
-    # eligible / 100% ineligible instead of the default flat 50/50 split.
+    client_id = inv.get('client_id') or get_current_client_id()
+    cfg = get_client_config(client_id)
     total_gst = cgst + sgst + igst
     if itc_blocked:
         eligible = 0.0
         ineligible = round(total_gst, 2)
+    elif cfg.get('itc_rule') == 'standard_100':
+        eligible = round(total_gst, 2)
+        ineligible = 0.0
     else:
         eligible = round(total_gst * 0.5, 2)
         ineligible = round(total_gst * 0.5, 2)
@@ -1336,7 +1443,7 @@ def delete_invoice():
         if is_admin:
             cur.execute('DELETE FROM invoices WHERE id = %s', (db_id,))
         else:
-            cur.execute('DELETE FROM invoices WHERE id = %s AND user_id = %s', (db_id, user_id))
+            cur.execute('DELETE FROM invoices WHERE id = %s AND user_id = %s AND client_id = %s', (db_id, user_id, get_current_client_id()))
         conn.commit()
         cur.close()
         conn.close()
@@ -2297,9 +2404,9 @@ def process_invoices():
                 try:
                     cur.execute("SAVEPOINT sp_inv")
                     cur.execute('''
-                        INSERT INTO invoices (user_id, invoice_number, invoice_date, payment_date, vendor_name, gstin, branch, state, taxable_value, cgst, sgst, igst, itc_blocked, eligible_itc, ineligible_itc, file_data, file_mime_type, file_name, financial_year, month)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
-                    ''', (user_id, inv["invoice_number"], inv["invoice_date"], inv["payment_date"], inv["vendor_name"], inv["gstin"], inv["branch"], inv["state"],
+                        INSERT INTO invoices (user_id, client_id, invoice_number, invoice_date, payment_date, vendor_name, gstin, branch, state, taxable_value, cgst, sgst, igst, itc_blocked, eligible_itc, ineligible_itc, file_data, file_mime_type, file_name, financial_year, month)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
+                    ''', (user_id, client_id, inv["invoice_number"], inv["invoice_date"], inv["payment_date"], inv["vendor_name"], inv["gstin"], inv["branch"], inv["state"],
                           inv["taxable_value"], inv["cgst"], inv["sgst"], inv["igst"], inv["itc_blocked"],
                           eligible, ineligible,
                           psycopg2.Binary(inv_store_bytes) if inv_store_bytes else None,
@@ -3015,7 +3122,7 @@ def export_filtered_reconciliation():
         months = ['April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December', 'January', 'February', 'March']
 
     try:
-        summary, items, _, _ = execute_reconciliation(fy, months, user_id, is_admin)
+        summary, items, _, _ = execute_reconciliation(fy, months, user_id, is_admin, client_id=client_id)
 
         # 1. Apply State filter
         if state_filter and state_filter.lower() != 'all':
@@ -3311,16 +3418,17 @@ def gstr2b_status():
                            COALESCE(SUM(taxable_value), 0)::float as total_taxable,
                            COALESCE(SUM(cgst + sgst + igst), 0)::float as total_gst
                     FROM gstr2b_entries
-                    WHERE financial_year = %s
+                    WHERE client_id = %s AND financial_year = %s
                     GROUP BY state, month, financial_year
                     ORDER BY state, month
-                ''', (fy,))
+                ''', (client_id, fy))
             else:
                 cur.execute('''
                     SELECT state, month, financial_year, COUNT(*) as count,
                            COALESCE(SUM(taxable_value), 0)::float as total_taxable,
                            COALESCE(SUM(cgst + sgst + igst), 0)::float as total_gst
                     FROM gstr2b_entries
+                    WHERE client_id = %s
                     GROUP BY state, month, financial_year
                     ORDER BY financial_year, state, month
                 ''')
@@ -3353,7 +3461,7 @@ def gstr2b_status():
         print(f"Error fetching GSTR-2B status: {e}")
         return jsonify({"error": str(e)}), 500
 
-def execute_reconciliation(fy, months, user_id, is_admin):
+def execute_reconciliation(fy, months, user_id, is_admin, client_id='nutan_nagrik'):
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
@@ -3365,8 +3473,8 @@ def execute_reconciliation(fy, months, user_id, is_admin):
                    (cgst::float + sgst::float + igst::float) as total_gst,
                    (file_data IS NOT NULL) AS has_file
             FROM invoices
-            WHERE financial_year = %s AND month = ANY(%s)
-        ''', (fy, months))
+            WHERE client_id = %s AND financial_year = %s AND month = ANY(%s)
+        ''', (client_id, fy, months))
     else:
         cur.execute('''
             SELECT id, invoice_number, invoice_date, vendor_name, gstin, branch, state,
@@ -3375,8 +3483,8 @@ def execute_reconciliation(fy, months, user_id, is_admin):
                    (cgst::float + sgst::float + igst::float) as total_gst,
                    (file_data IS NOT NULL) AS has_file
             FROM invoices
-            WHERE user_id = %s AND financial_year = %s AND month = ANY(%s)
-        ''', (user_id, fy, months))
+            WHERE user_id = %s AND client_id = %s AND financial_year = %s AND month = ANY(%s)
+        ''', (user_id, client_id, fy, months))
     books_invoices = cur.fetchall()
 
     if is_admin:
@@ -3385,16 +3493,16 @@ def execute_reconciliation(fy, months, user_id, is_admin):
                    taxable_value::float, cgst::float, sgst::float, igst::float,
                    (cgst::float + sgst::float + igst::float) as total_gst
             FROM gstr2b_entries
-            WHERE financial_year = %s AND month = ANY(%s)
-        ''', (fy, months))
+            WHERE client_id = %s AND financial_year = %s AND month = ANY(%s)
+        ''', (client_id, fy, months))
     else:
         cur.execute('''
             SELECT id, invoice_number, invoice_date, supplier_name as vendor_name, supplier_gstin as gstin, state,
                    taxable_value::float, cgst::float, sgst::float, igst::float,
                    (cgst::float + sgst::float + igst::float) as total_gst
             FROM gstr2b_entries
-            WHERE user_id = %s AND financial_year = %s AND month = ANY(%s)
-        ''', (user_id, fy, months))
+            WHERE user_id = %s AND client_id = %s AND financial_year = %s AND month = ANY(%s)
+        ''', (user_id, client_id, fy, months))
     portal_entries = cur.fetchall()
 
     cur.close()
@@ -3578,7 +3686,7 @@ def reconcile_data():
         return jsonify({"error": "At least one month is required"}), 400
 
     try:
-        summary, reconciled, _, _ = execute_reconciliation(fy, months, user_id, is_admin)
+        summary, reconciled, _, _ = execute_reconciliation(fy, months, user_id, is_admin, client_id=client_id)
         return jsonify({
             "summary": summary,
             "items": reconciled
@@ -3601,7 +3709,7 @@ def get_vendor_discrepancies():
     months = [m.strip() for m in months_str.split(',') if m.strip()]
 
     try:
-        summary, reconciled, _, _ = execute_reconciliation(fy, months, user_id, is_admin)
+        summary, reconciled, _, _ = execute_reconciliation(fy, months, user_id, is_admin, client_id=client_id)
 
         vendors_dict = collections.defaultdict(lambda: {
             "gstin": "",
@@ -3683,7 +3791,7 @@ def generate_vendor_notice():
     is_admin = is_admin_user()
 
     try:
-        _, reconciled, _, _ = execute_reconciliation(fy, months, user_id, is_admin)
+        _, reconciled, _, _ = execute_reconciliation(fy, months, user_id, is_admin, client_id=client_id)
 
         missing_list = []
         mismatched_list = []
@@ -3773,7 +3881,7 @@ def get_gstr3b_summary():
     months = [m.strip() for m in months_str.split(',') if m.strip()]
 
     try:
-        summary, reconciled, books_invoices, _ = execute_reconciliation(fy, months, user_id, is_admin)
+        summary, reconciled, books_invoices, _ = execute_reconciliation(fy, months, user_id, is_admin, client_id=client_id)
 
         itc_4a5_matched = {"taxable": 0.0, "cgst": 0.0, "sgst": 0.0, "igst": 0.0, "total": 0.0}
         itc_4b2_ineligible = {"taxable": 0.0, "cgst": 0.0, "sgst": 0.0, "igst": 0.0, "total": 0.0}
@@ -3872,7 +3980,7 @@ def export_vendor_discrepancies():
     months = [m.strip() for m in months_str.split(',') if m.strip()]
 
     try:
-        _, reconciled, _, _ = execute_reconciliation(fy, months, user_id, is_admin)
+        _, reconciled, _, _ = execute_reconciliation(fy, months, user_id, is_admin, client_id=client_id)
 
         wb = Workbook()
         ws = wb.active
