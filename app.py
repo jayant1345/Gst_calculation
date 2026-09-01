@@ -540,7 +540,7 @@ def call_vision_model(system_prompt, user_prompt, base64_data, mime_type):
     # 1. Primary: Google Gemini 2.5 Flash via OpenRouter (~1.5s)
     openrouter_payload = {
         "model": AI_VISION_MODEL_NAME,
-        "max_tokens": 1500,
+        "max_tokens": 3000,
         "messages": [
             {"role": "system", "content": system_prompt},
             {
@@ -568,7 +568,7 @@ def call_vision_model(system_prompt, user_prompt, base64_data, mime_type):
     # 3. Tertiary Fallback: Anthropic direct API
     anthropic_payload = {
         "model": AI_VISION_SECONDARY_FALLBACK,
-        "max_tokens": 1500,
+        "max_tokens": 3000,
         "system": system_prompt,
         "messages": [
             {
@@ -700,113 +700,170 @@ def extract_from_image_rescan(file_bytes, ext):
     return parsed
 
 
+_MASTER_REFERENCE_BLOCK = None
+def build_master_reference_block():
+    """Formats the known-branch and known-vendor master lists into one compact
+    text block to inject into every extraction prompt, so the model can match
+    OCR'd branch/vendor text against known-correct values directly while
+    reading the bill (fixing abbreviations, letterhead OCR noise, etc.)
+    instead of relying only on post-hoc fuzzy string matching after the fact.
+    Cached module-wide since the master lists never change during a run."""
+    global _MASTER_REFERENCE_BLOCK
+    if _MASTER_REFERENCE_BLOCK is not None:
+        return _MASTER_REFERENCE_BLOCK
+    branch_lines = "\n".join(f"- {b['name']} ({b['state']})" for b in MASTER_BRANCHES)
+    vendor_lines = "\n".join(f"- {v['name']} -> {v['gstin']}" for v in MASTER_VENDORS)
+    _MASTER_REFERENCE_BLOCK = (
+        "REFERENCE LISTS (use ONLY to correct OCR/reading errors when the bill's own "
+        "printed/handwritten text CLOSELY matches one of these -- never force a match "
+        "onto a clearly different, unlisted vendor or branch, and never invent a branch "
+        "that isn't actually indicated on the bill):\n\n"
+        "Known bank branches (name (state)):\n" + branch_lines + "\n\n"
+        "Known vendor master list (name -> GSTIN) -- if the vendor name or GSTIN you read "
+        "closely matches one of these, prefer the listed GSTIN over a noisy OCR read:\n"
+        + vendor_lines
+    )
+    return _MASTER_REFERENCE_BLOCK
+
+
+def _parse_bill_array(result, model_name):
+    """Parses a model's JSON response as a LIST of bills -- a single PDF page
+    or image can legitimately contain more than one distinct bill (e.g.
+    several small vouchers scanned onto one page). Tolerates a bare single
+    object if the model ignored the array instruction by wrapping it, and
+    tags every bill with which model produced it."""
+    if "```json" in result:
+        result = result.split("```json")[1].split("```")[0].strip()
+    elif "```" in result:
+        result = result.split("```")[1].split("```")[0].strip()
+    parsed = json.loads(result)
+    if isinstance(parsed, dict):
+        parsed = [parsed]
+    for bill in parsed:
+        bill["_ai_model"] = model_name
+    return parsed
+
+
+_BILL_FIELDS_PROMPT = """- Invoice Number (invoice_number)
+- Invoice Date (invoice_date) - The printed date the invoice/bill was issued.
+- Payment Date (payment_date) - The date the bill was actually PAID, which is usually a
+  HANDWRITTEN note or RUBBER-STAMPED annotation added after the invoice was printed
+  (commonly near text like "RTGS/P.O. No.", "NEFT", "Cheque No.", or a "Sanctioned" /
+  "Please Pay" stamp/signature block). This is DIFFERENT from the printed Invoice Date above.
+  Leave blank if no such stamped/handwritten payment date is visible anywhere on the document.
+- Vendor Name (vendor_name)
+- Vendor GSTIN (gstin) - The SELLER/SUPPLIER's own GST registration number (usually printed
+  near the letterhead, or near the signature/footer). Do NOT use the buyer/recipient's GSTIN,
+  which is often printed next to the "M/s" or "Bill To" / customer name-and-address block -
+  that number belongs to the customer, not the vendor. If only a buyer GSTIN is visible and no
+  distinct seller GSTIN appears anywhere on the invoice, leave this blank rather than guessing.
+  IMPORTANT: a GSTIN always follows a fixed 15-character pattern: 2 DIGITS (state code),
+  5 LETTERS, 4 DIGITS, 1 LETTER, 1 DIGIT, the LETTER 'Z', then 1 final alphanumeric checksum
+  character. Use this pattern to resolve ambiguous characters - e.g. if position 3 looks like
+  it could be "O" or "0", the pattern says it must be a LETTER, so it is "O". Pay close
+  attention to these commonly-confused pairs in both the gstin and invoice_number: letter O vs
+  digit 0, letter I/L vs digit 1, letter S vs digit 5, letter B vs digit 8, letter G vs digit 6,
+  letter Z vs digit 2.
+- Branch (branch) - Only fill this in if the bill itself clearly indicates which bank branch it
+  belongs to (a stamp, letterhead, or handwritten note explicitly naming one) -- match it to the
+  closest name in the known branches reference list below. Leave blank/null if the bill has no
+  such explicit indication; do NOT guess a branch from the vendor's address or general context.
+- Taxable Value (taxable_value) - The value before taxes
+- CGST Amount (cgst)
+- SGST Amount (sgst)
+- IGST Amount (igst)"""
+
+_BILL_JSON_SCHEMA = """{
+      "invoice_number": "...",
+      "invoice_date": "...",
+      "payment_date": "...",
+      "vendor_name": "...",
+      "gstin": "...",
+      "branch": "...",
+      "taxable_value": 0.0,
+      "cgst": 0.0,
+      "sgst": 0.0,
+      "igst": 0.0
+    }"""
+
+
 def extract_from_text(text):
-    """Sends extracted text to Claude to parse invoice details into JSON."""
+    """Sends extracted page text to the AI to parse invoice details into a
+    JSON array of bills (a page can hold more than one distinct bill)."""
     system_prompt = (
         "You are an expert financial OCR assistant. Analyze the provided invoice text "
-        "and extract the key values. You must respond with ONLY a valid JSON object. "
+        "and extract the key values. You must respond with ONLY a valid JSON array. "
         "Do not include any explanation or markdown formatting outside the JSON."
     )
-    
+
     user_prompt = f"""
-    Please extract the following details from this invoice text:
-    - Invoice Number (invoice_number)
-    - Invoice Date (invoice_date) - The printed date the invoice/bill was issued.
-    - Payment Date (payment_date) - The date the bill was actually PAID, which is usually a
-      HANDWRITTEN note or RUBBER-STAMPED annotation added after the invoice was printed
-      (commonly near text like "RTGS/P.O. No.", "NEFT", "Cheque No.", or a "Sanctioned" /
-      "Please Pay" stamp/signature block). This is DIFFERENT from the printed Invoice Date above.
-      Leave blank if no such stamped/handwritten payment date is visible anywhere on the document.
-    - Vendor Name (vendor_name)
-    - Vendor GSTIN (gstin) - The SELLER/SUPPLIER's own GST registration number (usually printed
-      near the letterhead, or near the signature/footer). Do NOT use the buyer/recipient's GSTIN,
-      which is often printed next to the "M/s" or "Bill To" / customer name-and-address block -
-      that number belongs to the customer, not the vendor. If only a buyer GSTIN is visible and no
-      distinct seller GSTIN appears anywhere on the invoice, leave this blank rather than guessing.
-      IMPORTANT: a GSTIN always follows a fixed 15-character pattern: 2 DIGITS (state code),
-      5 LETTERS, 4 DIGITS, 1 LETTER, 1 DIGIT, the LETTER 'Z', then 1 final alphanumeric checksum
-      character. Use this pattern to resolve ambiguous characters - e.g. if position 3 looks like
-      it could be "O" or "0", the pattern says it must be a LETTER, so it is "O". Pay close
-      attention to these commonly-confused pairs in both the gstin and invoice_number: letter O vs
-      digit 0, letter I/L vs digit 1, letter S vs digit 5, letter B vs digit 8, letter G vs digit 6,
-      letter Z vs digit 2.
-    - Taxable Value (taxable_value) - The value before taxes
-    - CGST Amount (cgst)
-    - SGST Amount (sgst)
-    - IGST Amount (igst)
+    This text may contain ONE OR MORE separate bills/invoices (for example, several
+    distinct vendor bills combined into one purchase-register page). Identify EACH
+    distinct bill separately -- do not merge different bills' totals into one entry --
+    and return a JSON ARRAY with one object per bill. If there is genuinely only one
+    bill, return an array containing exactly one object.
+
+    For each bill, extract:
+    {_BILL_FIELDS_PROMPT}
+
+    {build_master_reference_block()}
 
     Invoice Text:
     ---
     {text}
     ---
 
-    Provide the output in the following JSON format:
-    {{
-      "invoice_number": "...",
-      "invoice_date": "...",
-      "payment_date": "...",
-      "vendor_name": "...",
-      "gstin": "...",
-      "taxable_value": 0.0,
-      "cgst": 0.0,
-      "sgst": 0.0,
-      "igst": 0.0
-    }}
+    Provide the output as a JSON array, one object per bill, each using this format:
+    [
+      {_BILL_JSON_SCHEMA}
+    ]
     """
-    
+
     # 1. Primary: Gemini 2.5 Flash via OpenRouter (~0.3s)
     if OPENROUTER_API_KEY:
         try:
             openrouter_payload = {
                 "model": AI_VISION_MODEL_NAME,
-                "max_tokens": 1200,
+                "max_tokens": 3000,
                 "messages": [
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
                 ]
             }
             result = call_openrouter_api(openrouter_payload)
-            if "```json" in result:
-                result = result.split("```json")[1].split("```")[0].strip()
-            elif "```" in result:
-                result = result.split("```")[1].split("```")[0].strip()
-            parsed = json.loads(result)
-            parsed["_ai_model"] = AI_VISION_MODEL_NAME
-            return parsed
+            return _parse_bill_array(result, AI_VISION_MODEL_NAME)
         except Exception as e:
             print(f"OpenRouter text extraction failed: {e}")
 
     # 2. Fallback: Anthropic direct API (Claude Sonnet)
     payload = {
         "model": "claude-3-5-sonnet-20241022",
-        "max_tokens": 1000,
+        "max_tokens": 2500,
         "system": system_prompt,
         "messages": [
             {"role": "user", "content": user_prompt}
         ]
     }
-    
-    result = call_claude_api(payload)
-    if "```json" in result:
-        result = result.split("```json")[1].split("```")[0].strip()
-    elif "```" in result:
-        result = result.split("```")[1].split("```")[0].strip()
-    parsed = json.loads(result)
-    parsed["_ai_model"] = "claude-3-5-sonnet-20241022"
-    return parsed
 
-def extract_from_image(base64_data, mime_type):
-    """Sends a base64 encoded invoice image to the vision model (via
-    OpenRouter, see AI_VISION_MODEL_NAME) to parse details into JSON."""
-    system_prompt = (
-        "You are an expert financial OCR assistant specialized in reading Indian tax invoices, "
-        "utility bills, handwritten vouchers, bank payment stamps, and purchase registers. "
-        "Analyze the invoice image and extract the key values with high precision. "
-        "You must respond with ONLY a valid JSON object. Do not include any explanation outside JSON."
-    )
-    
-    user_prompt = (
-        "Extract invoice details (reading BOTH PRINTED and HANDWRITTEN text across all fields):\n"
+    result = call_claude_api(payload)
+    return _parse_bill_array(result, "claude-3-5-sonnet-20241022")
+
+_VISION_SYSTEM_PROMPT = (
+    "You are an expert financial OCR assistant specialized in reading Indian tax invoices, "
+    "utility bills, handwritten vouchers, bank payment stamps, and purchase registers. "
+    "Analyze the invoice image and extract the key values with high precision. "
+    "You must respond with ONLY a valid JSON array. Do not include any explanation outside JSON."
+)
+
+
+def _vision_bill_prompt():
+    return (
+        "This image may show ONE OR MORE separate bills/invoices (for example, several small "
+        "vouchers or receipts scanned onto a single page). Identify EACH distinct bill "
+        "separately -- do not merge different bills' totals into one entry -- and return a "
+        "JSON ARRAY with one object per bill. If there is genuinely only one bill, return an "
+        "array containing exactly one object.\n\n"
+        "For each bill, extract details (reading BOTH PRINTED and HANDWRITTEN text across all fields):\n"
         "- invoice_number (printed or handwritten invoice/bill/challan number)\n"
         "- invoice_date (printed or handwritten invoice issue date)\n"
         "- payment_date (the date the bill was actually PAID - usually a HANDWRITTEN note, "
@@ -815,64 +872,39 @@ def extract_from_image(base64_data, mime_type):
         "- vendor_name (seller/supplier company or person name)\n"
         "- gstin (the SELLER/SUPPLIER's 15-character GSTIN, usually near letterhead or footer; "
         "do NOT extract buyer/bank GSTIN; leave blank if no vendor GSTIN is present)\n"
+        "- branch (only if the bill clearly indicates which bank branch it belongs to -- a stamp, "
+        "letterhead, or handwritten note explicitly naming one; match it to the closest name in the "
+        "known branches reference list below; leave blank/null if there's no explicit indication -- "
+        "do NOT guess a branch from the vendor's address or general context)\n"
         "- taxable_value (pre-tax base amount, printed or handwritten)\n"
         "- cgst, sgst, igst (tax amounts, printed or handwritten)\n"
         "IMPORTANT for accuracy:\n"
         "1. Read handwritten entries in blank form fields, rubber stamps, and pen notes accurately.\n"
         "2. A GSTIN always follows 15 chars: 2 digits (state), 5 letters (PAN), 4 digits, 1 letter, "
         "1 alphanumeric entity code, the letter 'Z', and 1 checksum char. Use this pattern to resolve "
-        "ambiguous handwritten/printed characters (e.g. position 3 is always a letter 'O' not '0')."
+        "ambiguous handwritten/printed characters (e.g. position 3 is always a letter 'O' not '0').\n\n"
+        + build_master_reference_block() +
+        "\n\nProvide the output as a JSON array, one object per bill, each using this format:\n"
+        "[\n  " + _BILL_JSON_SCHEMA + "\n]"
     )
 
-    result, model_used = call_vision_model(system_prompt, user_prompt, base64_data, mime_type)
-    if "```json" in result:
-        result = result.split("```json")[1].split("```")[0].strip()
-    elif "```" in result:
-        result = result.split("```")[1].split("```")[0].strip()
-    parsed = json.loads(result)
-    parsed["_ai_model"] = model_used
-    return parsed
+
+def extract_from_image(base64_data, mime_type):
+    """Sends a base64 encoded invoice image to the vision model (via
+    OpenRouter, see AI_VISION_MODEL_NAME) to parse details into a JSON
+    array of bills (one image can hold more than one distinct bill)."""
+    result, model_used = call_vision_model(_VISION_SYSTEM_PROMPT, _vision_bill_prompt(), base64_data, mime_type)
+    return _parse_bill_array(result, model_used)
+
 
 def extract_from_pdf_binary(file_bytes, page_index=0):
     """Renders the specified PDF page to an optimized JPEG and sends that
     image to the vision model (via OpenRouter, see AI_VISION_MODEL_NAME),
-    rather than the raw PDF -- gives optimal control over resolution and fast transfer."""
-    system_prompt = (
-        "You are an expert financial OCR assistant specialized in reading Indian tax invoices, "
-        "utility bills, handwritten vouchers, bank payment stamps, and purchase registers. "
-        "Analyze the invoice image and extract the key values with high precision. "
-        "You must respond with ONLY a valid JSON object. Do not include any explanation outside JSON."
-    )
-
-    user_prompt = (
-        "Extract invoice details (reading BOTH PRINTED and HANDWRITTEN text across all fields):\n"
-        "- invoice_number (printed or handwritten invoice/bill/challan number)\n"
-        "- invoice_date (printed or handwritten invoice issue date)\n"
-        "- payment_date (the date the bill was actually PAID - usually a HANDWRITTEN note, "
-        "RUBBER-STAMPED annotation, cheque date, RTGS/NEFT date, or 'Sanctioned'/'Please Pay' stamp; "
-        "leave blank if no payment date/stamp is found)\n"
-        "- vendor_name (seller/supplier company or person name)\n"
-        "- gstin (the SELLER/SUPPLIER's 15-character GSTIN, usually near letterhead or footer; "
-        "do NOT extract buyer/bank GSTIN; leave blank if no vendor GSTIN is present)\n"
-        "- taxable_value (pre-tax base amount, printed or handwritten)\n"
-        "- cgst, sgst, igst (tax amounts, printed or handwritten)\n"
-        "IMPORTANT for accuracy:\n"
-        "1. Read handwritten entries in blank form fields, rubber stamps, and pen notes accurately.\n"
-        "2. A GSTIN always follows 15 chars: 2 digits (state), 5 letters (PAN), 4 digits, 1 letter, "
-        "1 alphanumeric entity code, the letter 'Z', and 1 checksum char. Use this pattern to resolve "
-        "ambiguous handwritten/printed characters (e.g. position 3 is always a letter 'O' not '0')."
-    )
-
+    rather than the raw PDF -- gives optimal control over resolution and
+    fast transfer. Returns a JSON array of bills found on that page."""
     base64_jpg = render_pdf_page_to_png_base64(file_bytes, page_index=page_index)
-
-    result, model_used = call_vision_model(system_prompt, user_prompt, base64_jpg, "image/jpeg")
-    if "```json" in result:
-        result = result.split("```json")[1].split("```")[0].strip()
-    elif "```" in result:
-        result = result.split("```")[1].split("```")[0].strip()
-    parsed = json.loads(result)
-    parsed["_ai_model"] = model_used
-    return parsed
+    result, model_used = call_vision_model(_VISION_SYSTEM_PROMPT, _vision_bill_prompt(), base64_jpg, "image/jpeg")
+    return _parse_bill_array(result, model_used)
 
 def parse_excel_register(file_bytes):
     """Parses a purchase register or GSTR-2B Excel file using Pandas."""
@@ -2136,42 +2168,51 @@ def _parse_single_invoice_file(filename, file_bytes, batch_branch, batch_state, 
         elif num_pages == 1:
             page_text = doc[0].get_text()
             if not high_accuracy and len(page_text.strip()) > 100:
-                inv = extract_from_text(page_text)
+                bills = extract_from_text(page_text)
 
-                # Instant regex pre-check for 15-character GSTIN in extracted text
-                needs_gstin = not inv.get('gstin') or inv.get('gstin') == 'N/A'
-                if needs_gstin:
-                    gstin_match = re.search(r'\b[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}\b', page_text)
-                    if gstin_match:
-                        inv['gstin'] = gstin_match.group(0)
-                        needs_gstin = False
+                # Gap-fill vision only applies cleanly when the page held exactly
+                # one bill -- with multiple bills detected from text, there's no
+                # single "this page's GSTIN/payment date" to fill in, so those
+                # bills are accepted as extracted rather than second-guessed.
+                if len(bills) == 1:
+                    inv = bills[0]
+                    needs_gstin = not inv.get('gstin') or inv.get('gstin') == 'N/A'
+                    if needs_gstin:
+                        gstin_match = re.search(r'\b[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}\b', page_text)
+                        if gstin_match:
+                            inv['gstin'] = gstin_match.group(0)
+                            needs_gstin = False
 
-                needs_payment_date = not inv.get('payment_date') or inv.get('payment_date') == inv.get('invoice_date')
-                payment_date_markers = ('rtgs', 'neft', 'p.o. no', 'po no', 'cheque',
-                                         'sanctioned', 'please pay', 'paid on', 'demand draft')
-                has_payment_voucher_section = any(m in page_text.lower() for m in payment_date_markers)
+                    needs_payment_date = not inv.get('payment_date') or inv.get('payment_date') == inv.get('invoice_date')
+                    payment_date_markers = ('rtgs', 'neft', 'p.o. no', 'po no', 'cheque',
+                                             'sanctioned', 'please pay', 'paid on', 'demand draft')
+                    has_payment_voucher_section = any(m in page_text.lower() for m in payment_date_markers)
 
-                if needs_gstin or (needs_payment_date and has_payment_voucher_section):
-                    try:
-                        vision_inv = extract_from_pdf_binary(file_bytes, page_index=0)
-                        if needs_payment_date and vision_inv.get('payment_date'):
-                            inv['payment_date'] = vision_inv['payment_date']
-                        if needs_gstin and vision_inv.get('gstin'):
-                            inv['gstin'] = vision_inv['gstin']
-                        inv['_ai_model'] = vision_inv.get('_ai_model', inv.get('_ai_model'))
-                    except Exception as ex:
-                        print(f"Vision fallback failed for {filename}: {ex}")
+                    if needs_gstin or (needs_payment_date and has_payment_voucher_section):
+                        try:
+                            vision_bills = extract_from_pdf_binary(file_bytes, page_index=0)
+                            vision_inv = vision_bills[0] if vision_bills else {}
+                            if needs_payment_date and vision_inv.get('payment_date'):
+                                inv['payment_date'] = vision_inv['payment_date']
+                            if needs_gstin and vision_inv.get('gstin'):
+                                inv['gstin'] = vision_inv['gstin']
+                            inv['_ai_model'] = vision_inv.get('_ai_model', inv.get('_ai_model'))
+                        except Exception as ex:
+                            print(f"Vision fallback failed for {filename}: {ex}")
+                    bills = [inv]
             else:
                 # High Accuracy Scan or scanned PDF without text layer: full vision pass
-                inv = extract_from_pdf_binary(file_bytes, page_index=0)
+                bills = extract_from_pdf_binary(file_bytes, page_index=0)
 
-            parsed_list = [inv]
+            parsed_list = bills
             store_file_bytes = file_bytes
             store_mime_type = "application/pdf"
             store_file_name = filename
             doc.close()
         else:
-            # Multi-page PDF: scan all pages concurrently across thread pool
+            # Multi-page PDF: scan all pages concurrently across thread pool.
+            # Each page can itself hold more than one bill, so this returns a
+            # LIST of bills per page rather than assuming a strict 1:1 mapping.
             def _process_pdf_page(p_idx):
                 try:
                     p_doc = pymupdf.open(stream=file_bytes, filetype="pdf")
@@ -2185,47 +2226,62 @@ def _parse_single_invoice_file(filename, file_bytes, batch_branch, batch_state, 
                     p_doc.close()
 
                     if not high_accuracy and len(page_text.strip()) > 100:
-                        inv = extract_from_text(page_text)
-                        needs_gstin = not inv.get('gstin') or inv.get('gstin') == 'N/A'
-                        if needs_gstin:
-                            gstin_match = re.search(r'\b[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}\b', page_text)
-                            if gstin_match:
-                                inv['gstin'] = gstin_match.group(0)
-                                needs_gstin = False
+                        bills = extract_from_text(page_text)
+                        if len(bills) == 1:
+                            inv = bills[0]
+                            needs_gstin = not inv.get('gstin') or inv.get('gstin') == 'N/A'
+                            if needs_gstin:
+                                gstin_match = re.search(r'\b[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}\b', page_text)
+                                if gstin_match:
+                                    inv['gstin'] = gstin_match.group(0)
+                                    needs_gstin = False
 
-                        needs_payment_date = not inv.get('payment_date') or inv.get('payment_date') == inv.get('invoice_date')
-                        payment_date_markers = ('rtgs', 'neft', 'p.o. no', 'po no', 'cheque',
-                                                 'sanctioned', 'please pay', 'paid on', 'demand draft')
-                        has_payment_voucher_section = any(m in page_text.lower() for m in payment_date_markers)
+                            needs_payment_date = not inv.get('payment_date') or inv.get('payment_date') == inv.get('invoice_date')
+                            payment_date_markers = ('rtgs', 'neft', 'p.o. no', 'po no', 'cheque',
+                                                     'sanctioned', 'please pay', 'paid on', 'demand draft')
+                            has_payment_voucher_section = any(m in page_text.lower() for m in payment_date_markers)
 
-                        if needs_gstin or (needs_payment_date and has_payment_voucher_section):
-                            try:
-                                vision_inv = extract_from_pdf_binary(file_bytes, page_index=p_idx)
-                                if needs_payment_date and vision_inv.get('payment_date'):
-                                    inv['payment_date'] = vision_inv['payment_date']
-                                if needs_gstin and vision_inv.get('gstin'):
-                                    inv['gstin'] = vision_inv['gstin']
-                                inv['_ai_model'] = vision_inv.get('_ai_model', inv.get('_ai_model'))
-                            except Exception as ex:
-                                print(f"Vision fallback failed for {filename} page {p_idx+1}: {ex}")
+                            if needs_gstin or (needs_payment_date and has_payment_voucher_section):
+                                try:
+                                    vision_bills = extract_from_pdf_binary(file_bytes, page_index=p_idx)
+                                    vision_inv = vision_bills[0] if vision_bills else {}
+                                    if needs_payment_date and vision_inv.get('payment_date'):
+                                        inv['payment_date'] = vision_inv['payment_date']
+                                    if needs_gstin and vision_inv.get('gstin'):
+                                        inv['gstin'] = vision_inv['gstin']
+                                    inv['_ai_model'] = vision_inv.get('_ai_model', inv.get('_ai_model'))
+                                except Exception as ex:
+                                    print(f"Vision fallback failed for {filename} page {p_idx+1}: {ex}")
+                            bills = [inv]
                     else:
-                        inv = extract_from_pdf_binary(file_bytes, page_index=p_idx)
+                        bills = extract_from_pdf_binary(file_bytes, page_index=p_idx)
 
-                    inv['_store_file_bytes'] = single_bytes
-                    inv['_store_file_name'] = f"{filename} (Page {p_idx+1})"
-                    inv['_store_mime_type'] = "application/pdf"
-                    inv['_page_number'] = p_idx + 1
-                    return inv
+                    multi = len(bills) > 1
+                    for b_idx, b in enumerate(bills):
+                        b['_store_file_bytes'] = single_bytes
+                        b['_store_file_name'] = f"{filename} (Page {p_idx+1})" + (f" - Bill {b_idx+1} of {len(bills)}" if multi else "")
+                        b['_store_mime_type'] = "application/pdf"
+                        b['_page_number'] = p_idx + 1
+                    return bills
                 except Exception as ex:
                     print(f"Error processing page {p_idx+1} of {filename}: {ex}")
-                    return None
+                    # Report the failure as a visible row instead of silently
+                    # dropping this page's bill(s) from the batch.
+                    return [{
+                        "invoice_number": "ERROR", "invoice_date": "-", "payment_date": None,
+                        "vendor_name": f"Failed to parse page {p_idx+1} of {filename}",
+                        "gstin": "N/A", "branch": None,
+                        "taxable_value": 0.0, "cgst": 0.0, "sgst": 0.0, "igst": 0.0,
+                        "_store_file_bytes": None, "_store_file_name": f"{filename} (Page {p_idx+1})",
+                        "_store_mime_type": None, "_page_number": p_idx + 1, "_error": str(ex)
+                    }]
 
             with ThreadPoolExecutor(max_workers=min(num_pages, 6)) as p_executor:
                 p_futures = [p_executor.submit(_process_pdf_page, i) for i in range(num_pages)]
                 for pf in as_completed(p_futures):
                     p_res = pf.result()
                     if p_res:
-                        parsed_list.append(p_res)
+                        parsed_list.extend(p_res)
 
             parsed_list.sort(key=lambda x: x.get('_page_number', 0))
             store_file_bytes = file_bytes
@@ -2237,8 +2293,7 @@ def _parse_single_invoice_file(filename, file_bytes, batch_branch, batch_state, 
     elif ext in ['png', 'jpg', 'jpeg', 'webp']:
         opt_bytes, mime_type = optimize_image_bytes(file_bytes, ext)
         base64_img = base64.b64encode(opt_bytes).decode('utf-8')
-        inv = extract_from_image(base64_img, mime_type)
-        parsed_list = [inv]
+        parsed_list = extract_from_image(base64_img, mime_type)
         store_file_bytes = file_bytes
         store_mime_type = mime_type
         store_file_name = filename
@@ -2277,6 +2332,7 @@ def _parse_single_invoice_file(filename, file_bytes, batch_branch, batch_state, 
 @login_required
 def process_invoices():
     user_id = session['user_id']
+    client_id = get_current_client_id()
     if 'files[]' not in request.files:
         return jsonify({"error": "No files uploaded"}), 400
 
