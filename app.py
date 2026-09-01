@@ -586,9 +586,17 @@ def call_rescan_vision_model(system_prompt, user_prompt, base64_data, mime_type)
     specifically designed for recovering ambiguous handwritten notes, fine-print GSTINs,
     and payment date stamps with maximum precision."""
     # 1. Primary higher model: Gemini 2.5 Pro via OpenRouter
+    # reasoning:effort=none avoids Gemini's hidden "thinking" pass consuming
+    # the whole max_tokens budget before it ever writes the actual JSON --
+    # confirmed live on invoice #542 ("Expecting property name enclosed in
+    # double quotes", "Unterminated string...") on exactly the kind of
+    # complex, heavily handwritten/stamped bill this model exists to
+    # handle. Also raised max_tokens for the same reason: a genuinely
+    # thorough forensic re-read needs room to write out a longer answer.
     openrouter_payload = {
         "model": AI_RESCAN_VISION_MODEL,
-        "max_tokens": 1800,
+        "max_tokens": 3000,
+        "reasoning": {"effort": "none"},
         "messages": [
             {"role": "system", "content": system_prompt},
             {
