@@ -345,8 +345,19 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         ''')
+        # Deduplicate any existing duplicate entries in income_entries
+        cur.execute('''
+            DELETE FROM income_entries a USING income_entries b
+            WHERE a.id < b.id 
+              AND a.client_id = b.client_id 
+              AND UPPER(a.branch) = UPPER(b.branch)
+              AND a.financial_year = b.financial_year 
+              AND a.month = b.month 
+              AND a.gl_code = b.gl_code;
+        ''')
         cur.execute("CREATE INDEX IF NOT EXISTS idx_income_client_fy ON income_entries(client_id, financial_year, month);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_income_branch ON income_entries(client_id, branch);")
+        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_income_branch_code_month ON income_entries(client_id, branch, financial_year, month, gl_code);")
 
                 # Multi-client data isolation schema
         cur.execute("ALTER TABLE invoices ADD COLUMN IF NOT EXISTS client_id VARCHAR(50) NOT NULL DEFAULT 'nutan_nagrik';")
@@ -4503,10 +4514,29 @@ def upload_income_api():
     try:
         conn = get_db_connection()
         cur = conn.cursor()
+        # Deduplicate parsed entries in memory first
+        unique_entries = {}
         for e in parsed_entries:
+            key = (client_id, e.get('branch', 'Unassigned').strip().upper(), e.get('financial_year', '2026-27'), e.get('month', 'July'), str(e.get('gl_code', 'N/A')).strip())
+            unique_entries[key] = e
+
+        for e in unique_entries.values():
             cur.execute('''
                 INSERT INTO income_entries (user_id, client_id, branch, state, financial_year, month, gl_code, particulars, is_taxable, income_amount, cgst, sgst, igst, refund_without_gst, refund_with_gst, file_name)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (client_id, branch, financial_year, month, gl_code)
+                DO UPDATE SET
+                    user_id = EXCLUDED.user_id,
+                    particulars = EXCLUDED.particulars,
+                    is_taxable = EXCLUDED.is_taxable,
+                    income_amount = EXCLUDED.income_amount,
+                    cgst = EXCLUDED.cgst,
+                    sgst = EXCLUDED.sgst,
+                    igst = EXCLUDED.igst,
+                    refund_without_gst = EXCLUDED.refund_without_gst,
+                    refund_with_gst = EXCLUDED.refund_with_gst,
+                    file_name = EXCLUDED.file_name,
+                    created_at = CURRENT_TIMESTAMP
                 RETURNING id;
             ''', (
                 user_id, client_id,
