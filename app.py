@@ -3320,6 +3320,7 @@ def export_filtered_reconciliation():
 @login_required
 def upload_gstr2b():
     user_id = session['user_id']
+    client_id = get_current_client_id()
     if 'file' not in request.files:
         return jsonify({"error": "No file uploaded"}), 400
         
@@ -3341,21 +3342,21 @@ def upload_gstr2b():
         conn = get_db_connection()
         cur = conn.cursor()
 
-        # Delete existing portal entries for this user/FY/Month/State to prevent
+        # Delete existing portal entries for this client/FY/Month/State to prevent
         # duplicates on re-upload -- scoped by state too, so re-uploading
         # Maharashtra's file for a month never wipes Gujarat's entries for that
         # same month (and vice versa).
         cur.execute('''
             DELETE FROM gstr2b_entries
-            WHERE user_id = %s AND financial_year = %s AND month = %s AND state = %s
-        ''', (user_id, fy, month, state))
+            WHERE client_id = %s AND financial_year = %s AND month = %s AND state = %s
+        ''', (client_id, fy, month, state))
 
         inserted = 0
         for ent in entries:
             cur.execute('''
-                INSERT INTO gstr2b_entries (user_id, financial_year, month, state, supplier_gstin, supplier_name, invoice_number, invoice_date, taxable_value, cgst, sgst, igst)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ''', (user_id, fy, month, state, ent["gstin"], ent["vendor_name"], ent["invoice_number"], ent["invoice_date"],
+                INSERT INTO gstr2b_entries (user_id, client_id, financial_year, month, state, supplier_gstin, supplier_name, invoice_number, invoice_date, taxable_value, cgst, sgst, igst)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ''', (user_id, client_id, fy, month, state, ent["gstin"], ent["vendor_name"], ent["invoice_number"], ent["invoice_date"],
                   ent["taxable_value"], ent["cgst"], ent["sgst"], ent["igst"]))
             inserted += 1
 
@@ -3373,12 +3374,9 @@ def upload_gstr2b():
 @app.route('/api/delete-gstr2b', methods=['POST'])
 @login_required
 def delete_gstr2b():
-    """Removes a wrongly-uploaded or duplicate GSTR-2B batch for a specific
-    FY+month+state. Re-uploading only replaces that exact same FY+month+state
-    combo, so there was previously no way to remove data imported under the
-    wrong month/FY short of uploading a blank replacement file."""
     user_id = session['user_id']
     is_admin = is_admin_user()
+    client_id = get_current_client_id()
     data = request.json or {}
     fy = (data.get('financial_year') or '').strip()
     month = (data.get('month') or '').strip()
@@ -3390,9 +3388,9 @@ def delete_gstr2b():
         conn = get_db_connection()
         cur = conn.cursor()
         if is_admin:
-            cur.execute('DELETE FROM gstr2b_entries WHERE financial_year = %s AND month = %s AND state = %s', (fy, month, state))
+            cur.execute('DELETE FROM gstr2b_entries WHERE client_id = %s AND financial_year = %s AND month = %s AND state = %s', (client_id, fy, month, state))
         else:
-            cur.execute('DELETE FROM gstr2b_entries WHERE user_id = %s AND financial_year = %s AND month = %s AND state = %s', (user_id, fy, month, state))
+            cur.execute('DELETE FROM gstr2b_entries WHERE user_id = %s AND client_id = %s AND financial_year = %s AND month = %s AND state = %s', (user_id, client_id, fy, month, state))
         deleted = cur.rowcount
         conn.commit()
         cur.close()
@@ -3454,6 +3452,7 @@ def gstr2b_status():
     with total entry counts and tax amounts so users can clearly see what's loaded."""
     user_id = session['user_id']
     is_admin = is_admin_user()
+    client_id = get_current_client_id()
     fy = request.args.get('financial_year', '').strip()
 
     try:
@@ -3487,20 +3486,20 @@ def gstr2b_status():
                            COALESCE(SUM(taxable_value), 0)::float as total_taxable,
                            COALESCE(SUM(cgst + sgst + igst), 0)::float as total_gst
                     FROM gstr2b_entries
-                    WHERE user_id = %s AND financial_year = %s
+                    WHERE user_id = %s AND client_id = %s AND financial_year = %s
                     GROUP BY state, month, financial_year
                     ORDER BY state, month
-                ''', (user_id, fy))
+                ''', (user_id, client_id, fy))
             else:
                 cur.execute('''
                     SELECT state, month, financial_year, COUNT(*) as count,
                            COALESCE(SUM(taxable_value), 0)::float as total_taxable,
                            COALESCE(SUM(cgst + sgst + igst), 0)::float as total_gst
                     FROM gstr2b_entries
-                    WHERE user_id = %s
+                    WHERE user_id = %s AND client_id = %s
                     GROUP BY state, month, financial_year
                     ORDER BY financial_year, state, month
-                ''', (user_id,))
+                ''', (user_id, client_id))
         rows = [dict(r) for r in cur.fetchall()]
         cur.close()
         conn.close()
