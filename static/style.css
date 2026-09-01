@@ -80,7 +80,7 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
-    margin-bottom: 22px;
+    margin-bottom: 20px;
     padding-bottom: 14px;
     border-bottom: 1px solid var(--border-color);
 }
@@ -92,8 +92,8 @@ body {
     justify-content: center;
     background: #ffffff;
     border-radius: 12px;
-    padding: 8px 12px;
-    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.04);
+    padding: 10px 12px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
     border: 1px solid var(--border-color);
 }
 
@@ -101,10 +101,9 @@ body {
     width: 100%;
     max-width: 100%;
     height: auto;
-    max-height: 60px;
+    max-height: 46px;
     object-fit: contain;
     display: block;
-    border-radius: 6px;
     transition: transform 0.2s ease;
 }
 
