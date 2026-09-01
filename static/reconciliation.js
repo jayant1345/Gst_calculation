@@ -4,6 +4,49 @@ document.addEventListener('DOMContentLoaded', function() {
     let activeFilter = 'all';
     let activeStateFilter = 'all';
 
+    // Multi-tenant client workspace state -- shared across pages via
+    // sessionStorage, same as app.js/income.js.
+    let currentClientId = sessionStorage.getItem('active_client_id') || 'nutan_nagrik';
+
+    function switchClientWorkspace(clientId) {
+        currentClientId = clientId;
+        sessionStorage.setItem('active_client_id', clientId);
+
+        document.querySelectorAll('.client-tab-btn').forEach(btn => {
+            if (btn.getAttribute('data-client-id') === clientId) {
+                btn.classList.add('active');
+            } else {
+                btn.classList.remove('active');
+            }
+        });
+
+        fetch('/api/set-active-client', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ client_id: clientId })
+        })
+        .then(res => res.json())
+        .catch(err => console.error('Error switching client:', err))
+        .finally(() => {
+            loadGstr2bStatus();
+            fetchReconciliationData();
+            if (activeStage === 3) loadStage3Data();
+        });
+    }
+
+    document.querySelectorAll('.client-tab-btn').forEach(btn => {
+        const cid = btn.getAttribute('data-client-id');
+        if (cid === currentClientId) {
+            btn.classList.add('active');
+        } else {
+            btn.classList.remove('active');
+        }
+        btn.addEventListener('click', () => {
+            const selectedCid = btn.getAttribute('data-client-id');
+            if (selectedCid) switchClientWorkspace(selectedCid);
+        });
+    });
+
     function escapeHtml(value) {
         if (value === null || value === undefined) return '';
         return String(value)

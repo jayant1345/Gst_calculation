@@ -3161,6 +3161,7 @@ def export_filtered_reconciliation():
 
     user_id = session['user_id']
     is_admin = is_admin_user()
+    client_id = get_current_client_id()
     fy = request.args.get('financial_year', '2026-27').strip()
     months_param = request.args.get('months', '').strip()
     state_filter = request.args.get('state', 'all').strip()
@@ -3724,6 +3725,7 @@ def execute_reconciliation(fy, months, user_id, is_admin, client_id='nutan_nagri
 def reconcile_data():
     user_id = session['user_id']
     is_admin = is_admin_user()
+    client_id = get_current_client_id()
     fy = request.args.get('financial_year', '').strip()
     months_str = request.args.get('months', '').strip()
 
@@ -3750,6 +3752,7 @@ def reconcile_data():
 def get_vendor_discrepancies():
     user_id = session['user_id']
     is_admin = is_admin_user()
+    client_id = get_current_client_id()
     fy = request.args.get('financial_year', '').strip()
     months_str = request.args.get('months', '').strip()
 
@@ -3838,6 +3841,7 @@ def generate_vendor_notice():
 
     user_id = session['user_id']
     is_admin = is_admin_user()
+    client_id = get_current_client_id()
 
     try:
         _, reconciled, _, _ = execute_reconciliation(fy, months, user_id, is_admin, client_id=client_id)
@@ -3922,6 +3926,7 @@ def generate_vendor_notice():
 def get_gstr3b_summary():
     user_id = session['user_id']
     is_admin = is_admin_user()
+    client_id = get_current_client_id()
     fy = request.args.get('financial_year', '').strip()
     months_str = request.args.get('months', '').strip()
 
@@ -4021,6 +4026,7 @@ def export_vendor_discrepancies():
 
     user_id = session['user_id']
     is_admin = is_admin_user()
+    client_id = get_current_client_id()
     fy = request.args.get('financial_year', '').strip()
     months_str = request.args.get('months', '').strip()
 
