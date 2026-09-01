@@ -535,12 +535,25 @@ def call_openrouter_api(payload):
 
 def call_vision_model(system_prompt, user_prompt, base64_data, mime_type):
     """Calls the ultra-fast primary vision model (Gemini 2.5 Flash via OpenRouter)
-    and, if that fails for any reason, falls back to Grok 4.6 (OpenRouter) or
-    Claude Opus directly via Anthropic. Returns (text, model_used)."""
+    and, if that fails for any reason, falls back to Grok 4.6 (OpenRouter), then
+    retries Gemini 2.5 Flash once more via OpenRouter as a last resort (covers a
+    transient rate-limit/empty-response blip on the primary attempt). Returns
+    (text, model_used). Deliberately stays on OpenRouter throughout -- the old
+    tertiary fallback called Claude directly via Anthropic's API using a model
+    id that no longer exists there, so every page that reached it hard-failed
+    with a 404 instead of actually falling back to anything."""
     # 1. Primary: Google Gemini 2.5 Flash via OpenRouter (~1.5s)
+    # reasoning:effort=none turns off Gemini's internal "thinking" pass --
+    # without it, hidden reasoning tokens can silently eat the whole
+    # max_tokens budget before the model ever emits the actual JSON, leaving
+    # nothing (or a truncated fragment) for the visible answer. This is both
+    # the fix for those empty/truncated responses and the main lever on
+    # per-call latency, since a straight field-extraction task like this
+    # never needed a reasoning pass to begin with.
     openrouter_payload = {
         "model": AI_VISION_MODEL_NAME,
         "max_tokens": 3000,
+        "reasoning": {"effort": "none"},
         "messages": [
             {"role": "system", "content": system_prompt},
             {
@@ -565,25 +578,8 @@ def call_vision_model(system_prompt, user_prompt, base64_data, mime_type):
     except Exception as e:
         print(f"Secondary vision fallback ({AI_VISION_FALLBACK_MODEL_NAME}) failed: {e}")
 
-    # 3. Tertiary Fallback: Anthropic direct API
-    anthropic_payload = {
-        "model": AI_VISION_SECONDARY_FALLBACK,
-        "max_tokens": 3000,
-        "system": system_prompt,
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image",
-                        "source": {"type": "base64", "media_type": mime_type, "data": base64_data}
-                    },
-                    {"type": "text", "text": user_prompt}
-                ]
-            }
-        ]
-    }
-    return call_claude_api(anthropic_payload), AI_VISION_SECONDARY_FALLBACK
+    # 3. Tertiary Fallback: retry Gemini 2.5 Flash via OpenRouter once more
+    return call_openrouter_api(openrouter_payload), AI_VISION_MODEL_NAME
 
 def call_rescan_vision_model(system_prompt, user_prompt, base64_data, mime_type):
     """Uses a higher-capacity reasoning vision model (e.g. Gemini 2.5 Pro or Claude 3.5 Sonnet)
@@ -819,34 +815,28 @@ def extract_from_text(text):
     ]
     """
 
-    # 1. Primary: Gemini 2.5 Flash via OpenRouter (~0.3s)
-    if OPENROUTER_API_KEY:
-        try:
-            openrouter_payload = {
-                "model": AI_VISION_MODEL_NAME,
-                "max_tokens": 3000,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ]
-            }
-            result = call_openrouter_api(openrouter_payload)
-            return _parse_bill_array(result, AI_VISION_MODEL_NAME)
-        except Exception as e:
-            print(f"OpenRouter text extraction failed: {e}")
-
-    # 2. Fallback: Anthropic direct API (Claude Sonnet)
-    payload = {
-        "model": "claude-3-5-sonnet-20241022",
-        "max_tokens": 2500,
-        "system": system_prompt,
+    # Stays on OpenRouter/Gemini throughout -- the old fallback called Claude
+    # directly via Anthropic's API using a model id that no longer exists
+    # there (a hard 404 on every retry), so it never actually provided a
+    # working fallback. Retrying the same fast primary model instead covers
+    # the transient rate-limit/empty-response blips actually being seen.
+    openrouter_payload = {
+        "model": AI_VISION_MODEL_NAME,
+        "max_tokens": 3000,
+        "reasoning": {"effort": "none"},
         "messages": [
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
         ]
     }
+    try:
+        result = call_openrouter_api(openrouter_payload)
+        return _parse_bill_array(result, AI_VISION_MODEL_NAME)
+    except Exception as e:
+        print(f"OpenRouter text extraction failed: {e}")
 
-    result = call_claude_api(payload)
-    return _parse_bill_array(result, "claude-3-5-sonnet-20241022")
+    result = call_openrouter_api(openrouter_payload)
+    return _parse_bill_array(result, AI_VISION_MODEL_NAME)
 
 _VISION_SYSTEM_PROMPT = (
     "You are an expert financial OCR assistant specialized in reading Indian tax invoices, "
