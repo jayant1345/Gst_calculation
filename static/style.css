@@ -2144,6 +2144,15 @@ body {
     vertical-align: middle;
 }
 
+/* Force real horizontal overflow instead of letting the browser cram all
+   12 columns down to fit .table-container's width -- without this, cells
+   just get crushed/truncated and .table-container's overflow-x:auto (and
+   the sticky Match Status/Actions columns above) never actually engage,
+   since nothing is wider than its container. */
+.recon-table {
+    min-width: 1800px;
+}
+
 /* Pin Match Status + Actions to the right edge of the scroll area so the
    Confirm Match / Rescan Bill buttons are always visible without relying
    on the user finding and using the horizontal scrollbar first. Targets
@@ -2289,8 +2298,15 @@ body {
 .btn-action-small.hold { background-color: var(--text-muted); }
 .btn-action-small:hover { filter: brightness(0.9); }
 
+/* Applied to the .table-container div wrapping the reconciliation ledger
+   table (its only current use) -- must be "block", not "table". A
+   display:table wrapper sizes itself intrinsically like a table (to fit
+   its content) instead of behaving as a normal block box clamped by
+   max-width:100%, which silently defeated its own overflow-x:auto and let
+   the container balloon to match the inner table's min-width instead of
+   scrolling it. */
 .desktop-only {
-    display: table !important;
+    display: block !important;
 }
 
 .mobile-only {
