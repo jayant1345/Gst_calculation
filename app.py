@@ -39,6 +39,10 @@ AI_VISION_MODEL_NAME = "google/gemini-2.5-flash"
 AI_MODEL_NAME = "google/gemini-2.5-flash"
 AI_MODEL_DISPLAY_NAME = "Gemini 2.5 Flash (Ultra-Fast)"
 
+# High-accuracy vision model for forensic re-scanning of incomplete bills / handwriting / faint stamps.
+AI_RESCAN_VISION_MODEL = "google/gemini-2.5-pro"
+AI_RESCAN_MODEL_DISPLAY_NAME = "Gemini 2.5 Pro (High Accuracy)"
+
 # Reliable fallback vision models if primary provider is unreachable.
 AI_VISION_FALLBACK_MODEL_NAME = "x-ai/grok-4.6"
 AI_VISION_SECONDARY_FALLBACK = "claude-3-5-sonnet-20241022"
@@ -455,6 +459,121 @@ def call_vision_model(system_prompt, user_prompt, base64_data, mime_type):
         ]
     }
     return call_claude_api(anthropic_payload), AI_VISION_SECONDARY_FALLBACK
+
+def call_rescan_vision_model(system_prompt, user_prompt, base64_data, mime_type):
+    """Uses a higher-capacity reasoning vision model (e.g. Gemini 2.5 Pro or Claude 3.5 Sonnet)
+    specifically designed for recovering ambiguous handwritten notes, fine-print GSTINs,
+    and payment date stamps with maximum precision."""
+    # 1. Primary higher model: Gemini 2.5 Pro via OpenRouter
+    openrouter_payload = {
+        "model": AI_RESCAN_VISION_MODEL,
+        "max_tokens": 1800,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{base64_data}"}},
+                    {"type": "text", "text": user_prompt}
+                ]
+            }
+        ]
+    }
+    try:
+        return call_openrouter_api(openrouter_payload), AI_RESCAN_VISION_MODEL
+    except Exception as e:
+        print(f"Rescan primary vision model ({AI_RESCAN_VISION_MODEL}) failed: {e}")
+
+    # 2. Fallback to Claude 3.5 Sonnet
+    try:
+        fallback_payload = dict(openrouter_payload)
+        fallback_payload["model"] = "anthropic/claude-3.5-sonnet"
+        return call_openrouter_api(fallback_payload), "anthropic/claude-3.5-sonnet"
+    except Exception as e:
+        print(f"Rescan secondary fallback failed: {e}")
+
+    # 3. Fallback to default vision model pipeline (Gemini 2.5 Flash / Grok / Claude)
+    return call_vision_model(system_prompt, user_prompt, base64_data, mime_type)
+
+def extract_from_pdf_binary_rescan(file_bytes):
+    """Renders the PDF's first page at high-resolution 250 DPI for forensic clarity
+    and runs the high-accuracy vision model to recover missing fields."""
+    system_prompt = (
+        "You are a senior forensic financial OCR specialist examining Indian tax invoices, "
+        "utility bills, bank debit vouchers, vendor payment receipts, and purchase registers. "
+        "Your task is to thoroughly analyze the document image with forensic attention to detail, "
+        "especially for MISSING, BLANK, HANDWRITTEN, STAMPED, or FAINT data fields.\n"
+        "You must respond with ONLY a valid JSON object. Do not include any explanations outside JSON."
+    )
+    user_prompt = (
+        "Perform a meticulous high-accuracy extraction of invoice details, reading BOTH PRINTED and HANDWRITTEN entries:\n"
+        "- invoice_number: The bill, invoice, cash memo, or challan number.\n"
+        "- invoice_date: Date of invoice issue (standardize to DD-MM-YYYY format).\n"
+        "- payment_date: The date the bill was actually PAID / passed. Search diligently for rubber stamps ("
+        "'PAID', 'SANCTIONED', 'PASSED FOR PAYMENT', 'CHEQUE NO', 'RTGS/NEFT', 'DEBITED ON'), "
+        "handwritten pen notes, cashier signatures with dates, or voucher stamp blocks. Standardize to DD-MM-YYYY. "
+        "If truly absent, leave empty string \"\".\n"
+        "- vendor_name: Full seller / supplier / service provider entity name.\n"
+        "- gstin: The 15-character GSTIN of the SELLER/SUPPLIER (not buyer/bank). Must follow strict Indian GSTIN format: "
+        "2 digits (state), 5 uppercase letters (PAN), 4 digits, 1 uppercase letter, 1 alphanumeric, 'Z', 1 checksum alphanumeric. "
+        "Disambiguate: letter 'O' vs digit '0', letter 'I' vs digit '1', letter 'S' vs digit '5', letter 'B' vs digit '8'. "
+        "If not found, leave empty string \"\".\n"
+        "- taxable_value: Base taxable amount before GST (numeric).\n"
+        "- cgst: Central GST amount (numeric).\n"
+        "- sgst: State/UT GST amount (numeric).\n"
+        "- igst: Integrated GST amount (numeric).\n"
+        "Ensure exact numeric math: Total GST = CGST + SGST + IGST."
+    )
+    # Render PDF page at 250 DPI for ultra-crisp resolution of small print and handwriting
+    base64_jpg = render_pdf_page_to_png_base64(file_bytes, page_index=0, dpi=250)
+    result, model_used = call_rescan_vision_model(system_prompt, user_prompt, base64_jpg, "image/jpeg")
+    if "```json" in result:
+        result = result.split("```json")[1].split("```")[0].strip()
+    elif "```" in result:
+        result = result.split("```")[1].split("```")[0].strip()
+    parsed = json.loads(result)
+    parsed["_ai_model"] = model_used
+    return parsed
+
+def extract_from_image_rescan(file_bytes, ext):
+    """Runs high-accuracy vision model on invoice image files (PNG/JPG/WEBP)."""
+    opt_bytes, mime_type = optimize_image_bytes(file_bytes, ext)
+    base64_img = base64.b64encode(opt_bytes).decode('utf-8')
+    system_prompt = (
+        "You are a senior forensic financial OCR specialist examining Indian tax invoices, "
+        "utility bills, bank debit vouchers, vendor payment receipts, and purchase registers. "
+        "Your task is to thoroughly analyze the document image with forensic attention to detail, "
+        "especially for MISSING, BLANK, HANDWRITTEN, STAMPED, or FAINT data fields.\n"
+        "You must respond with ONLY a valid JSON object. Do not include any explanations outside JSON."
+    )
+    user_prompt = (
+        "Perform a meticulous high-accuracy extraction of invoice details, reading BOTH PRINTED and HANDWRITTEN entries:\n"
+        "- invoice_number: The bill, invoice, cash memo, or challan number.\n"
+        "- invoice_date: Date of invoice issue (standardize to DD-MM-YYYY format).\n"
+        "- payment_date: The date the bill was actually PAID / passed. Search diligently for rubber stamps ("
+        "'PAID', 'SANCTIONED', 'PASSED FOR PAYMENT', 'CHEQUE NO', 'RTGS/NEFT', 'DEBITED ON'), "
+        "handwritten pen notes, cashier signatures with dates, or voucher stamp blocks. Standardize to DD-MM-YYYY. "
+        "If truly absent, leave empty string \"\".\n"
+        "- vendor_name: Full seller / supplier / service provider entity name.\n"
+        "- gstin: The 15-character GSTIN of the SELLER/SUPPLIER (not buyer/bank). Must follow strict Indian GSTIN format: "
+        "2 digits (state), 5 uppercase letters (PAN), 4 digits, 1 uppercase letter, 1 alphanumeric, 'Z', 1 checksum alphanumeric. "
+        "Disambiguate: letter 'O' vs digit '0', letter 'I' vs digit '1', letter 'S' vs digit '5', letter 'B' vs digit '8'. "
+        "If not found, leave empty string \"\".\n"
+        "- taxable_value: Base taxable amount before GST (numeric).\n"
+        "- cgst: Central GST amount (numeric).\n"
+        "- sgst: State/UT GST amount (numeric).\n"
+        "- igst: Integrated GST amount (numeric).\n"
+        "Ensure exact numeric math: Total GST = CGST + SGST + IGST."
+    )
+    result, model_used = call_rescan_vision_model(system_prompt, user_prompt, base64_img, mime_type)
+    if "```json" in result:
+        result = result.split("```json")[1].split("```")[0].strip()
+    elif "```" in result:
+        result = result.split("```")[1].split("```")[0].strip()
+    parsed = json.loads(result)
+    parsed["_ai_model"] = model_used
+    return parsed
+
 
 def extract_from_text(text):
     """Sends extracted text to Claude to parse invoice details into JSON."""
@@ -1396,6 +1515,363 @@ def rescan_invoice():
         })
     except Exception as e:
         print(f"Error rescanning invoice: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/rescan-invoices-batch', methods=['POST'])
+@login_required
+def rescan_invoices_batch():
+    """Batch re-scans invoices using higher-accuracy AI vision model (Gemini 2.5 Pro / Claude Sonnet),
+    rendered at 250 DPI for forensic clarity on faint stamps, handwritten notes, and GSTINs.
+    Returns comparison preview results for popup approval without immediately modifying the database."""
+    user_id = session['user_id']
+    is_admin = is_admin_user()
+    data = request.json or {}
+    req_ids = data.get('invoice_ids', [])
+    filter_mode = data.get('filter_mode', 'incomplete') # 'incomplete', 'selected', 'all'
+    
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        
+        if req_ids and len(req_ids) > 0:
+            clean_ids = [int(i) for i in req_ids if str(i).isdigit()]
+            if is_admin:
+                cur.execute('SELECT * FROM invoices WHERE id = ANY(%s) AND file_data IS NOT NULL ORDER BY id ASC', (clean_ids,))
+            else:
+                cur.execute('SELECT * FROM invoices WHERE id = ANY(%s) AND user_id = %s AND file_data IS NOT NULL ORDER BY id ASC', (clean_ids, user_id))
+        elif filter_mode == 'incomplete':
+            if is_admin:
+                cur.execute('''
+                    SELECT * FROM invoices 
+                    WHERE file_data IS NOT NULL 
+                      AND (
+                        gstin IS NULL OR gstin = '' OR gstin = 'N/A' OR length(trim(gstin)) != 15
+                        OR invoice_number IS NULL OR invoice_number = '' OR invoice_number = 'N/A' OR invoice_number ILIKE '%%error%%'
+                        OR invoice_date IS NULL OR invoice_date = '' OR invoice_date = 'N/A'
+                        OR payment_date IS NULL OR payment_date = ''
+                        OR branch IS NULL OR branch = '' OR branch = 'Unassigned'
+                        OR state IS NULL OR state = '' OR state = 'Unassigned'
+                        OR ((taxable_value IS NULL OR taxable_value <= 0) AND (cgst IS NULL OR cgst = 0) AND (sgst IS NULL OR sgst = 0) AND (igst IS NULL OR igst = 0))
+                      )
+                    ORDER BY id ASC
+                ''')
+            else:
+                cur.execute('''
+                    SELECT * FROM invoices 
+                    WHERE user_id = %s AND file_data IS NOT NULL 
+                      AND (
+                        gstin IS NULL OR gstin = '' OR gstin = 'N/A' OR length(trim(gstin)) != 15
+                        OR invoice_number IS NULL OR invoice_number = '' OR invoice_number = 'N/A' OR invoice_number ILIKE '%%error%%'
+                        OR invoice_date IS NULL OR invoice_date = '' OR invoice_date = 'N/A'
+                        OR payment_date IS NULL OR payment_date = ''
+                        OR branch IS NULL OR branch = '' OR branch = 'Unassigned'
+                        OR state IS NULL OR state = '' OR state = 'Unassigned'
+                        OR ((taxable_value IS NULL OR taxable_value <= 0) AND (cgst IS NULL OR cgst = 0) AND (sgst IS NULL OR sgst = 0) AND (igst IS NULL OR igst = 0))
+                      )
+                    ORDER BY id ASC
+                ''', (user_id,))
+        else:
+            if is_admin:
+                cur.execute('SELECT * FROM invoices WHERE file_data IS NOT NULL ORDER BY id ASC')
+            else:
+                cur.execute('SELECT * FROM invoices WHERE user_id = %s AND file_data IS NOT NULL ORDER BY id ASC', (user_id,))
+                
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        
+        if not rows:
+            return jsonify({
+                "success": True, 
+                "results": [], 
+                "message": "No invoices with attached original files found to re-scan.",
+                "summary": {"total_scanned": 0, "total_with_changes": 0, "recovered_gstin": 0, "recovered_payment_date": 0, "recovered_invoice_num": 0}
+            })
+            
+        def _process_row(row_dict):
+            row_id = row_dict['id']
+            file_data = bytes(row_dict['file_data'])
+            mime_type = row_dict.get('file_mime_type') or 'application/pdf'
+            file_name = row_dict.get('file_name') or f"bill_{row_id}.pdf"
+            
+            try:
+                if mime_type == "application/pdf" or file_name.lower().endswith('.pdf'):
+                    scanned = extract_from_pdf_binary_rescan(file_data)
+                else:
+                    ext = file_name.split('.')[-1].lower() if '.' in file_name else 'jpg'
+                    scanned = extract_from_image_rescan(file_data, ext)
+            except Exception as e:
+                print(f"Error rescanning row #{row_id}: {e}")
+                return None
+                
+            orig_gstin = (row_dict['gstin'] or '').strip()
+            orig_inv_num = (row_dict['invoice_number'] or '').strip()
+            orig_inv_date = (row_dict['invoice_date'] or '').strip()
+            orig_pay_date = (row_dict['payment_date'] or '').strip()
+            orig_vendor = (row_dict['vendor_name'] or '').strip()
+            orig_taxable = float(row_dict['taxable_value'] or 0.0)
+            orig_cgst = float(row_dict['cgst'] or 0.0)
+            orig_sgst = float(row_dict['sgst'] or 0.0)
+            orig_igst = float(row_dict['igst'] or 0.0)
+            orig_blocked = bool(row_dict['itc_blocked'])
+            orig_branch = (row_dict['branch'] or 'Unassigned').strip()
+            orig_state = (row_dict['state'] or 'Unassigned').strip()
+            
+            new_vendor = (scanned.get('vendor_name') or orig_vendor).strip()
+            new_gstin = normalize_gstin((scanned.get('gstin') or '').strip() or orig_gstin, new_vendor)
+            new_inv_num = (scanned.get('invoice_number') or orig_inv_num).strip()
+            new_inv_date = (scanned.get('invoice_date') or orig_inv_date).strip()
+            new_pay_date = (scanned.get('payment_date') or '').strip() or None
+            
+            # Numeric values
+            try:
+                new_taxable = float(scanned.get('taxable_value', orig_taxable) or 0.0)
+            except (ValueError, TypeError):
+                new_taxable = orig_taxable
+            try:
+                new_cgst = float(scanned.get('cgst', orig_cgst) or 0.0)
+            except (ValueError, TypeError):
+                new_cgst = orig_cgst
+            try:
+                new_sgst = float(scanned.get('sgst', orig_sgst) or 0.0)
+            except (ValueError, TypeError):
+                new_sgst = orig_sgst
+            try:
+                new_igst = float(scanned.get('igst', orig_igst) or 0.0)
+            except (ValueError, TypeError):
+                new_igst = orig_igst
+                
+            # Compute changes
+            changes = []
+            
+            # GSTIN check
+            orig_gstin_invalid = not orig_gstin or orig_gstin == 'N/A' or len(orig_gstin) != 15
+            new_gstin_valid = bool(new_gstin and new_gstin != 'N/A' and len(new_gstin) == 15)
+            if orig_gstin != new_gstin:
+                changes.append({
+                    "field": "gstin",
+                    "label": "GSTIN",
+                    "old": orig_gstin or "Missing",
+                    "new": new_gstin or "Missing",
+                    "is_recovered": orig_gstin_invalid and new_gstin_valid
+                })
+                
+            # Invoice # check
+            orig_inv_invalid = not orig_inv_num or orig_inv_num in ('N/A', 'ERROR', 'Missing')
+            new_inv_valid = bool(new_inv_num and new_inv_num not in ('N/A', 'ERROR', 'Missing'))
+            if orig_inv_num != new_inv_num:
+                changes.append({
+                    "field": "invoice_number",
+                    "label": "Invoice #",
+                    "old": orig_inv_num or "Missing",
+                    "new": new_inv_num or "Missing",
+                    "is_recovered": orig_inv_invalid and new_inv_valid
+                })
+                
+            # Invoice Date check
+            orig_date_invalid = not orig_inv_date or orig_inv_date in ('N/A', 'ERROR')
+            new_date_valid = bool(new_inv_date and new_inv_date not in ('N/A', 'ERROR'))
+            if orig_inv_date != new_inv_date:
+                changes.append({
+                    "field": "invoice_date",
+                    "label": "Invoice Date",
+                    "old": orig_inv_date or "Missing",
+                    "new": new_inv_date or "Missing",
+                    "is_recovered": orig_date_invalid and new_date_valid
+                })
+                
+            # Payment Date check
+            orig_pay_invalid = not orig_pay_date or orig_pay_date in ('N/A', '')
+            new_pay_valid = bool(new_pay_date and new_pay_date not in ('N/A', ''))
+            if (orig_pay_date or '') != (new_pay_date or ''):
+                changes.append({
+                    "field": "payment_date",
+                    "label": "Payment Date",
+                    "old": orig_pay_date or "Missing",
+                    "new": new_pay_date or "Missing",
+                    "is_recovered": orig_pay_invalid and new_pay_valid
+                })
+                
+            # Vendor Name
+            if orig_vendor != new_vendor and new_vendor not in ('Unknown Vendor', 'N/A', ''):
+                changes.append({
+                    "field": "vendor_name",
+                    "label": "Vendor Name",
+                    "old": orig_vendor,
+                    "new": new_vendor,
+                    "is_recovered": orig_vendor in ('Unknown Vendor', 'N/A', '')
+                })
+                
+            # Tax amounts
+            if round(orig_taxable, 2) != round(new_taxable, 2) or round(orig_cgst, 2) != round(new_cgst, 2) or round(orig_sgst, 2) != round(new_sgst, 2) or round(orig_igst, 2) != round(new_igst, 2):
+                changes.append({
+                    "field": "tax_amounts",
+                    "label": "Tax Amounts",
+                    "old": f"Taxable: ₹{orig_taxable:.2f}, CGST: ₹{orig_cgst:.2f}, SGST: ₹{orig_sgst:.2f}, IGST: ₹{orig_igst:.2f}",
+                    "new": f"Taxable: ₹{new_taxable:.2f}, CGST: ₹{new_cgst:.2f}, SGST: ₹{new_sgst:.2f}, IGST: ₹{new_igst:.2f}",
+                    "is_recovered": (orig_taxable == 0 and new_taxable > 0) or (orig_cgst == 0 and orig_sgst == 0 and orig_igst == 0 and (new_cgst > 0 or new_sgst > 0 or new_igst > 0))
+                })
+                
+            total_new_gst = new_cgst + new_sgst + new_igst
+            if orig_blocked:
+                new_eligible = 0.0
+                new_ineligible = round(total_new_gst, 2)
+            else:
+                new_eligible = round(total_new_gst * 0.5, 2)
+                new_ineligible = round(total_new_gst * 0.5, 2)
+                
+            return {
+                "id": row_id,
+                "file_name": file_name,
+                "original": {
+                    "vendor_name": orig_vendor,
+                    "gstin": orig_gstin,
+                    "invoice_number": orig_inv_num,
+                    "invoice_date": orig_inv_date,
+                    "payment_date": orig_pay_date,
+                    "taxable_value": orig_taxable,
+                    "cgst": orig_cgst,
+                    "sgst": orig_sgst,
+                    "igst": orig_igst,
+                    "itc_blocked": orig_blocked,
+                    "branch": orig_branch,
+                    "state": orig_state
+                },
+                "scanned": {
+                    "vendor_name": new_vendor,
+                    "gstin": new_gstin,
+                    "invoice_number": new_inv_num,
+                    "invoice_date": new_inv_date,
+                    "payment_date": new_pay_date,
+                    "taxable_value": new_taxable,
+                    "cgst": new_cgst,
+                    "sgst": new_sgst,
+                    "igst": new_igst,
+                    "eligible_itc": new_eligible,
+                    "ineligible_itc": new_ineligible,
+                    "itc_blocked": orig_blocked,
+                    "branch": orig_branch,
+                    "state": orig_state,
+                    "ai_model": scanned.get("_ai_model") or AI_RESCAN_MODEL_DISPLAY_NAME
+                },
+                "changes": changes,
+                "has_changes": len(changes) > 0,
+                "recovered_count": sum(1 for c in changes if c.get("is_recovered"))
+            }
+
+        # Run with ThreadPoolExecutor
+        results = []
+        with ThreadPoolExecutor(max_workers=min(len(rows), 4)) as executor:
+            future_to_row = {executor.submit(_process_row, dict(r)): r for r in rows}
+            for future in as_completed(future_to_row):
+                res = future.result()
+                if res:
+                    results.append(res)
+                    
+        # Sort results by ID
+        results.sort(key=lambda x: x['id'])
+        
+        # Summary counts
+        rec_gstin = sum(1 for r in results if any(c['field'] == 'gstin' and c.get('is_recovered') for c in r['changes']))
+        rec_pay = sum(1 for r in results if any(c['field'] == 'payment_date' and c.get('is_recovered') for c in r['changes']))
+        rec_inv = sum(1 for r in results if any(c['field'] == 'invoice_number' and c.get('is_recovered') for c in r['changes']))
+        with_changes = sum(1 for r in results if r['has_changes'])
+        
+        return jsonify({
+            "success": True,
+            "results": results,
+            "summary": {
+                "total_scanned": len(results),
+                "total_with_changes": with_changes,
+                "recovered_gstin": rec_gstin,
+                "recovered_payment_date": rec_pay,
+                "recovered_invoice_num": rec_inv,
+                "ai_model_used": AI_RESCAN_MODEL_DISPLAY_NAME
+            }
+        })
+    except Exception as e:
+        print(f"Error in rescan_invoices_batch: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/apply-rescan-results', methods=['POST'])
+@login_required
+def apply_rescan_results():
+    """Applies user-approved re-scan results to the PostgreSQL database in a single transaction."""
+    user_id = session['user_id']
+    is_admin = is_admin_user()
+    data = request.json or {}
+    updates = data.get('updates', [])
+    
+    if not updates or not isinstance(updates, list):
+        return jsonify({"error": "No updates provided"}), 400
+        
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        applied_count = 0
+        
+        for item in updates:
+            inv_id = item.get('id')
+            if not inv_id:
+                continue
+                
+            vendor = (item.get('vendor_name') or '').strip()
+            gstin = normalize_gstin((item.get('gstin') or '').strip(), vendor)
+            inv_num = (item.get('invoice_number') or '').strip()
+            inv_date = (item.get('invoice_date') or '').strip()
+            payment_date = item.get('payment_date') or None
+            if payment_date == '':
+                payment_date = None
+                
+            taxable = float(item.get('taxable_value', 0.0) or 0.0)
+            cgst = float(item.get('cgst', 0.0) or 0.0)
+            sgst = float(item.get('sgst', 0.0) or 0.0)
+            igst = float(item.get('igst', 0.0) or 0.0)
+            itc_blocked = bool(item.get('itc_blocked', False))
+            branch = (item.get('branch') or 'Unassigned').strip()
+            state = (item.get('state') or 'Unassigned').strip()
+            
+            total_gst = cgst + sgst + igst
+            if itc_blocked:
+                eligible = 0.0
+                ineligible = round(total_gst, 2)
+            else:
+                eligible = round(total_gst * 0.5, 2)
+                ineligible = round(total_gst * 0.5, 2)
+                
+            fy, m = parse_date_to_fy_and_month(inv_date)
+            
+            if is_admin:
+                cur.execute('''
+                    UPDATE invoices
+                    SET vendor_name = %s, gstin = %s, invoice_number = %s, invoice_date = %s,
+                        payment_date = %s, taxable_value = %s, cgst = %s, sgst = %s, igst = %s,
+                        itc_blocked = %s, eligible_itc = %s, ineligible_itc = %s,
+                        financial_year = %s, month = %s, branch = %s, state = %s
+                    WHERE id = %s
+                ''', (vendor, gstin, inv_num, inv_date, payment_date, taxable, cgst, sgst, igst,
+                      itc_blocked, eligible, ineligible, fy, m, branch, state, inv_id))
+            else:
+                cur.execute('''
+                    UPDATE invoices
+                    SET vendor_name = %s, gstin = %s, invoice_number = %s, invoice_date = %s,
+                        payment_date = %s, taxable_value = %s, cgst = %s, sgst = %s, igst = %s,
+                        itc_blocked = %s, eligible_itc = %s, ineligible_itc = %s,
+                        financial_year = %s, month = %s, branch = %s, state = %s
+                    WHERE id = %s AND user_id = %s
+                ''', (vendor, gstin, inv_num, inv_date, payment_date, taxable, cgst, sgst, igst,
+                      itc_blocked, eligible, ineligible, fy, m, branch, state, inv_id, user_id))
+                      
+            applied_count += cur.rowcount
+            
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        log_activity(user_id, 'bill_rescanned', f'Applied high-accuracy AI re-scan updates for {applied_count} bill(s)', record_count=applied_count)
+        return jsonify({"success": True, "applied_count": applied_count})
+    except Exception as e:
+        print(f"Error applying rescan results: {e}")
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/invoice-file/<int:invoice_id>', methods=['GET'])

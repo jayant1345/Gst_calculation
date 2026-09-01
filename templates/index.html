@@ -265,6 +265,9 @@
                         <button class="btn btn-secondary" id="btn-add-manual">
                             <i class="fa-solid fa-pen-to-square"></i> Add Manual Bill
                         </button>
+                        <button class="btn btn-primary" id="btn-rescan-incomplete" title="Re-scan incomplete bills with Advanced High-Accuracy AI">
+                            <i class="fa-solid fa-arrows-rotate"></i> Re-scan Incomplete (<span id="rescan-incomplete-count">0</span>)
+                        </button>
                         <button class="btn btn-danger" id="btn-delete-selected" disabled title="Delete selected invoices">
                             <i class="fa-solid fa-trash-can"></i> Delete Selected (<span id="delete-selected-count">0</span>)
                         </button>
@@ -592,6 +595,88 @@
                     </button>
                 </div>
             </form>
+        </div>
+    </div>
+
+    <!-- AI Re-Scan Results & Comparison Report Modal -->
+    <div class="modal-overlay" id="rescan-modal-overlay" style="display: none;">
+        <div class="modal-card modal-card-large" style="max-width: 1240px; width: 96vw; max-height: 92vh; display: flex; flex-direction: column;">
+            <div class="modal-header" style="border-bottom: 1px solid var(--border-color); padding: 16px 24px; background: #ffffff;">
+                <div style="display: flex; align-items: center; gap: 12px;">
+                    <div style="width: 40px; height: 40px; border-radius: 10px; background: rgba(37, 99, 235, 0.1); color: var(--accent-blue); display: flex; align-items: center; justify-content: center; font-size: 18px;">
+                        <i class="fa-solid fa-wand-magic-sparkles"></i>
+                    </div>
+                    <div>
+                        <h3 style="margin: 0; font-size: 17.5px; color: var(--text-primary);"><i class="fa-solid fa-file-waveform"></i> AI Re-Scan Comparison & Recovery Report</h3>
+                        <p style="margin: 3px 0 0 0; font-size: 12.5px; color: var(--text-secondary);">High-accuracy AI analysis comparing original values with newly recovered details. Review and select items to apply to your table.</p>
+                    </div>
+                </div>
+                <button type="button" class="modal-close" id="rescan-modal-close" aria-label="Close">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+
+            <!-- Summary Stats Bar -->
+            <div class="rescan-stats-bar" id="rescan-stats-bar" style="display: flex; gap: 16px; padding: 14px 24px; background: #f8fafc; border-bottom: 1px solid var(--border-color); flex-wrap: wrap; align-items: center;">
+                <div class="rescan-stat-item">
+                    <span class="stat-label">Total Bills Re-scanned</span>
+                    <span class="stat-val" id="rescan-stat-total">0</span>
+                </div>
+                <div class="rescan-stat-item highlight-green">
+                    <span class="stat-label"><i class="fa-solid fa-id-card"></i> Recovered GSTINs</span>
+                    <span class="stat-val" id="rescan-stat-gstin">0</span>
+                </div>
+                <div class="rescan-stat-item highlight-blue">
+                    <span class="stat-label"><i class="fa-solid fa-calendar-check"></i> Found Payment Dates</span>
+                    <span class="stat-val" id="rescan-stat-payment">0</span>
+                </div>
+                <div class="rescan-stat-item highlight-purple">
+                    <span class="stat-label"><i class="fa-solid fa-hashtag"></i> Recovered Invoice #</span>
+                    <span class="stat-val" id="rescan-stat-inv">0</span>
+                </div>
+                <div class="rescan-stat-item" style="margin-left: auto;">
+                    <span class="stat-label">AI Vision Model</span>
+                    <span class="stat-badge" id="rescan-stat-model">Gemini 2.5 Pro (High Accuracy)</span>
+                </div>
+            </div>
+
+            <!-- Modal Body with Scrollable Table -->
+            <div class="modal-body" style="padding: 16px 24px; overflow-y: auto; flex: 1;">
+                <div class="rescan-table-container">
+                    <table class="rescan-comparison-table" id="rescan-comparison-table">
+                        <thead>
+                            <tr>
+                                <th width="3%" style="text-align: center;">
+                                    <input type="checkbox" id="rescan-select-all" checked title="Select / Deselect All" style="cursor: pointer; width: 16px; height: 16px;">
+                                </th>
+                                <th width="16%">Bill / Vendor</th>
+                                <th width="14%">GSTIN</th>
+                                <th width="14%">Invoice Number</th>
+                                <th width="12%">Invoice Date</th>
+                                <th width="13%">Payment Date</th>
+                                <th width="16%">Taxable / GST (₹)</th>
+                                <th width="12%">Detected Changes</th>
+                            </tr>
+                        </thead>
+                        <tbody id="rescan-table-body">
+                            <!-- Dynamic comparison rows -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Modal Footer -->
+            <div class="modal-footer" style="padding: 14px 24px; border-top: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; background: #ffffff;">
+                <div style="font-size: 13px; color: var(--text-secondary);">
+                    <span id="rescan-selected-count-msg">Selected <strong id="rescan-selected-badge">0</strong> of 0 bills to update</span>
+                </div>
+                <div style="display: flex; gap: 10px;">
+                    <button type="button" class="btn btn-secondary" id="rescan-cancel-btn">Discard</button>
+                    <button type="button" class="btn btn-primary" id="rescan-apply-btn" style="background: var(--accent-blue); color: white;">
+                        <i class="fa-solid fa-circle-check"></i> Apply Changes (<span id="rescan-apply-btn-count">0</span>)
+                    </button>
+                </div>
+            </div>
         </div>
     </div>
 

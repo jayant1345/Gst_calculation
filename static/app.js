@@ -1105,6 +1105,18 @@ document.addEventListener('DOMContentLoaded', () => {
         if (pillPayment) pillPayment.textContent = countPayment;
         if (pillDate) pillDate.textContent = countDate;
         if (pillTax) pillTax.textContent = countTax;
+
+        const rescanIncompleteCount = document.getElementById('rescan-incomplete-count');
+        if (rescanIncompleteCount) rescanIncompleteCount.textContent = countIncomplete;
+        const btnRescanIncomplete = document.getElementById('btn-rescan-incomplete');
+        if (btnRescanIncomplete) {
+            btnRescanIncomplete.disabled = (countIncomplete === 0);
+            if (countIncomplete === 0) {
+                btnRescanIncomplete.style.opacity = '0.6';
+            } else {
+                btnRescanIncomplete.style.opacity = '1';
+            }
+        }
     }
 
     function setupAuditPills() {
@@ -1427,6 +1439,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 ${window.IS_ADMIN ? `<td class="col-owner">${inv.username || window.CURRENT_USERNAME || ''}</td>` : ''}
                 <td class="actions-cell">
                     ${inv.has_file ? `
+                    <button class="btn-rescan-row" title="Re-scan this bill with Higher Accuracy AI" data-id="${inv.id}">
+                        <i class="fa-solid fa-arrows-rotate"></i>
+                    </button>
                     <button class="btn-view-file" title="View original bill" data-id="${inv.id}">
                         <i class="fa-solid fa-file-invoice"></i>
                     </button>` : ''}
@@ -1503,6 +1518,14 @@ document.addEventListener('DOMContentLoaded', () => {
             tr.querySelector('.btn-delete').addEventListener('click', () => {
                 deleteInvoice(inv.id);
             });
+
+            const rescanBtn = tr.querySelector('.btn-rescan-row');
+            if (rescanBtn) {
+                rescanBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    handleSingleInvoiceRescan(inv.id, rescanBtn);
+                });
+            }
 
             const viewFileBtn = tr.querySelector('.btn-view-file');
             if (viewFileBtn) {
@@ -2175,6 +2198,301 @@ document.addEventListener('DOMContentLoaded', () => {
             btnExportExcel.disabled = false;
         });
     });
+
+    // =========================================================
+    // AI Re-Scan Feature & Interactive Comparison Report Modal
+    // =========================================================
+    const btnRescanIncomplete = document.getElementById('btn-rescan-incomplete');
+    const rescanModalOverlay = document.getElementById('rescan-modal-overlay');
+    const rescanModalClose = document.getElementById('rescan-modal-close');
+    const rescanCancelBtn = document.getElementById('rescan-cancel-btn');
+    const rescanApplyBtn = document.getElementById('rescan-apply-btn');
+    const rescanSelectAll = document.getElementById('rescan-select-all');
+    const rescanTableBody = document.getElementById('rescan-table-body');
+    const rescanSelectedBadge = document.getElementById('rescan-selected-badge');
+    const rescanApplyBtnCount = document.getElementById('rescan-apply-btn-count');
+    const rescanStatTotal = document.getElementById('rescan-stat-total');
+    const rescanStatGstin = document.getElementById('rescan-stat-gstin');
+    const rescanStatPayment = document.getElementById('rescan-stat-payment');
+    const rescanStatInv = document.getElementById('rescan-stat-inv');
+    const rescanStatModel = document.getElementById('rescan-stat-model');
+
+    let currentRescanResults = [];
+    let selectedRescanIds = new Set();
+
+    function closeRescanModal() {
+        if (rescanModalOverlay) rescanModalOverlay.style.display = 'none';
+    }
+
+    if (rescanModalClose) rescanModalClose.addEventListener('click', closeRescanModal);
+    if (rescanCancelBtn) rescanCancelBtn.addEventListener('click', closeRescanModal);
+
+    function updateRescanModalSelectionState() {
+        const count = selectedRescanIds.size;
+        if (rescanSelectedBadge) rescanSelectedBadge.textContent = count;
+        if (rescanApplyBtnCount) rescanApplyBtnCount.textContent = count;
+        if (rescanApplyBtn) {
+            rescanApplyBtn.disabled = count === 0;
+            rescanApplyBtn.style.opacity = count === 0 ? '0.5' : '1';
+        }
+
+        if (rescanSelectAll) {
+            if (currentRescanResults.length === 0) {
+                rescanSelectAll.checked = false;
+                rescanSelectAll.indeterminate = false;
+            } else if (count === currentRescanResults.length) {
+                rescanSelectAll.checked = true;
+                rescanSelectAll.indeterminate = false;
+            } else if (count > 0) {
+                rescanSelectAll.checked = false;
+                rescanSelectAll.indeterminate = true;
+            } else {
+                rescanSelectAll.checked = false;
+                rescanSelectAll.indeterminate = false;
+            }
+        }
+    }
+
+    if (rescanSelectAll) {
+        rescanSelectAll.addEventListener('change', () => {
+            const isChecked = rescanSelectAll.checked;
+            selectedRescanIds.clear();
+            if (isChecked) {
+                currentRescanResults.forEach(r => selectedRescanIds.add(r.id));
+            }
+            const checkboxes = rescanTableBody.querySelectorAll('.rescan-row-checkbox');
+            checkboxes.forEach(cb => { cb.checked = isChecked; });
+            updateRescanModalSelectionState();
+        });
+    }
+
+    function openRescanReportModal(data) {
+        currentRescanResults = data.results || [];
+        selectedRescanIds = new Set(currentRescanResults.map(r => r.id));
+
+        const summary = data.summary || {};
+        if (rescanStatTotal) rescanStatTotal.textContent = summary.total_scanned || currentRescanResults.length;
+        if (rescanStatGstin) rescanStatGstin.textContent = summary.recovered_gstin || 0;
+        if (rescanStatPayment) rescanStatPayment.textContent = summary.recovered_payment_date || 0;
+        if (rescanStatInv) rescanStatInv.textContent = summary.recovered_invoice_num || 0;
+        if (rescanStatModel) rescanStatModel.textContent = summary.ai_model_used || 'Gemini 2.5 Pro (High Accuracy)';
+
+        if (!rescanTableBody) return;
+        rescanTableBody.innerHTML = '';
+
+        if (currentRescanResults.length === 0) {
+            rescanTableBody.innerHTML = `
+                <tr>
+                    <td colspan="8" style="text-align: center; padding: 40px; color: #64748b;">
+                        <i class="fa-solid fa-circle-check" style="font-size: 32px; color: #10b981; margin-bottom: 12px; display: block;"></i>
+                        All bills are already complete with no missing fields to re-scan.
+                    </td>
+                </tr>
+            `;
+            updateRescanModalSelectionState();
+            rescanModalOverlay.style.display = 'flex';
+            return;
+        }
+
+        currentRescanResults.forEach(item => {
+            const orig = item.original || {};
+            const sc = item.scanned || {};
+            const changes = item.changes || [];
+
+            const isGstinRec = changes.some(c => c.field === 'gstin' && c.is_recovered);
+            const isInvRec = changes.some(c => c.field === 'invoice_number' && c.is_recovered);
+            const isPayRec = changes.some(c => c.field === 'payment_date' && c.is_recovered);
+            const isDateRec = changes.some(c => c.field === 'invoice_date' && c.is_recovered);
+
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td style="text-align: center; vertical-align: middle;">
+                    <input type="checkbox" class="rescan-row-checkbox" data-id="${item.id}" checked style="cursor: pointer; width: 16px; height: 16px;">
+                </td>
+                <td>
+                    <div style="font-weight: 600; color: #0f172a; font-size: 13.5px;">${escapeHtml(sc.vendor_name || orig.vendor_name || 'Unknown Vendor')}</div>
+                    <div style="font-size: 11px; color: #64748b; margin-top: 2px;">
+                        <i class="fa-solid fa-file-invoice"></i> ${escapeHtml(item.file_name || `Bill #${item.id}`)}
+                    </div>
+                </td>
+                <td>
+                    <div class="rescan-diff-block">
+                        ${orig.gstin !== sc.gstin && orig.gstin ? `<span class="rescan-diff-old">${escapeHtml(orig.gstin)}</span>` : ''}
+                        <span class="rescan-diff-new ${isGstinRec ? 'recovered' : (orig.gstin !== sc.gstin ? 'changed' : '')}">${escapeHtml(sc.gstin || 'Missing')}</span>
+                    </div>
+                </td>
+                <td>
+                    <div class="rescan-diff-block">
+                        ${orig.invoice_number !== sc.invoice_number && orig.invoice_number ? `<span class="rescan-diff-old">${escapeHtml(orig.invoice_number)}</span>` : ''}
+                        <span class="rescan-diff-new ${isInvRec ? 'recovered' : (orig.invoice_number !== sc.invoice_number ? 'changed' : '')}">${escapeHtml(sc.invoice_number || 'Missing')}</span>
+                    </div>
+                </td>
+                <td>
+                    <div class="rescan-diff-block">
+                        ${orig.invoice_date !== sc.invoice_date && orig.invoice_date ? `<span class="rescan-diff-old">${escapeHtml(orig.invoice_date)}</span>` : ''}
+                        <span class="rescan-diff-new ${isDateRec ? 'recovered' : (orig.invoice_date !== sc.invoice_date ? 'changed' : '')}">${escapeHtml(sc.invoice_date || 'Missing')}</span>
+                    </div>
+                </td>
+                <td>
+                    <div class="rescan-diff-block">
+                        ${orig.payment_date !== sc.payment_date && orig.payment_date ? `<span class="rescan-diff-old">${escapeHtml(orig.payment_date)}</span>` : ''}
+                        <span class="rescan-diff-new ${isPayRec ? 'recovered' : (orig.payment_date !== sc.payment_date && sc.payment_date ? 'changed' : '')}">${escapeHtml(sc.payment_date || 'None')}</span>
+                    </div>
+                </td>
+                <td>
+                    <div style="font-size: 13px; font-weight: 600;">Taxable: ₹${(sc.taxable_value || 0).toFixed(2)}</div>
+                    <div style="font-size: 11.5px; color: #64748b;">GST: ₹${((sc.cgst || 0) + (sc.sgst || 0) + (sc.igst || 0)).toFixed(2)}</div>
+                </td>
+                <td>
+                    <div style="display: flex; flex-direction: column; gap: 2px;">
+                        ${changes.length > 0 ? changes.map(c => `
+                            <span class="rescan-tag ${c.is_recovered ? 'recovered' : 'updated'}">
+                                <i class="fa-solid ${c.is_recovered ? 'fa-check' : 'fa-pen'}"></i> ${escapeHtml(c.label)}
+                            </span>
+                        `).join('') : '<span class="rescan-tag no-change">No changes</span>'}
+                    </div>
+                </td>
+            `;
+
+            const cb = tr.querySelector('.rescan-row-checkbox');
+            cb.addEventListener('change', () => {
+                if (cb.checked) {
+                    selectedRescanIds.add(item.id);
+                } else {
+                    selectedRescanIds.delete(item.id);
+                }
+                updateRescanModalSelectionState();
+            });
+
+            rescanTableBody.appendChild(tr);
+        });
+
+        updateRescanModalSelectionState();
+        rescanModalOverlay.style.display = 'flex';
+    }
+
+    // Handle single bill re-scan from row action button
+    function handleSingleInvoiceRescan(invoiceId, btnEl) {
+        if (btnEl) {
+            btnEl.classList.add('spinning');
+            btnEl.disabled = true;
+        }
+
+        fetch('/api/rescan-invoices-batch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ invoice_ids: [invoiceId] })
+        })
+        .then(res => {
+            if (!res.ok) throw new Error('Re-scan request failed');
+            return res.json();
+        })
+        .then(data => {
+            if (btnEl) {
+                btnEl.classList.remove('spinning');
+                btnEl.disabled = false;
+            }
+            if (data.results && data.results.length > 0) {
+                openRescanReportModal(data);
+            } else {
+                alert(data.message || 'No original file found for this bill to re-scan.');
+            }
+        })
+        .catch(err => {
+            console.error('Error re-scanning invoice:', err);
+            if (btnEl) {
+                btnEl.classList.remove('spinning');
+                btnEl.disabled = false;
+            }
+            alert('Failed to re-scan invoice with AI. Please check server logs.');
+        });
+    }
+
+    // Handle batch re-scan of incomplete bills from toolbar button
+    if (btnRescanIncomplete) {
+        btnRescanIncomplete.addEventListener('click', () => {
+            btnRescanIncomplete.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Re-scanning AI...';
+            btnRescanIncomplete.disabled = true;
+
+            fetch('/api/rescan-invoices-batch', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ filter_mode: 'incomplete' })
+            })
+            .then(res => {
+                if (!res.ok) throw new Error('Batch re-scan failed');
+                return res.json();
+            })
+            .then(data => {
+                btnRescanIncomplete.innerHTML = `<i class="fa-solid fa-arrows-rotate"></i> Re-scan Incomplete (<span id="rescan-incomplete-count">${document.getElementById('count-pill-incomplete')?.textContent || '0'}</span>)`;
+                btnRescanIncomplete.disabled = false;
+                if (data.results && data.results.length > 0) {
+                    openRescanReportModal(data);
+                } else {
+                    alert(data.message || 'No incomplete invoices with stored files found to re-scan.');
+                }
+            })
+            .catch(err => {
+                console.error('Batch re-scan error:', err);
+                btnRescanIncomplete.innerHTML = `<i class="fa-solid fa-arrows-rotate"></i> Re-scan Incomplete (<span id="rescan-incomplete-count">${document.getElementById('count-pill-incomplete')?.textContent || '0'}</span>)`;
+                btnRescanIncomplete.disabled = false;
+                alert('Batch re-scan failed. Please check network/server logs.');
+            });
+        });
+    }
+
+    // Handle Apply Changes (OK button) from Modal
+    if (rescanApplyBtn) {
+        rescanApplyBtn.addEventListener('click', () => {
+            const updatesToApply = currentRescanResults
+                .filter(r => selectedRescanIds.has(r.id))
+                .map(r => ({
+                    id: r.id,
+                    vendor_name: r.scanned.vendor_name,
+                    gstin: r.scanned.gstin,
+                    invoice_number: r.scanned.invoice_number,
+                    invoice_date: r.scanned.invoice_date,
+                    payment_date: r.scanned.payment_date,
+                    taxable_value: r.scanned.taxable_value,
+                    cgst: r.scanned.cgst,
+                    sgst: r.scanned.sgst,
+                    igst: r.scanned.igst,
+                    itc_blocked: r.scanned.itc_blocked,
+                    branch: r.scanned.branch,
+                    state: r.scanned.state
+                }));
+
+            if (updatesToApply.length === 0) {
+                alert('Please select at least one bill to update.');
+                return;
+            }
+
+            rescanApplyBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Applying Updates...';
+            rescanApplyBtn.disabled = true;
+
+            fetch('/api/apply-rescan-results', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ updates: updatesToApply })
+            })
+            .then(res => {
+                if (!res.ok) throw new Error('Failed to apply re-scan updates');
+                return res.json();
+            })
+            .then(data => {
+                rescanApplyBtn.innerHTML = '<i class="fa-solid fa-circle-check"></i> Apply Changes';
+                rescanApplyBtn.disabled = false;
+                closeRescanModal();
+                loadInvoices(); // Reload table and metrics
+            })
+            .catch(err => {
+                console.error('Error applying rescan results:', err);
+                rescanApplyBtn.innerHTML = '<i class="fa-solid fa-circle-check"></i> Apply Changes';
+                rescanApplyBtn.disabled = false;
+                alert('Failed to apply updates to database.');
+            });
+        });
+    }
 
     // Initial Data & UI Setup
     loadMasterData();
