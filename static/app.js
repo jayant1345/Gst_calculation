@@ -926,11 +926,16 @@ document.addEventListener('DOMContentLoaded', () => {
             let duplicateCount = 0;
             let failedCount = 0;
 
-            // Map returned invoices by filename for exact status resolution
-            const fileResultsMap = new Map();
+            // Map returned invoices by root filename and exact filename
+            const fileInvoicesMap = new Map();
             (data.invoices || []).forEach(inv => {
-                if (inv.filename) {
-                    fileResultsMap.set(inv.filename, inv);
+                const fname = (inv.filename || '').trim();
+                const rootName = fname.replace(/\s*\(Page\s*\d+\)\s*$/i, '').trim();
+                if (!fileInvoicesMap.has(rootName)) fileInvoicesMap.set(rootName, []);
+                fileInvoicesMap.get(rootName).push(inv);
+                if (fname !== rootName) {
+                    if (!fileInvoicesMap.has(fname)) fileInvoicesMap.set(fname, []);
+                    fileInvoicesMap.get(fname).push(inv);
                 }
             });
 
@@ -940,9 +945,33 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (!statusSpan) return;
 
                 const uploadName = file.webkitRelativePath || file.name;
-                const inv = fileResultsMap.get(uploadName) || fileResultsMap.get(file.name) || (data.invoices && data.invoices[idx]);
+                const invs = fileInvoicesMap.get(file.name) || fileInvoicesMap.get(uploadName) || [];
 
-                if (inv) {
+                if (invs.length > 1) {
+                    // Multi-bill file (e.g. multi-page PDF or Excel register)
+                    const fileAdded = invs.filter(i => !i.is_duplicate && i.id !== null).length;
+                    const fileDups = invs.filter(i => i.is_duplicate).length;
+                    const fileFails = invs.filter(i => !i.is_duplicate && i.id === null).length;
+
+                    newlyAddedCount += fileAdded;
+                    duplicateCount += fileDups;
+                    failedCount += fileFails;
+
+                    if (fileAdded > 0 && fileDups === 0) {
+                        statusSpan.className = 'progress-status success';
+                        statusSpan.innerHTML = `<i class="fa-solid fa-circle-check"></i> ${fileAdded} bills extracted`;
+                    } else if (fileAdded > 0 && fileDups > 0) {
+                        statusSpan.className = 'progress-status success';
+                        statusSpan.innerHTML = `<i class="fa-solid fa-circle-check"></i> ${fileAdded} added (${fileDups} dup)`;
+                    } else if (fileDups > 0 && fileAdded === 0) {
+                        statusSpan.className = 'progress-status duplicate';
+                        statusSpan.innerHTML = `<i class="fa-solid fa-clone"></i> All ${fileDups} bills duplicate`;
+                    } else {
+                        statusSpan.className = 'progress-status error';
+                        statusSpan.innerHTML = `<i class="fa-solid fa-circle-xmark"></i> ${fileFails} failed`;
+                    }
+                } else if (invs.length === 1) {
+                    const inv = invs[0];
                     if (inv.is_duplicate) {
                         duplicateCount++;
                         statusSpan.className = 'progress-status duplicate';
@@ -951,7 +980,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     } else if (inv.id !== null) {
                         newlyAddedCount++;
                         statusSpan.className = 'progress-status success';
-                        statusSpan.innerHTML = '<i class="fa-solid fa-circle-check"></i> Processed';
+                        statusSpan.innerHTML = '<i class="fa-solid fa-circle-check"></i> 1 bill processed';
                     } else {
                         failedCount++;
                         statusSpan.className = 'progress-status error';
@@ -964,6 +993,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             });
 
+            const totalBillsExtracted = (data.invoices || []).length;
             globalBatchState.processedFiles += files.length;
             globalBatchState.successFiles += newlyAddedCount;
             globalBatchState.errorFiles += failedCount;
@@ -981,19 +1011,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (!options.appendProgress) {
                 const elapsedSec = stopScanTimer();
-                const avgPerBill = (parseFloat(elapsedSec) / Math.max(1, files.length)).toFixed(2);
+                const avgPerBill = (parseFloat(elapsedSec) / Math.max(1, totalBillsExtracted || files.length)).toFixed(2);
                 if (progressHeading) {
                     progressHeading.innerHTML = `<i class="fa-solid fa-circle-check" style="color: var(--accent-green);"></i> Upload Complete • ${elapsedSec}s`;
                 }
                 if (uploadSummaryBanner && summaryBannerText) {
+                    const billsText = totalBillsExtracted > files.length ? ` &bull; <strong>${totalBillsExtracted} bill(s) extracted</strong>` : '';
                     if (newlyAddedCount > 0 && duplicateCount === 0 && failedCount === 0) {
-                        summaryBannerText.innerHTML = `<strong><i class="fa-solid fa-circle-check"></i> Upload Successful:</strong> Processed ${files.length} file(s) in <strong>${elapsedSec}s</strong> (${avgPerBill}s/bill).`;
+                        summaryBannerText.innerHTML = `<strong><i class="fa-solid fa-circle-check"></i> Upload Successful:</strong> Processed ${files.length} file(s)${billsText} in <strong>${elapsedSec}s</strong> (${avgPerBill}s/bill).`;
                         uploadSummaryBanner.className = 'upload-summary-card';
                     } else if (newlyAddedCount === 0 && duplicateCount > 0) {
-                        summaryBannerText.innerHTML = `<strong><i class="fa-solid fa-clone"></i> Duplicates Skipped:</strong> All ${duplicateCount} bill(s) already exist in your records and were not uploaded.`;
+                        summaryBannerText.innerHTML = `<strong><i class="fa-solid fa-clone"></i> Duplicates Skipped:</strong> All ${duplicateCount} bill(s) from ${files.length} file(s) already exist in your records.`;
                         uploadSummaryBanner.className = 'upload-summary-card duplicate-warning';
                     } else {
-                        let summaryMsg = `<strong>Upload Finished:</strong> Processed ${files.length} file(s) in <strong>${elapsedSec}s</strong> (${avgPerBill}s/bill) &mdash; ${newlyAddedCount} added`;
+                        let summaryMsg = `<strong>Upload Finished:</strong> Processed ${files.length} file(s)${billsText} in <strong>${elapsedSec}s</strong> (${avgPerBill}s/bill) &mdash; ${newlyAddedCount} added`;
                         if (duplicateCount > 0) summaryMsg += `, <span style="color: #b45309; font-weight: 600;">${duplicateCount} duplicate(s) skipped</span>`;
                         if (failedCount > 0) summaryMsg += `, <span style="color: #b91c1c; font-weight: 600;">${failedCount} failed</span>`;
                         summaryMsg += '.';
