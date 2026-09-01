@@ -43,7 +43,7 @@ body {
 /* App Layout */
 .app-container {
     display: grid;
-    grid-template-columns: 280px 1fr;
+    grid-template-columns: 295px 1fr;
     min-height: 100vh;
 }
 
@@ -65,7 +65,7 @@ body {
 .sidebar {
     background-color: var(--sidebar-bg);
     border-right: 1px solid var(--border-color);
-    padding: 30px 24px;
+    padding: 34px 20px;
     display: flex;
     flex-direction: column;
     justify-content: space-between;
@@ -80,8 +80,8 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
-    margin-bottom: 18px;
-    padding-bottom: 12px;
+    margin-bottom: 34px;
+    padding-bottom: 22px;
     border-bottom: 1px solid var(--border-color);
 }
 
@@ -91,20 +91,20 @@ body {
     align-items: center;
     justify-content: center;
     background: #ffffff;
-    border-radius: 12px;
-    padding: 8px 10px;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
-    border: 1px solid var(--border-color);
+    border-radius: 14px;
+    padding: 12px 14px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.05);
+    border: 1px solid rgba(226, 232, 240, 0.9);
 }
 
 .agency-full-logo {
     width: 100%;
     max-width: 100%;
     height: auto;
-    max-height: 48px;
+    max-height: 62px;
     object-fit: contain;
     display: block;
-    transition: transform 0.2s ease;
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 
 .agency-full-logo:hover {
@@ -264,7 +264,8 @@ body {
 .sidebar-nav {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 10px;
+    margin-top: 6px;
     flex-grow: 1;
 }
 
@@ -291,13 +292,14 @@ body {
 .nav-item {
     display: flex;
     align-items: center;
-    gap: 16px;
-    padding: 14px 18px;
+    gap: 15px;
+    padding: 13.5px 18px;
     border-radius: 12px;
     color: var(--text-muted);
     text-decoration: none;
     font-weight: 600;
-    transition: all 0.25s ease;
+    font-size: 14.5px;
+    transition: all 0.22s ease;
 }
 
 .nav-item i {
@@ -308,11 +310,13 @@ body {
 .nav-item:hover {
     background-color: #f8fafc;
     color: var(--accent-blue);
+    transform: translateX(2px);
 }
 
 .nav-item.active {
-    background-color: rgba(37, 99, 235, 0.06);
+    background-color: rgba(37, 99, 235, 0.08);
     color: var(--accent-blue);
+    font-weight: 700;
 }
 
 .sidebar-footer {
