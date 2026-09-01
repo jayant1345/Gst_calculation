@@ -80,8 +80,8 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
-    margin-bottom: 20px;
-    padding-bottom: 14px;
+    margin-bottom: 18px;
+    padding-bottom: 12px;
     border-bottom: 1px solid var(--border-color);
 }
 
@@ -92,7 +92,7 @@ body {
     justify-content: center;
     background: #ffffff;
     border-radius: 12px;
-    padding: 10px 12px;
+    padding: 8px 10px;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
     border: 1px solid var(--border-color);
 }
@@ -101,7 +101,7 @@ body {
     width: 100%;
     max-width: 100%;
     height: auto;
-    max-height: 46px;
+    max-height: 48px;
     object-fit: contain;
     display: block;
     transition: transform 0.2s ease;
