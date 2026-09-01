@@ -495,8 +495,8 @@ def call_rescan_vision_model(system_prompt, user_prompt, base64_data, mime_type)
     # 3. Fallback to default vision model pipeline (Gemini 2.5 Flash / Grok / Claude)
     return call_vision_model(system_prompt, user_prompt, base64_data, mime_type)
 
-def extract_from_pdf_binary_rescan(file_bytes):
-    """Renders the PDF's first page at high-resolution 250 DPI for forensic clarity
+def extract_from_pdf_binary_rescan(file_bytes, page_index=0):
+    """Renders the specified PDF page at high-resolution 250 DPI for forensic clarity
     and runs the high-accuracy vision model to recover missing fields."""
     system_prompt = (
         "You are a senior forensic financial OCR specialist examining Indian tax invoices, "
@@ -525,7 +525,7 @@ def extract_from_pdf_binary_rescan(file_bytes):
         "Ensure exact numeric math: Total GST = CGST + SGST + IGST."
     )
     # Render PDF page at 250 DPI for ultra-crisp resolution of small print and handwriting
-    base64_jpg = render_pdf_page_to_png_base64(file_bytes, page_index=0, dpi=250)
+    base64_jpg = render_pdf_page_to_png_base64(file_bytes, page_index=page_index, dpi=250)
     result, model_used = call_rescan_vision_model(system_prompt, user_prompt, base64_jpg, "image/jpeg")
     if "```json" in result:
         result = result.split("```json")[1].split("```")[0].strip()
@@ -708,8 +708,8 @@ def extract_from_image(base64_data, mime_type):
     parsed["_ai_model"] = model_used
     return parsed
 
-def extract_from_pdf_binary(file_bytes):
-    """Renders the PDF's first page to an optimized JPEG and sends that
+def extract_from_pdf_binary(file_bytes, page_index=0):
+    """Renders the specified PDF page to an optimized JPEG and sends that
     image to the vision model (via OpenRouter, see AI_VISION_MODEL_NAME),
     rather than the raw PDF -- gives optimal control over resolution and fast transfer."""
     system_prompt = (
@@ -738,7 +738,7 @@ def extract_from_pdf_binary(file_bytes):
         "ambiguous handwritten/printed characters (e.g. position 3 is always a letter 'O' not '0')."
     )
 
-    base64_jpg = render_pdf_page_to_png_base64(file_bytes)
+    base64_jpg = render_pdf_page_to_png_base64(file_bytes, page_index=page_index)
 
     result, model_used = call_vision_model(system_prompt, user_prompt, base64_jpg, "image/jpeg")
     if "```json" in result:
@@ -1966,48 +1966,115 @@ def _parse_single_invoice_file(filename, file_bytes, batch_branch, batch_state, 
 
     # 2. PDF Processing
     elif ext == 'pdf':
-        # Fast C-speed text extraction with PyMuPDF
         try:
             doc = pymupdf.open(stream=file_bytes, filetype="pdf")
-            text = "".join([page.get_text() for page in doc])
+            num_pages = len(doc)
+        except Exception as pe:
+            print(f"Error opening PDF {filename}: {pe}")
+            num_pages = 0
+            doc = None
+
+        if not doc or num_pages == 0:
+            parsed_list = []
+        elif num_pages == 1:
+            page_text = doc[0].get_text()
+            if not high_accuracy and len(page_text.strip()) > 100:
+                inv = extract_from_text(page_text)
+
+                # Instant regex pre-check for 15-character GSTIN in extracted text
+                needs_gstin = not inv.get('gstin') or inv.get('gstin') == 'N/A'
+                if needs_gstin:
+                    gstin_match = re.search(r'\b[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}\b', page_text)
+                    if gstin_match:
+                        inv['gstin'] = gstin_match.group(0)
+                        needs_gstin = False
+
+                needs_payment_date = not inv.get('payment_date') or inv.get('payment_date') == inv.get('invoice_date')
+                payment_date_markers = ('rtgs', 'neft', 'p.o. no', 'po no', 'cheque',
+                                         'sanctioned', 'please pay', 'paid on', 'demand draft')
+                has_payment_voucher_section = any(m in page_text.lower() for m in payment_date_markers)
+
+                if needs_gstin or (needs_payment_date and has_payment_voucher_section):
+                    try:
+                        vision_inv = extract_from_pdf_binary(file_bytes, page_index=0)
+                        if needs_payment_date and vision_inv.get('payment_date'):
+                            inv['payment_date'] = vision_inv['payment_date']
+                        if needs_gstin and vision_inv.get('gstin'):
+                            inv['gstin'] = vision_inv['gstin']
+                        inv['_ai_model'] = vision_inv.get('_ai_model', inv.get('_ai_model'))
+                    except Exception as ex:
+                        print(f"Vision fallback failed for {filename}: {ex}")
+            else:
+                # High Accuracy Scan or scanned PDF without text layer: full vision pass
+                inv = extract_from_pdf_binary(file_bytes, page_index=0)
+
+            parsed_list = [inv]
+            store_file_bytes = file_bytes
+            store_mime_type = "application/pdf"
+            store_file_name = filename
             doc.close()
-        except Exception:
-            text = ""
-
-        if not high_accuracy and len(text.strip()) > 100:
-            inv = extract_from_text(text)
-
-            # Instant regex pre-check for 15-character GSTIN in extracted text
-            needs_gstin = not inv.get('gstin') or inv.get('gstin') == 'N/A'
-            if needs_gstin:
-                gstin_match = re.search(r'\b[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}\b', text)
-                if gstin_match:
-                    inv['gstin'] = gstin_match.group(0)
-                    needs_gstin = False
-
-            needs_payment_date = not inv.get('payment_date') or inv.get('payment_date') == inv.get('invoice_date')
-            payment_date_markers = ('rtgs', 'neft', 'p.o. no', 'po no', 'cheque',
-                                     'sanctioned', 'please pay', 'paid on', 'demand draft')
-            has_payment_voucher_section = any(m in text.lower() for m in payment_date_markers)
-
-            if needs_gstin or (needs_payment_date and has_payment_voucher_section):
-                try:
-                    vision_inv = extract_from_pdf_binary(file_bytes)
-                    if needs_payment_date and vision_inv.get('payment_date'):
-                        inv['payment_date'] = vision_inv['payment_date']
-                    if needs_gstin and vision_inv.get('gstin'):
-                        inv['gstin'] = vision_inv['gstin']
-                    inv['_ai_model'] = vision_inv.get('_ai_model', inv.get('_ai_model'))
-                except Exception as ex:
-                    print(f"Vision fallback failed for {filename}: {ex}")
         else:
-            # High Accuracy Scan or scanned PDF without text layer: full vision pass
-            inv = extract_from_pdf_binary(file_bytes)
+            # Multi-page PDF: scan all pages concurrently across thread pool
+            def _process_pdf_page(p_idx):
+                try:
+                    p_doc = pymupdf.open(stream=file_bytes, filetype="pdf")
+                    page_text = p_doc[p_idx].get_text()
 
-        parsed_list = [inv]
-        store_file_bytes = file_bytes
-        store_mime_type = "application/pdf"
-        store_file_name = filename
+                    # Extract this single page as a standalone PDF for individual bill storage
+                    single_doc = pymupdf.open()
+                    single_doc.insert_pdf(p_doc, from_page=p_idx, to_page=p_idx)
+                    single_bytes = single_doc.tobytes()
+                    single_doc.close()
+                    p_doc.close()
+
+                    if not high_accuracy and len(page_text.strip()) > 100:
+                        inv = extract_from_text(page_text)
+                        needs_gstin = not inv.get('gstin') or inv.get('gstin') == 'N/A'
+                        if needs_gstin:
+                            gstin_match = re.search(r'\b[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}\b', page_text)
+                            if gstin_match:
+                                inv['gstin'] = gstin_match.group(0)
+                                needs_gstin = False
+
+                        needs_payment_date = not inv.get('payment_date') or inv.get('payment_date') == inv.get('invoice_date')
+                        payment_date_markers = ('rtgs', 'neft', 'p.o. no', 'po no', 'cheque',
+                                                 'sanctioned', 'please pay', 'paid on', 'demand draft')
+                        has_payment_voucher_section = any(m in page_text.lower() for m in payment_date_markers)
+
+                        if needs_gstin or (needs_payment_date and has_payment_voucher_section):
+                            try:
+                                vision_inv = extract_from_pdf_binary(file_bytes, page_index=p_idx)
+                                if needs_payment_date and vision_inv.get('payment_date'):
+                                    inv['payment_date'] = vision_inv['payment_date']
+                                if needs_gstin and vision_inv.get('gstin'):
+                                    inv['gstin'] = vision_inv['gstin']
+                                inv['_ai_model'] = vision_inv.get('_ai_model', inv.get('_ai_model'))
+                            except Exception as ex:
+                                print(f"Vision fallback failed for {filename} page {p_idx+1}: {ex}")
+                    else:
+                        inv = extract_from_pdf_binary(file_bytes, page_index=p_idx)
+
+                    inv['_store_file_bytes'] = single_bytes
+                    inv['_store_file_name'] = f"{filename} (Page {p_idx+1})"
+                    inv['_store_mime_type'] = "application/pdf"
+                    inv['_page_number'] = p_idx + 1
+                    return inv
+                except Exception as ex:
+                    print(f"Error processing page {p_idx+1} of {filename}: {ex}")
+                    return None
+
+            with ThreadPoolExecutor(max_workers=min(num_pages, 6)) as p_executor:
+                p_futures = [p_executor.submit(_process_pdf_page, i) for i in range(num_pages)]
+                for pf in as_completed(p_futures):
+                    p_res = pf.result()
+                    if p_res:
+                        parsed_list.append(p_res)
+
+            parsed_list.sort(key=lambda x: x.get('_page_number', 0))
+            store_file_bytes = file_bytes
+            store_mime_type = "application/pdf"
+            store_file_name = filename
+            doc.close()
 
     # 3. Image Processing
     elif ext in ['png', 'jpg', 'jpeg', 'webp']:
@@ -2145,12 +2212,14 @@ def process_invoices():
                 inv["branch"] = str(inv.get("branch") or batch_branch or "Unassigned")[:100]
                 inv["state"] = str(inv.get("state") or batch_state or "Unassigned")[:100]
 
-                # Auto-detect branch and state from folder path when uploading multi-branch directories
+                # Auto-detect branch and state from folder path or filename when uploading
                 if (inv["branch"] == 'Unassigned' or not inv["branch"]) and not batch_branch:
                     fn_norm = filename.replace("\\", "/").upper()
                     for mb in MASTER_BRANCHES:
                         b_name = mb['name'].upper()
-                        if f"{b_name}/" in fn_norm or f"/{b_name}" in fn_norm or fn_norm.startswith(f"{b_name}/"):
+                        if (f"{b_name}/" in fn_norm or f"/{b_name}" in fn_norm or fn_norm.startswith(f"{b_name}/")
+                            or f"_{b_name}_" in fn_norm or f" {b_name} " in fn_norm or f"_{b_name} " in fn_norm
+                            or f" {b_name}_" in fn_norm or b_name in fn_norm):
                             inv["branch"] = mb['name']
                             inv["state"] = mb['state']
                             break
@@ -2192,6 +2261,10 @@ def process_invoices():
                     else:
                         seen_in_batch.add(batch_key)
 
+                inv_store_bytes = inv.get('_store_file_bytes') or parsed_res["store_file_bytes"]
+                inv_store_mime = inv.get('_store_mime_type') or parsed_res["store_mime_type"]
+                inv_store_name = inv.get('_store_file_name') or parsed_res["store_file_name"]
+
                 if dup_id:
                     # Duplicate detected: skip database insertion and flag as duplicate
                     results.append({
@@ -2215,7 +2288,7 @@ def process_invoices():
                         "ineligible_itc": ineligible,
                         "financial_year": fy,
                         "month": m,
-                        "filename": filename,
+                        "filename": inv_store_name or filename,
                         "ai_model_used": inv.get("_ai_model"),
                         "message": dup_reason
                     })
@@ -2229,8 +2302,8 @@ def process_invoices():
                     ''', (user_id, inv["invoice_number"], inv["invoice_date"], inv["payment_date"], inv["vendor_name"], inv["gstin"], inv["branch"], inv["state"],
                           inv["taxable_value"], inv["cgst"], inv["sgst"], inv["igst"], inv["itc_blocked"],
                           eligible, ineligible,
-                          psycopg2.Binary(parsed_res["store_file_bytes"]) if parsed_res["store_file_bytes"] else None,
-                          parsed_res["store_mime_type"], parsed_res["store_file_name"], fy, m))
+                          psycopg2.Binary(inv_store_bytes) if inv_store_bytes else None,
+                          inv_store_mime, inv_store_name, fy, m))
 
                     db_id = cur.fetchone()[0]
                     cur.execute("RELEASE SAVEPOINT sp_inv")
@@ -2249,12 +2322,12 @@ def process_invoices():
                         "sgst": inv["sgst"],
                         "igst": inv["igst"],
                         "itc_blocked": inv["itc_blocked"],
-                        "has_file": parsed_res["store_file_bytes"] is not None,
+                        "has_file": inv_store_bytes is not None,
                         "eligible_itc": eligible,
                         "ineligible_itc": ineligible,
                         "financial_year": fy,
                         "month": m,
-                        "filename": filename,
+                        "filename": inv_store_name or filename,
                         "username": session.get('username', ''),
                         "ai_model_used": inv.get("_ai_model")
                     })
