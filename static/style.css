@@ -2159,23 +2159,46 @@ body {
    the header-main row (5 <th> due to colspan) and body rows (11 flat
    <td>) the same way, since :last-child / :nth-last-child(2) are
    relative to each row regardless of how many cells it has. */
-.recon-table .header-main th:last-child,
+/* These corner header cells are sticky on BOTH axes at once (top from
+   the generic .invoice-table th rule, right from here), so their z-index
+   must beat every other header cell's z-index (15) -- not just other
+   body cells -- otherwise a same-row header cell scrolling underneath
+   (itself sticky-top at z-index 15) paints over the "frozen" corner
+   instead of staying hidden behind it as the table scrolls horizontally.
+   Body sticky cells only need to clear plain (unpositioned) body <td>s,
+   so a lower value is enough there and keeps them under the header. */
+.recon-table .header-main th:last-child {
+    position: sticky;
+    right: 0;
+    width: 100px;
+    min-width: 100px;
+    background: var(--card-bg);
+    z-index: 20;
+    box-shadow: -4px 0 6px -4px rgba(0, 0, 0, 0.15);
+}
+
+.recon-table .header-main th:nth-last-child(2) {
+    position: sticky;
+    right: 100px;
+    background: var(--card-bg);
+    z-index: 20;
+}
+
 .recon-table tbody td:last-child {
     position: sticky;
     right: 0;
     width: 100px;
     min-width: 100px;
     background: var(--card-bg);
-    z-index: 2;
+    z-index: 5;
     box-shadow: -4px 0 6px -4px rgba(0, 0, 0, 0.15);
 }
 
-.recon-table .header-main th:nth-last-child(2),
 .recon-table tbody td:nth-last-child(2) {
     position: sticky;
     right: 100px;
     background: var(--card-bg);
-    z-index: 2;
+    z-index: 5;
 }
 
 .header-main th {
