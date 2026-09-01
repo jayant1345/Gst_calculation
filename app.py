@@ -21,6 +21,13 @@ from master_data import MASTER_BRANCHES, MASTER_VENDORS, get_branch_state, match
 load_dotenv()
 
 app = Flask(__name__, static_folder='static', template_folder='templates')
+
+# Ensure DB tables initialized on startup
+try:
+    init_db()
+except Exception as e:
+    print(f'DB init warning: {e}')
+
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "949539d0c64bdf34138e6be019a552bf")
 
 # SSL context for API calls
@@ -4172,18 +4179,6 @@ def get_monthly_bill_summary():
         return jsonify({"error": str(e)}), 500
 
 
-if __name__ == '__main__':
-    # Ensure static and template folders exist
-    os.makedirs(app.static_folder, exist_ok=True)
-    os.makedirs(app.template_folder, exist_ok=True)
-    
-    # Initialize DB Tables
-    init_db()
-    
-    # Run server
-    port = int(os.getenv("PORT", 5588))
-    print(f"Starting GST Calculation Server on port {port}...")
-    app.run(host='0.0.0.0', port=port, debug=True)
 
 
 # ============================================================================
@@ -4842,3 +4837,17 @@ def export_income_working_sheet():
     except Exception as e:
         print(f"Error generating CA working sheet: {e}")
         return jsonify({"error": str(e)}), 500
+
+
+if __name__ == '__main__':
+    # Ensure static and template folders exist
+    os.makedirs(app.static_folder, exist_ok=True)
+    os.makedirs(app.template_folder, exist_ok=True)
+    
+    # Initialize DB Tables
+    init_db()
+    
+    # Run server
+    port = int(os.getenv("PORT", 5588))
+    print(f"Starting GST Calculation Server on port {port}...")
+    app.run(host='0.0.0.0', port=port, debug=True)
