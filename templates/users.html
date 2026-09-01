@@ -194,10 +194,13 @@
         <!-- Sidebar Navigation -->
         <aside class="sidebar" id="sidebar">
             <div class="sidebar-brand">
-                <i class="fa-solid fa-building-columns brand-icon"></i>
+                <div class="agency-brand-badge" title="Chartered Accountants">
+                    <img id="agency-logo-img" src="/static/nn_shah_logo.png" alt="N.N. Shah & Co." class="agency-logo-img" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';" style="display:none;">
+                    <span class="agency-badge-text">CA</span>
+                </div>
                 <div class="brand-text">
-                    <h2>Nutan Nagrik</h2>
-                    <span class="sub-text">SAHAKARI BANK LTD.</span>
+                    <h2>N. N. Shah & Co.</h2>
+                    <span class="sub-text">CHARTERED ACCOUNTANTS</span>
                 </div>
             </div>
 
@@ -267,13 +270,42 @@
                 <div class="user-profile">
                     <div class="profile-info">
                         <span class="profile-name">{{ session['username'] }}</span>
-                        <span class="profile-role">Administrator</span>
+                        <span class="profile-role">N. N. Shah & Co. (Admin)</span>
                     </div>
                     <div class="profile-avatar">
                         <i class="fa-solid fa-user-shield"></i>
                     </div>
                 </div>
             </header>
+
+            <!-- Client / Audit Entity Switcher Bar -->
+            <div class="client-entity-bar">
+                <div class="client-tabs-wrapper">
+                    <div class="client-bar-label">
+                        <i class="fa-solid fa-building-user"></i>
+                        <span>Audit Client:</span>
+                    </div>
+                    <button class="client-tab-btn active" data-client-id="nutan_nagrik" title="Nutan Nagrik Sahakari Bank Ltd. (Active Audit Client)">
+                        <i class="fa-solid fa-building-columns"></i>
+                        <span>Nutan Nagrik Sahakari Bank Ltd.</span>
+                        <span class="client-tag">Active Client</span>
+                    </button>
+                    <button class="client-tab-btn" data-client-id="sun_builders" title="Sun Builders">
+                        <i class="fa-solid fa-city"></i>
+                        <span>Sun Builders</span>
+                        <span class="client-tag">Client 2</span>
+                    </button>
+                    <button class="client-tab-btn" data-client-id="client_3" title="Client / Entity 3">
+                        <i class="fa-solid fa-building"></i>
+                        <span>Client 3</span>
+                        <span class="client-tag">Coming Soon</span>
+                    </button>
+                </div>
+                <button class="client-tab-add-btn" id="btn-add-client-tab" title="Add another Client or Bank">
+                    <i class="fa-solid fa-plus"></i>
+                    <span>Add Client</span>
+                </button>
+            </div>
 
             {% if error %}
             <div class="error-alert">

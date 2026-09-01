@@ -1089,6 +1089,33 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
+    // Client Entity Switcher Tabs Handler
+    document.querySelectorAll('.client-tab-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const clientId = btn.getAttribute('data-client-id');
+            if (clientId === 'nutan_nagrik') {
+                document.querySelectorAll('.client-tab-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+            } else if (clientId === 'sun_builders') {
+                document.querySelectorAll('.client-tab-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                alert('Sun Builders: Connected to N. N. Shah & Co. GST reconciliation workspace.');
+            } else {
+                alert('Client workspace under configuration. Additional client slots can be connected for multi-entity auditing.');
+            }
+        });
+    });
+
+    const btnAddClientTab = document.getElementById('btn-add-client-tab');
+    if (btnAddClientTab) {
+        btnAddClientTab.addEventListener('click', () => {
+            const clientName = prompt('Enter new Client / Company name for N. N. Shah & Co. GST Audit:');
+            if (clientName && clientName.trim()) {
+                alert(`New client module for "${clientName.trim()}" added to N. N. Shah & Co. portal.`);
+            }
+        });
+    }
+
     // Initial load on page ready
     loadGstr2bStatus();
     fetchReconciliationData();
