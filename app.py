@@ -1,3 +1,4 @@
+import collections
 import os
 import re
 import json
@@ -4647,57 +4648,225 @@ def get_income_summary():
 @app.route('/api/export-income-working-sheet', methods=['POST', 'GET'])
 @login_required
 def export_income_working_sheet():
-    template_path = os.path.join(os.path.dirname(__file__), 'reference_data', 'MASTER_BRANCH_WISE_CALCULATION_TEMPLATE.xlsx')
+    import collections, openpyxl, io
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+
     month = request.args.get('month', 'July')
     fy = request.args.get('financial_year', '2026-27')
     client_id = get_current_client_id()
+    client_cfg = get_client_config(client_id)
+    template_path = os.path.join(os.path.dirname(__file__), 'reference_data', 'MASTER_BRANCH_WISE_CALCULATION_TEMPLATE.xlsx')
 
-    if os.path.exists(template_path):
-        try:
-            wb = openpyxl.load_workbook(template_path)
-            conn = get_db_connection()
-            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-            cur.execute('''
-                SELECT branch, gl_code, income_amount::float, cgst::float, sgst::float, igst::float, is_taxable
-                FROM income_entries
-                WHERE client_id = %s
-            ''', (client_id,))
-            entries = cur.fetchall()
-            cur.close()
-            conn.close()
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute('''
+            SELECT branch, gl_code, particulars, is_taxable,
+                   income_amount::float, cgst::float, sgst::float, igst::float,
+                   refund_without_gst::float, refund_with_gst::float
+            FROM income_entries
+            WHERE client_id = %s
+            ORDER BY branch ASC, gl_code ASC
+        ''', (client_id,))
+        entries = cur.fetchall()
+        cur.close()
+        conn.close()
 
-            # Group by branch
-            branch_map = collections.defaultdict(dict)
-            for e in entries:
-                b_name = e['branch'].upper().strip()
-                c_code = str(e['gl_code']).strip()
-                branch_map[b_name][c_code] = e
+        # Group by branch
+        branch_map = collections.defaultdict(dict)
+        branch_entries_list = collections.defaultdict(list)
+        for e in entries:
+            b_name = e['branch'].upper().strip()
+            c_code = str(e['gl_code']).strip()
+            branch_map[b_name][c_code] = e
+            branch_entries_list[b_name].append(e)
 
-            # Update branch sheets in workbook
-            for sname in wb.sheetnames:
-                b_clean = sname.strip().upper()
-                if b_clean in branch_map:
-                    ws_b = wb[sname]
-                    b_dict = branch_map[b_clean]
-                    for r in range(7, 75):
-                        c_val = ws_b.cell(r, 1).value
-                        if c_val is not None:
-                            c_str = str(c_val).strip()
-                            if c_str in b_dict:
-                                ws_b.cell(r, 3, value=b_dict[c_str]['income_amount'])
+        # 1. Use Golden Master Template if available
+        if os.path.exists(template_path):
+            try:
+                wb = openpyxl.load_workbook(template_path)
+                for sname in wb.sheetnames:
+                    b_clean = sname.strip().upper()
+                    if b_clean in branch_map:
+                        ws_b = wb[sname]
+                        b_dict = branch_map[b_clean]
+                        for r in range(7, 75):
+                            c_val = ws_b.cell(r, 1).value
+                            if c_val is not None:
+                                c_str = str(c_val).strip()
+                                if c_str in b_dict:
+                                    ws_b.cell(r, 3, value=b_dict[c_str]['income_amount'])
 
-            buf = io.BytesIO()
-            wb.save(buf)
-            buf.seek(0)
-            out_filename = f"1_BRANCH_WISE_CALCULATION_{month.upper()}_{fy}_WORKING_SHEET.xlsx"
-            return send_file(
-                buf,
-                mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                as_attachment=True,
-                download_name=out_filename
-            )
-        except Exception as e:
-            print(f"Error exporting from master template: {e}")
+                buf = io.BytesIO()
+                wb.save(buf)
+                buf.seek(0)
+                out_filename = f"1_BRANCH_WISE_CALCULATION_{month.upper()}_{fy}_WORKING_SHEET.xlsx"
+                return send_file(
+                    buf,
+                    mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    as_attachment=True,
+                    download_name=out_filename
+                )
+            except Exception as te:
+                print(f"Master template loading error, falling back to dynamic builder: {te}")
+
+        # 2. Dynamic High-Fidelity 27-Tab Builder (Fallback)
+        wb = openpyxl.Workbook()
+        ws_summary = wb.active
+        ws_summary.title = "SUMMARY SHEET GST"
+        
+        title_font = Font(name="Calibri", size=13, bold=True, color="1E3A8A")
+        section_font = Font(name="Calibri", size=11, bold=True, color="0F172A")
+        header_fill = PatternFill(start_color="1E3A8A", end_color="1E3A8A", fill_type="solid")
+        header_font = Font(name="Calibri", size=10, bold=True, color="FFFFFF")
+        num_font = Font(name="Calibri", size=10)
+        bold_num_font = Font(name="Calibri", size=10, bold=True)
+
+        ws_summary['B1'] = f"{client_cfg.get('name', 'Nutan Nagrik Sahakari Bank Ltd.')}"
+        ws_summary['B1'].font = title_font
+        ws_summary['B2'] = f"GST CALCULATION SUMMARY FOR THE MONTH OF {month.upper()} {fy}"
+        ws_summary['B2'].font = section_font
+
+        ws_summary['B4'] = "(1) NON TAXABLE INCOME / EXEMPT INCOME"
+        ws_summary['B4'].font = section_font
+        headers_exempt = ["PARTICULARS", "INCOME AMOUNT (₹)", "TAX RATE", "EXEMPTION STATUS"]
+        for c_idx, h in enumerate(headers_exempt, start=2):
+            cell = ws_summary.cell(row=5, column=c_idx, value=h)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center")
+
+        exempt_total = 0.0
+        taxable_total = 0.0
+        cgst_total = 0.0
+        sgst_total = 0.0
+        igst_total = 0.0
+
+        r_ptr = 6
+        for e in entries:
+            if not e['is_taxable']:
+                ws_summary.cell(row=r_ptr, column=2, value=e['particulars']).font = num_font
+                ws_summary.cell(row=r_ptr, column=3, value=e['income_amount']).font = num_font
+                ws_summary.cell(row=r_ptr, column=4, value="0%").font = num_font
+                ws_summary.cell(row=r_ptr, column=5, value="Exempt (Notification 12/2017)").font = num_font
+                exempt_total += e['income_amount']
+                r_ptr += 1
+
+        if r_ptr == 6:
+            ws_summary.cell(row=6, column=2, value="No direct exempt items recorded").font = num_font
+            r_ptr = 7
+
+        ws_summary.cell(row=r_ptr, column=2, value="TOTAL EXEMPT INCOME").font = bold_num_font
+        ws_summary.cell(row=r_ptr, column=3, value=exempt_total).font = bold_num_font
+        r_ptr += 2
+
+        ws_summary.cell(row=r_ptr, column=2, value="(2) TAXABLE INCOME & OUTPUT GST").font = section_font
+        r_ptr += 1
+        headers_tax = ["BRANCH", "TAXABLE INCOME (₹)", "CGST 9% (₹)", "SGST 9% (₹)", "IGST 18% (₹)", "TOTAL GST (₹)"]
+        for c_idx, h in enumerate(headers_tax, start=2):
+            cell = ws_summary.cell(row=r_ptr, column=c_idx, value=h)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center")
+
+        r_ptr += 1
+        for b_name in INCOME_MASTER_BRANCHES:
+            b_entries = branch_entries_list.get(b_name, [])
+            b_tax = sum(e['income_amount'] for e in b_entries if e['is_taxable'])
+            b_cgst = sum(e['cgst'] for e in b_entries if e['is_taxable'])
+            b_sgst = sum(e['sgst'] for e in b_entries if e['is_taxable'])
+            b_igst = sum(e['igst'] for e in b_entries if e['is_taxable'])
+            b_tot_gst = b_cgst + b_sgst + b_igst
+
+            ws_summary.cell(row=r_ptr, column=2, value=b_name).font = num_font
+            ws_summary.cell(row=r_ptr, column=3, value=b_tax).font = num_font
+            ws_summary.cell(row=r_ptr, column=4, value=b_cgst).font = num_font
+            ws_summary.cell(row=r_ptr, column=5, value=b_sgst).font = num_font
+            ws_summary.cell(row=r_ptr, column=6, value=b_igst).font = num_font
+            ws_summary.cell(row=r_ptr, column=7, value=b_tot_gst).font = num_font
+
+            taxable_total += b_tax
+            cgst_total += b_cgst
+            sgst_total += b_sgst
+            igst_total += b_igst
+            r_ptr += 1
+
+        ws_summary.cell(row=r_ptr, column=2, value="CONSOLIDATED TOTAL").font = bold_num_font
+        ws_summary.cell(row=r_ptr, column=3, value=taxable_total).font = bold_num_font
+        ws_summary.cell(row=r_ptr, column=4, value=cgst_total).font = bold_num_font
+        ws_summary.cell(row=r_ptr, column=5, value=sgst_total).font = bold_num_font
+        ws_summary.cell(row=r_ptr, column=6, value=igst_total).font = bold_num_font
+        ws_summary.cell(row=r_ptr, column=7, value=cgst_total + sgst_total + igst_total).font = bold_num_font
+
+        for b_name in INCOME_MASTER_BRANCHES:
+            ws_b = wb.create_sheet(title=b_name[:31])
+            ws_b['A1'] = f"{client_cfg.get('name', 'Nutan Nagrik Sahakari Bank Ltd.')}"
+            ws_b['A1'].font = title_font
+            ws_b['A3'] = f"BRANCH NAME : {b_name} BRANCH"
+            ws_b['A3'].font = section_font
+            ws_b['A5'] = f"SUMMARY OF INCOME FOR THE MONTH OF {month.upper()} {fy}"
+            ws_b['A5'].font = num_font
+
+            headers_b = ["CODE NO.", "PARTICULARS", "TOTAL INCOME", "GGST (9%)", "CGST (9%)", "IGST (18%)", "REFUND WITHOUT GST", "REFUND WITH GST"]
+            for col_i, h_text in enumerate(headers_b, start=1):
+                c = ws_b.cell(row=7, column=col_i, value=h_text)
+                c.fill = header_fill
+                c.font = header_font
+                c.alignment = Alignment(horizontal="center")
+
+            b_list = branch_entries_list.get(b_name, [])
+            e_by_code = {e['gl_code'].strip(): e for e in b_list}
+
+            b_row = 8
+            for m_item in INCOME_MASTER_CODES:
+                c_code = m_item['code']
+                c_part = m_item['particulars']
+                rec = e_by_code.get(c_code)
+                
+                t_amt = rec['income_amount'] if rec else 0.0
+                c_cgst = rec['cgst'] if rec else (t_amt * 0.09 if m_item.get('is_taxable') else 0.0)
+                c_sgst = rec['sgst'] if rec else (t_amt * 0.09 if m_item.get('is_taxable') else 0.0)
+                c_igst = rec['igst'] if rec else 0.0
+
+                ws_b.cell(row=b_row, column=1, value=c_code).font = num_font
+                ws_b.cell(row=b_row, column=2, value=c_part).font = num_font
+                ws_b.cell(row=b_row, column=3, value=t_amt if t_amt > 0 else "").font = num_font
+                ws_b.cell(row=b_row, column=4, value=c_sgst if c_sgst > 0 else 0).font = num_font
+                ws_b.cell(row=b_row, column=5, value=c_cgst if c_cgst > 0 else 0).font = num_font
+                ws_b.cell(row=b_row, column=6, value=c_igst if c_igst > 0 else "").font = num_font
+                ws_b.cell(row=b_row, column=7, value="").font = num_font
+                ws_b.cell(row=b_row, column=8, value="").font = num_font
+                b_row += 1
+
+            ws_b.cell(row=b_row, column=2, value="TOTAL").font = bold_num_font
+            ws_b.cell(row=b_row, column=3, value=f"=SUM(C8:C{b_row-1})").font = bold_num_font
+            ws_b.cell(row=b_row, column=4, value=f"=SUM(D8:D{b_row-1})").font = bold_num_font
+            ws_b.cell(row=b_row, column=5, value=f"=SUM(E8:E{b_row-1})").font = bold_num_font
+            ws_b.cell(row=b_row, column=6, value=f"=SUM(F8:F{b_row-1})").font = bold_num_font
+
+        for sheet in wb.worksheets:
+            for col in sheet.columns:
+                max_len = 0
+                col_letter = get_column_letter(col[0].column)
+                for cell in col:
+                    if cell.value:
+                        max_len = max(max_len, len(str(cell.value)))
+                sheet.column_dimensions[col_letter].width = max(max_len + 3, 12)
+
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        out_filename = f"1_BRANCH_WISE_CALCULATION_{month.upper()}_{fy}_WORKING_SHEET.xlsx"
+        return send_file(
+            buf,
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            as_attachment=True,
+            download_name=out_filename
+        )
+    except Exception as e:
+        print(f"Error exporting working sheet: {e}")
+        return jsonify({"error": str(e)}), 500
 
 
 if __name__ == '__main__':
