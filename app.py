@@ -23,11 +23,7 @@ load_dotenv()
 
 app = Flask(__name__, static_folder='static', template_folder='templates')
 
-# Ensure DB tables initialized on startup
-try:
-    init_db()
-except Exception as e:
-    print(f'DB init warning: {e}')
+# DB tables initialized after init_db definition
 
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "949539d0c64bdf34138e6be019a552bf")
 
@@ -419,6 +415,12 @@ def init_db():
         print("PostgreSQL Database initialized successfully.")
     except Exception as e:
         print(f"Error initializing PostgreSQL database: {e}")
+
+# Run database initialization & migrations on application startup
+try:
+    init_db()
+except Exception as e:
+    print(f"Startup DB init error: {e}")
 
 # Decorator to secure endpoints
 def login_required(f):

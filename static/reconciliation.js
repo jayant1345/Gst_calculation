@@ -334,9 +334,15 @@ document.addEventListener('DOMContentLoaded', function() {
             method: 'POST',
             body: formData
         })
-        .then(res => res.json())
-        .then(data => {
-            if (data.success) {
+        .then(async res => {
+            let data;
+            try {
+                data = await res.json();
+            } catch (e) {
+                data = { error: `Server response error (${res.status})` };
+            }
+
+            if (res.ok && data.success) {
                 showUploadStatus(statusDiv, `Success! Imported ${data.count} ${state} portal entries for ${month} (${fy}).`, 'success');
                 // Check the checkbox for this month to trigger auto-reconcile
                 const matchingCheckbox = Array.from(monthChecks).find(cb => cb.value === month);
@@ -346,11 +352,11 @@ document.addEventListener('DOMContentLoaded', function() {
                 loadGstr2bStatus();
                 fetchReconciliationData();
             } else {
-                showUploadStatus(statusDiv, data.error || 'Failed to upload GSTR-2B file.', 'error');
+                showUploadStatus(statusDiv, data.error || `Failed to upload GSTR-2B (${res.status})`, 'error');
             }
         })
         .catch(err => {
-            showUploadStatus(statusDiv, 'Network error occurred during upload.', 'error');
+            showUploadStatus(statusDiv, 'Network connection issue during upload. Please try again.', 'error');
             console.error(err);
         });
     }
