@@ -1,0 +1,736 @@
+{
+  "branches": [
+    "ODHAV",
+    "RAKHIAL",
+    "NEW SHARDA",
+    "CHANGODAR",
+    "ISANPUR",
+    "MANINAGAR",
+    "SHANTI COMM",
+    "MASKATI",
+    "VEJALPUR",
+    "JODHPUR-SATELLITE",
+    "PANJRAPOLE",
+    "ASHRAM ROAD",
+    "NARAYANNAGAR",
+    "NARANPURA",
+    "DRIVE IN",
+    "VASANA",
+    "SURAT",
+    "LAW GARDEN",
+    "NEW CLOTH",
+    "BAPUNAGAR",
+    "BOPAL",
+    "THALTEJ",
+    "CHANDKHEDA",
+    "VASTRAL",
+    "HO",
+    "DEMAT"
+  ],
+  "income_codes": [
+    {
+      "row_index": 9,
+      "code": "3303",
+      "particulars": "DD CANCEL CHARGES",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 10,
+      "code": "3200",
+      "particulars": "COMMISION ON BILLS",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 11,
+      "code": "3215",
+      "particulars": "COMMISION ON PAYORDER",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 12,
+      "code": "3220",
+      "particulars": "COMMISION ON U.B.D.",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 13,
+      "code": "3225",
+      "particulars": "COMMISION I.B.C.",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 14,
+      "code": "3230",
+      "particulars": "COMMISION ON GUARANTEE",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 15,
+      "code": "3235",
+      "particulars": "COMMISION ON DEMAND DRAFT",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 16,
+      "code": "3240",
+      "particulars": "COMMISION ON U.B.C.",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 17,
+      "code": "3245",
+      "particulars": "COMMISION ON L.C.",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 18,
+      "code": "3250",
+      "particulars": "COMMISSION ON GUARANTEE",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 19,
+      "code": "3270",
+      "particulars": "PROCESSING CHARGE",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 20,
+      "code": "3271",
+      "particulars": "RENEWAL FEES",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 21,
+      "code": "3274",
+      "particulars": "INCOME FROM E-STAMPING",
+      "gst_rate": 0.0,
+      "is_taxable": false,
+      "category": "Exempt Income"
+    },
+    {
+      "row_index": 22,
+      "code": "3276",
+      "particulars": "COMMISION ON PAN",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 23,
+      "code": "3280",
+      "particulars": "INSURANCE PREMIUM",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 24,
+      "code": "3281",
+      "particulars": "ATM CHARGES",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 25,
+      "code": "3285",
+      "particulars": "COMMISION ON RTGS",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 26,
+      "code": "3286",
+      "particulars": "COMMISION ON PMJJBY LIC",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 27,
+      "code": "3287",
+      "particulars": "COMM. ON PMSBY NEW INDIA ASSURANCE",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 28,
+      "code": "3291",
+      "particulars": "CIBIL CHARGES",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 29,
+      "code": "3296",
+      "particulars": "RTGS/NEFT MANUAL CHARGES",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 30,
+      "code": "3297",
+      "particulars": "ASBA FORM PRINT CHARGES",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 31,
+      "code": "3298",
+      "particulars": "MANDATE HANDLING CHARGES",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 32,
+      "code": "3299",
+      "particulars": "SI  EXECUTION  FAILED CHARGES",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 33,
+      "code": "3300",
+      "particulars": "INCIDENTAL CHARGES",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 34,
+      "code": "3301",
+      "particulars": "INOPERATIVE CHARGES",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 35,
+      "code": "3302",
+      "particulars": "PO CANCEL CHARGES",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 36,
+      "code": "3305",
+      "particulars": "A/C SHARE TRANSFER FEES",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 37,
+      "code": "3309",
+      "particulars": "MIS. INCOME WITH GST",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 38,
+      "code": "3310",
+      "particulars": "MIS. INCOME",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 39,
+      "code": "3311",
+      "particulars": "I/W CHQ. RET. CHARGES",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 40,
+      "code": "3312",
+      "particulars": "O/W CHQ. RET. CHARGES",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 41,
+      "code": "3313",
+      "particulars": "ECS RETD. CHARGES",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 42,
+      "code": "3314",
+      "particulars": "CHQ. BOOK ISSUE CHARGES",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 43,
+      "code": "3315",
+      "particulars": "CHARGES ON GODOWNS",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 44,
+      "code": "3316",
+      "particulars": "CASH CHARGES",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 45,
+      "code": "3317",
+      "particulars": "THE P&T CHARGES FOR LC/BG",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 46,
+      "code": "3318",
+      "particulars": "OBC POSTAGE CHARGES",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 47,
+      "code": "3320",
+      "particulars": "RENT ON LOCKER",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 48,
+      "code": "3321",
+      "particulars": "ADHOC LIMIT CHARGES",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 49,
+      "code": "3322",
+      "particulars": "INCOME FROM SALE OF OLD NEWS PAPERS",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 50,
+      "code": "3324",
+      "particulars": "PENALTY ON OVERDUE RENT ON LOCKER",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 51,
+      "code": "3325",
+      "particulars": "MICR CHARGES",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 52,
+      "code": "3391",
+      "particulars": "SMS CHARGES INCOME RECEIVED",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 53,
+      "code": "3359",
+      "particulars": "COMMITTMENT CHARGES",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 54,
+      "code": "3825",
+      "particulars": "EXTERNAL AUDIT FEES",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 55,
+      "code": "3362",
+      "particulars": "FORECLOSURE CHARGES",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 56,
+      "code": "3340",
+      "particulars": "LOAN PROCESSING FEES",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 58,
+      "code": "1720",
+      "particulars": "COMM. RECD. BUT NOT ACCRUED",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 59,
+      "code": "1836",
+      "particulars": "RENT ON LOCKER RECEIVED BUT",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 64,
+      "code": "PL 3750",
+      "particulars": "LAW CHARGES (EXCLUSIVE)",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 65,
+      "code": "PL 3751",
+      "particulars": "INCIDENTAL LAW CHARGES (EXCLUSIVE)",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 61,
+      "code": "3380",
+      "particulars": "STATMENT CHARGES",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 62,
+      "code": "3110",
+      "particulars": "OVER DRAFT",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 63,
+      "code": "PL 4112",
+      "particulars": "DSA MARKETING EXPENSES",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 64,
+      "code": "3282",
+      "particulars": "DEBIT CARD CHARGES INCOME",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 65,
+      "code": "3284",
+      "particulars": "IMPS CHARGES INCOME",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 66,
+      "code": "3288",
+      "particulars": "NPCI SETTLEMENT",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 67,
+      "code": "3289",
+      "particulars": "COMMISION ON APY-NPS",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 68,
+      "code": "3292",
+      "particulars": "BILL DESK COMMISSION",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 69,
+      "code": "3293",
+      "particulars": "MOBILE BILL DISK COMM. (BBPS)",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 70,
+      "code": "3294",
+      "particulars": "A/C (MEITY) INCENTIVE REC FROM NPCI(UPI/POS)",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 71,
+      "code": "3308",
+      "particulars": "A/C COMMITMENT AMT FORFEITED",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 72,
+      "code": "3338",
+      "particulars": "A/C NEFT/RTGS TRANSACTION PROCESSING INCOME",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 73,
+      "code": "3335",
+      "particulars": "PROFIT ON SALE OF ASSET",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 74,
+      "code": "3940",
+      "particulars": "A/C COMPUTER SYSTEMS",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 75,
+      "code": "3290",
+      "particulars": "UPI CHARGES INCOME",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 76,
+      "code": "3332",
+      "particulars": "ASBA COMMISSION",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 77,
+      "code": "READ NOTE -3",
+      "particulars": "ASBA COMMISSION INCOME NOT RECORDED IN BOOKS BUT INOICE ISSUED.",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 78,
+      "code": "3334",
+      "particulars": "REFERAL INCOME",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 79,
+      "code": "3341",
+      "particulars": "ACCOUNT OPENING FORM  CHARGES",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 80,
+      "code": "3345",
+      "particulars": "DEMATERIALISATION CHARGES",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 81,
+      "code": "3346",
+      "particulars": "KRA UPLOAD CHARGES",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 82,
+      "code": "3350",
+      "particulars": "ANNUAL MAINTANCE CHARGES",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 83,
+      "code": "3358",
+      "particulars": "DEMAT MODIFICATION CHARGES",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 84,
+      "code": "3360",
+      "particulars": "SELL TRANSACTION CHARGES",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 85,
+      "code": "3361",
+      "particulars": "DELIVERY SLIP BOOK CHARGES",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 86,
+      "code": "3370",
+      "particulars": "PEDGE CHARGES",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 87,
+      "code": "3385",
+      "particulars": "LATE INSTRUCTION CHARGES",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 88,
+      "code": "3396",
+      "particulars": "IDEAS",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 89,
+      "code": "3397",
+      "particulars": "ROUNDING OF INCOME",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 90,
+      "code": "3398",
+      "particulars": "INCENTIVE FROM NSDL",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 91,
+      "code": "1870",
+      "particulars": "DEMAT CHARGES RECD. BUT NOT ACCURED",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 92,
+      "code": "1",
+      "particulars": "GL 1878 GGST PAYABLE A/C. DR\u2026.",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 93,
+      "code": "2",
+      "particulars": "HO DR\u2026\u2026.",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 94,
+      "code": "3",
+      "particulars": "GL 8546 GGST RECEIVABLE A/C..",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 95,
+      "code": "4",
+      "particulars": "HO DR\u2026\u2026.",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    },
+    {
+      "row_index": 96,
+      "code": "5",
+      "particulars": "PL 4197 SERVICE TAX/GST EXPENSES A/C. DR\u2026",
+      "gst_rate": 18.0,
+      "is_taxable": true,
+      "category": "Taxable Banking Services"
+    }
+  ]
+}

@@ -311,6 +311,35 @@ def init_db():
             );
         ''')
 
+
+
+        # Income Statements & Output GST Module Table
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS income_entries (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                client_id VARCHAR(50) NOT NULL DEFAULT 'nutan_nagrik',
+                branch VARCHAR(100) NOT NULL,
+                state VARCHAR(50) DEFAULT 'Gujarat',
+                financial_year VARCHAR(10) NOT NULL,
+                month VARCHAR(20) NOT NULL,
+                gl_code VARCHAR(50) NOT NULL,
+                particulars VARCHAR(255),
+                is_taxable BOOLEAN DEFAULT TRUE,
+                income_amount NUMERIC(15,2) DEFAULT 0.0,
+                cgst NUMERIC(15,2) DEFAULT 0.0,
+                sgst NUMERIC(15,2) DEFAULT 0.0,
+                igst NUMERIC(15,2) DEFAULT 0.0,
+                refund_without_gst NUMERIC(15,2) DEFAULT 0.0,
+                refund_with_gst NUMERIC(15,2) DEFAULT 0.0,
+                file_name VARCHAR(255),
+                file_data BYTEA,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        ''')
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_income_client_fy ON income_entries(client_id, financial_year, month);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_income_branch ON income_entries(client_id, branch);")
+
                 # Multi-client data isolation schema
         cur.execute("ALTER TABLE invoices ADD COLUMN IF NOT EXISTS client_id VARCHAR(50) NOT NULL DEFAULT 'nutan_nagrik';")
         cur.execute("ALTER TABLE gstr2b_entries ADD COLUMN IF NOT EXISTS client_id VARCHAR(50) NOT NULL DEFAULT 'nutan_nagrik';")
@@ -4155,3 +4184,661 @@ if __name__ == '__main__':
     port = int(os.getenv("PORT", 5588))
     print(f"Starting GST Calculation Server on port {port}...")
     app.run(host='0.0.0.0', port=port, debug=True)
+
+
+# ============================================================================
+# INCOME & OUTPUT GST MODULE (CBS Bank Statements & Branch-Wise Working Sheet)
+# ============================================================================
+
+INCOME_CATALOG_PATH = os.path.join(os.path.dirname(__file__), 'reference_data', 'income_master_catalog.json')
+INCOME_MASTER_CODES = []
+INCOME_MASTER_BRANCHES = [
+    'ODHAV', 'RAKHIAL', 'NEW SHARDA', 'CHANGODAR', 'ISANPUR', 'MANINAGAR',
+    'SHANTI COMM', 'MASKATI', 'VEJALPUR', 'JODHPUR-SATELLITE', 'PANJRAPOLE',
+    'ASHRAM ROAD', 'NARAYANNAGAR', 'NARANPURA', 'DRIVE IN', 'VASANA', 'SURAT',
+    'LAW GARDEN', 'NEW CLOTH', 'BAPUNAGAR', 'BOPAL', 'THALTEJ', 'CHANDKHEDA',
+    'VASTRAL', 'HO', 'DEMAT'
+]
+
+if os.path.exists(INCOME_CATALOG_PATH):
+    try:
+        with open(INCOME_CATALOG_PATH, 'r', encoding='utf-8') as f:
+            cat_data = json.load(f)
+            INCOME_MASTER_CODES = cat_data.get('income_codes', [])
+            if cat_data.get('branches'):
+                INCOME_MASTER_BRANCHES = cat_data.get('branches')
+    except Exception as e:
+        print(f"Error loading income master catalog: {e}")
+
+def get_income_code_meta(code_str):
+    clean = str(code_str).strip().upper()
+    for m in INCOME_MASTER_CODES:
+        if str(m.get('code')).strip().upper() == clean:
+            return m
+    return None
+
+def parse_income_pdf_bytes(file_bytes, filename):
+    results = []
+    try:
+        doc = pymupdf.open(stream=file_bytes, filetype="pdf")
+        full_text = ""
+        for page in doc:
+            full_text += page.get_text("text") + "\n"
+        
+        branch = "Unassigned"
+        for b in INCOME_MASTER_BRANCHES:
+            if b.upper() in filename.upper() or b.upper() in full_text.upper():
+                branch = b
+                break
+        
+        if branch == "Unassigned":
+            for b in INCOME_MASTER_BRANCHES:
+                if re.search(r'\b' + re.escape(b) + r'\b', filename, re.IGNORECASE):
+                    branch = b
+                    break
+
+        gl_code = "N/A"
+        m_fn = re.search(r'(?:PL|GL)?\s*(\d{4})', filename, re.IGNORECASE)
+        if m_fn:
+            gl_code = m_fn.group(1)
+        else:
+            m_txt = re.search(r'(?:Account Id|A/c No)\s*[:]?\s*\d*?(\d{4})', full_text, re.IGNORECASE)
+            if m_txt:
+                gl_code = m_txt.group(1)
+
+        particulars = "Bank Service Income"
+        m_meta = get_income_code_meta(gl_code)
+        if m_meta:
+            particulars = m_meta.get('particulars')
+        else:
+            m_cust = re.search(r'(?:Customer Name|Product Name|Name)\s*[:]?\s*([^\n]+)', full_text, re.IGNORECASE)
+            if m_cust:
+                particulars = m_cust.group(1).strip()
+
+        m_period = re.search(r'(\d{2}[/-]\d{2}[/-]\d{4})', full_text)
+        date_str = m_period.group(1) if m_period else "01/07/2026"
+        fy, month = parse_date_to_fy_and_month(date_str)
+        if not fy:
+            fy, month = "2026-27", "July"
+
+        total_income = 0.0
+        m_closing = re.search(r'(?:Closing Balance|Total Amount)\s*\n?([\d,]+\.\d{2})', full_text, re.IGNORECASE)
+        if m_closing:
+            try:
+                total_income = float(m_closing.group(1).replace(',', ''))
+            except Exception:
+                pass
+        
+        if total_income == 0.0:
+            cr_matches = re.findall(r'\b(\d{1,3}(?:,\d{3})*\.\d{2})\b', full_text)
+            if cr_matches:
+                nums = [float(x.replace(',', '')) for x in cr_matches]
+                total_income = max(nums) if nums else 0.0
+
+        is_taxable = True
+        if m_meta:
+            is_taxable = m_meta.get('is_taxable', True)
+        elif 'EXEMPT' in particulars.upper() or 'STAMP' in particulars.upper():
+            is_taxable = False
+
+        cgst = round(total_income * 0.09, 2) if is_taxable else 0.0
+        sgst = round(total_income * 0.09, 2) if is_taxable else 0.0
+        igst = 0.0
+
+        results.append({
+            "branch": branch,
+            "financial_year": fy,
+            "month": month,
+            "gl_code": gl_code,
+            "particulars": particulars,
+            "income_amount": total_income,
+            "is_taxable": is_taxable,
+            "cgst": cgst,
+            "sgst": sgst,
+            "igst": igst,
+            "refund_without_gst": 0.0,
+            "refund_with_gst": 0.0,
+            "filename": filename
+        })
+    except Exception as e:
+        print(f"Error parsing income PDF {filename}: {e}")
+    return results
+
+def parse_income_excel_bytes(file_bytes, filename):
+    results = []
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
+        
+        if 'SUMMARY SHEET GST' in wb.sheetnames:
+            for bs_name in wb.sheetnames:
+                if bs_name in ['SUMMARY SHEET GST', 'Notes', 'GSTN CANCELLTED', 'Sheet1'] or '1' in bs_name:
+                    continue
+                bws = wb[bs_name]
+                b_name = bs_name.strip()
+                for r in range(7, 75):
+                    c_no = bws.cell(r, 1).value
+                    part = bws.cell(r, 2).value
+                    tot = bws.cell(r, 3).value
+                    ggst = bws.cell(r, 4).value
+                    cgst_val = bws.cell(r, 5).value
+                    igst_val = bws.cell(r, 6).value
+                    if c_no and part and (tot is not None or cgst_val is not None):
+                        c_str = str(c_no).strip()
+                        p_str = str(part).strip()
+                        if c_str in ['CODE NO.', 'PL', 'GL', 'TOTAL']:
+                            continue
+                        t_val = float(tot or 0.0)
+                        cgst_amt = float(cgst_val or (t_val * 0.09 if t_val else 0.0))
+                        sgst_amt = float(ggst or (t_val * 0.09 if t_val else 0.0))
+                        igst_amt = float(igst_val or 0.0)
+                        is_tax = (cgst_amt + sgst_amt + igst_amt) > 0 or t_val > 0
+                        if 'E-STAMPING' in p_str.upper() or 'EXEMPT' in p_str.upper():
+                            is_tax = False
+                        results.append({
+                            "branch": b_name,
+                            "financial_year": "2026-27",
+                            "month": "July",
+                            "gl_code": c_str,
+                            "particulars": p_str,
+                            "income_amount": t_val,
+                            "is_taxable": is_tax,
+                            "cgst": round(cgst_amt, 2),
+                            "sgst": round(sgst_amt, 2),
+                            "igst": round(igst_amt, 2),
+                            "refund_without_gst": 0.0,
+                            "refund_with_gst": 0.0,
+                            "filename": filename
+                        })
+            return results
+
+        for sname in wb.sheetnames:
+            ws = wb[sname]
+            branch = "Unassigned"
+            for b in INCOME_MASTER_BRANCHES:
+                if b.upper() in filename.upper() or b.upper() in sname.upper():
+                    branch = b
+                    break
+            
+            for r in range(1, 10):
+                line = " ".join([str(ws.cell(r, c).value or '') for c in range(1, 10)])
+                for b in INCOME_MASTER_BRANCHES:
+                    if b.upper() in line.upper():
+                        branch = b
+                        break
+
+            gl_code = "3270"
+            m_fn = re.search(r'(?:PL|GL)?\s*(\d{4})', filename, re.IGNORECASE)
+            if m_fn:
+                gl_code = m_fn.group(1)
+
+            particulars = "Processing Charges"
+            meta = get_income_code_meta(gl_code)
+            if meta:
+                particulars = meta.get('particulars')
+
+            total_income = 0.0
+            for r in range(1, 100):
+                row_str = " ".join([str(ws.cell(r, c).value or '') for c in range(1, 8)])
+                if 'Closing Balance' in row_str:
+                    vals = [ws.cell(r, c).value for c in range(1, 8) if isinstance(ws.cell(r, c).value, (int, float))]
+                    if vals:
+                        total_income = float(vals[-1])
+                        break
+            
+            is_tax = True if not meta else meta.get('is_taxable', True)
+            results.append({
+                "branch": branch,
+                "financial_year": "2026-27",
+                "month": "July",
+                "gl_code": gl_code,
+                "particulars": particulars,
+                "income_amount": total_income,
+                "is_taxable": is_tax,
+                "cgst": round(total_income * 0.09, 2) if is_tax else 0.0,
+                "sgst": round(total_income * 0.09, 2) if is_tax else 0.0,
+                "igst": 0.0,
+                "refund_without_gst": 0.0,
+                "refund_with_gst": 0.0,
+                "filename": filename
+            })
+    except Exception as e:
+        print(f"Error parsing income Excel {filename}: {e}")
+    return results
+
+@app.route('/income')
+@login_required
+def income_page():
+    return render_template('income.html')
+
+@app.route('/api/income-codes-master', methods=['GET'])
+@login_required
+def get_income_codes_master():
+    return jsonify({
+        "branches": INCOME_MASTER_BRANCHES,
+        "codes": INCOME_MASTER_CODES
+    })
+
+@app.route('/api/get-income-entries', methods=['GET'])
+@login_required
+def get_income_entries():
+    user_id = session['user_id']
+    is_admin = is_admin_user()
+    client_id = get_current_client_id()
+    branch = request.args.get('branch', '').strip()
+    fy = request.args.get('financial_year', '').strip()
+    month = request.args.get('month', '').strip()
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        
+        query = '''
+            SELECT id, branch, state, financial_year, month, gl_code, particulars,
+                   is_taxable, income_amount::float, cgst::float, sgst::float, igst::float,
+                   refund_without_gst::float, refund_with_gst::float, file_name, created_at
+            FROM income_entries
+            WHERE client_id = %s
+        '''
+        params = [client_id]
+        if not is_admin:
+            query += " AND user_id = %s"
+            params.append(user_id)
+        if branch and branch != 'ALL':
+            query += " AND UPPER(branch) = UPPER(%s)"
+            params.append(branch)
+        if fy and fy != 'ALL':
+            query += " AND financial_year = %s"
+            params.append(fy)
+        if month and month != 'ALL':
+            query += " AND month = %s"
+            params.append(month)
+
+        query += " ORDER BY branch ASC, gl_code ASC, id ASC"
+        cur.execute(query, params)
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        return jsonify({"entries": rows, "client_id": client_id, "branches": INCOME_MASTER_BRANCHES})
+    except Exception as e:
+        print(f"Error fetching income entries: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/upload-income', methods=['POST'])
+@login_required
+def upload_income_api():
+    user_id = session['user_id']
+    client_id = request.form.get('client_id') or get_current_client_id()
+    files = request.files.getlist('income_files')
+    
+    if not files or all(f.filename == '' for f in files):
+        return jsonify({"error": "No files selected for income upload"}), 400
+
+    parsed_entries = []
+    
+    for f in files:
+        if not f.filename:
+            continue
+        fname = f.filename
+        ext = fname.lower().split('.')[-1] if '.' in fname else ''
+        fbytes = f.read()
+
+        if ext == 'pdf':
+            entries = parse_income_pdf_bytes(fbytes, fname)
+            parsed_entries.extend(entries)
+        elif ext in ['xlsx', 'xls', 'csv']:
+            entries = parse_income_excel_bytes(fbytes, fname)
+            parsed_entries.extend(entries)
+        elif ext == 'zip':
+            import zipfile
+            try:
+                with zipfile.ZipFile(io.BytesIO(fbytes)) as z:
+                    for zname in z.namelist():
+                        zext = zname.lower().split('.')[-1] if '.' in zname else ''
+                        if zext in ['pdf', 'xlsx', 'xls', 'csv'] and not zname.startswith('__MACOSX'):
+                            zbytes = z.read(zname)
+                            if zext == 'pdf':
+                                parsed_entries.extend(parse_income_pdf_bytes(zbytes, zname))
+                            else:
+                                parsed_entries.extend(parse_income_excel_bytes(zbytes, zname))
+            except Exception as ze:
+                print(f"Error reading zip file {fname}: {ze}")
+
+    saved_count = 0
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        for e in parsed_entries:
+            cur.execute('''
+                INSERT INTO income_entries (user_id, client_id, branch, state, financial_year, month, gl_code, particulars, is_taxable, income_amount, cgst, sgst, igst, refund_without_gst, refund_with_gst, file_name)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id;
+            ''', (
+                user_id, client_id,
+                e.get('branch', 'Unassigned'),
+                e.get('state', 'Gujarat'),
+                e.get('financial_year', '2026-27'),
+                e.get('month', 'July'),
+                e.get('gl_code', 'N/A'),
+                e.get('particulars', 'Income'),
+                e.get('is_taxable', True),
+                e.get('income_amount', 0.0),
+                e.get('cgst', 0.0),
+                e.get('sgst', 0.0),
+                e.get('igst', 0.0),
+                e.get('refund_without_gst', 0.0),
+                e.get('refund_with_gst', 0.0),
+                e.get('filename', 'upload')
+            ))
+            saved_count += 1
+        conn.commit()
+        cur.close()
+        conn.close()
+        return jsonify({
+            "success": True,
+            "saved_count": saved_count,
+            "entries_preview": parsed_entries[:10]
+        })
+    except Exception as e:
+        print(f"Error saving uploaded income records: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/income-summary', methods=['GET'])
+@login_required
+def get_income_summary():
+    user_id = session['user_id']
+    is_admin = is_admin_user()
+    client_id = get_current_client_id()
+    fy = request.args.get('financial_year', '').strip()
+    month = request.args.get('month', '').strip()
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        
+        q_inc = '''
+            SELECT COUNT(*) as total_entries,
+                   COALESCE(SUM(income_amount), 0)::float as total_income,
+                   COALESCE(SUM(CASE WHEN is_taxable THEN income_amount ELSE 0 END), 0)::float as taxable_income,
+                   COALESCE(SUM(CASE WHEN NOT is_taxable THEN income_amount ELSE 0 END), 0)::float as exempt_income,
+                   COALESCE(SUM(cgst), 0)::float as total_cgst,
+                   COALESCE(SUM(sgst), 0)::float as total_sgst,
+                   COALESCE(SUM(igst), 0)::float as total_igst,
+                   COALESCE(SUM(cgst + sgst + igst), 0)::float as total_output_gst
+            FROM income_entries
+            WHERE client_id = %s
+        '''
+        params = [client_id]
+        if not is_admin:
+            q_inc += " AND user_id = %s"
+            params.append(user_id)
+        if fy and fy != 'ALL':
+            q_inc += " AND financial_year = %s"
+            params.append(fy)
+        if month and month != 'ALL':
+            q_inc += " AND month = %s"
+            params.append(month)
+
+        cur.execute(q_inc, params)
+        inc_stat = cur.fetchone()
+
+        q_itc = '''
+            SELECT COALESCE(SUM(eligible_itc), 0)::float as eligible_itc,
+                   COALESCE(SUM(ineligible_itc), 0)::float as ineligible_itc,
+                   COALESCE(SUM(cgst), 0)::float as itc_cgst,
+                   COALESCE(SUM(sgst), 0)::float as itc_sgst,
+                   COALESCE(SUM(igst), 0)::float as itc_igst
+            FROM invoices
+            WHERE client_id = %s
+        '''
+        params_itc = [client_id]
+        if not is_admin:
+            q_itc += " AND user_id = %s"
+            params_itc.append(user_id)
+        if fy and fy != 'ALL':
+            q_itc += " AND financial_year = %s"
+            params_itc.append(fy)
+        if month and month != 'ALL':
+            q_itc += " AND month = %s"
+            params_itc.append(month)
+
+        cur.execute(q_itc, params_itc)
+        itc_stat = cur.fetchone()
+
+        q_branch = '''
+            SELECT branch,
+                   COUNT(*) as record_count,
+                   COALESCE(SUM(income_amount), 0)::float as branch_income,
+                   COALESCE(SUM(CASE WHEN is_taxable THEN income_amount ELSE 0 END), 0)::float as branch_taxable,
+                   COALESCE(SUM(CASE WHEN NOT is_taxable THEN income_amount ELSE 0 END), 0)::float as branch_exempt,
+                   COALESCE(SUM(cgst), 0)::float as branch_cgst,
+                   COALESCE(SUM(sgst), 0)::float as branch_sgst,
+                   COALESCE(SUM(igst), 0)::float as branch_igst,
+                   COALESCE(SUM(cgst + sgst + igst), 0)::float as branch_gst
+            FROM income_entries
+            WHERE client_id = %s
+        '''
+        params_br = [client_id]
+        if not is_admin:
+            q_branch += " AND user_id = %s"
+            params_br.append(user_id)
+        if fy and fy != 'ALL':
+            q_branch += " AND financial_year = %s"
+            params_br.append(fy)
+        if month and month != 'ALL':
+            q_branch += " AND month = %s"
+            params_br.append(month)
+        q_branch += " GROUP BY branch ORDER BY branch ASC"
+
+        cur.execute(q_branch, params_br)
+        branch_stats = cur.fetchall()
+
+        cur.close()
+        conn.close()
+
+        output_gst = inc_stat['total_output_gst'] if inc_stat else 0.0
+        eligible_itc = itc_stat['eligible_itc'] if itc_stat else 0.0
+        net_gst_payable = max(0.0, round(output_gst - eligible_itc, 2))
+
+        return jsonify({
+            "income": inc_stat,
+            "itc": itc_stat,
+            "net_gst_payable": net_gst_payable,
+            "branches": branch_stats
+        })
+    except Exception as e:
+        print(f"Error generating income summary: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/export-income-working-sheet', methods=['POST', 'GET'])
+@login_required
+def export_income_working_sheet():
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+
+    user_id = session['user_id']
+    is_admin = is_admin_user()
+    client_id = get_current_client_id()
+    client_cfg = get_client_config(client_id)
+    fy = request.args.get('financial_year', '2026-27').strip()
+    month = request.args.get('month', 'July').strip()
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        
+        cur.execute('''
+            SELECT branch, gl_code, particulars, is_taxable,
+                   income_amount::float, cgst::float, sgst::float, igst::float,
+                   refund_without_gst::float, refund_with_gst::float
+            FROM income_entries
+            WHERE client_id = %s
+            ORDER BY branch ASC, gl_code ASC
+        ''', (client_id,))
+        entries = cur.fetchall()
+        cur.close()
+        conn.close()
+
+        branch_map = collections.defaultdict(list)
+        for e in entries:
+            branch_map[e['branch'].upper().strip()].append(e)
+
+        wb = Workbook()
+        
+        ws_summary = wb.active
+        ws_summary.title = "SUMMARY SHEET GST"
+        
+        title_font = Font(name="Calibri", size=13, bold=True, color="1E3A8A")
+        section_font = Font(name="Calibri", size=11, bold=True, color="0F172A")
+        header_fill = PatternFill(start_color="1E3A8A", end_color="1E3A8A", fill_type="solid")
+        header_font = Font(name="Calibri", size=10, bold=True, color="FFFFFF")
+        num_font = Font(name="Calibri", size=10)
+        bold_num_font = Font(name="Calibri", size=10, bold=True)
+        thin_border = Border(left=Side(style='thin', color='E2E8F0'), right=Side(style='thin', color='E2E8F0'),
+                             top=Side(style='thin', color='E2E8F0'), bottom=Side(style='thin', color='E2E8F0'))
+
+        ws_summary['B1'] = f"{client_cfg.get('name', 'Nutan Nagrik Sahakari Bank Ltd.')}"
+        ws_summary['B1'].font = title_font
+        ws_summary['B2'] = f"GST CALCULATION SUMMARY FOR THE MONTH OF {month.upper()} {fy}"
+        ws_summary['B2'].font = section_font
+
+        ws_summary['B4'] = "(1) NON TAXABLE INCOME / EXEMPT INCOME"
+        ws_summary['B4'].font = section_font
+        headers_exempt = ["PARTICULARS", "INCOME AMOUNT (₹)", "TAX RATE", "EXEMPTION STATUS"]
+        for c_idx, h in enumerate(headers_exempt, start=2):
+            cell = ws_summary.cell(row=5, column=c_idx, value=h)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center")
+
+        exempt_total = 0.0
+        taxable_total = 0.0
+        cgst_total = 0.0
+        sgst_total = 0.0
+        igst_total = 0.0
+
+        r_ptr = 6
+        for e in entries:
+            if not e['is_taxable']:
+                ws_summary.cell(row=r_ptr, column=2, value=e['particulars']).font = num_font
+                ws_summary.cell(row=r_ptr, column=3, value=e['income_amount']).font = num_font
+                ws_summary.cell(row=r_ptr, column=4, value="0%").font = num_font
+                ws_summary.cell(row=r_ptr, column=5, value="Exempt (Notification 12/2017)").font = num_font
+                exempt_total += e['income_amount']
+                r_ptr += 1
+
+        if r_ptr == 6:
+            ws_summary.cell(row=6, column=2, value="No direct exempt items recorded").font = num_font
+            r_ptr = 7
+
+        ws_summary.cell(row=r_ptr, column=2, value="TOTAL EXEMPT INCOME").font = bold_num_font
+        ws_summary.cell(row=r_ptr, column=3, value=exempt_total).font = bold_num_font
+        r_ptr += 2
+
+        ws_summary.cell(row=r_ptr, column=2, value="(2) TAXABLE INCOME & OUTPUT GST").font = section_font
+        r_ptr += 1
+        headers_tax = ["BRANCH", "TAXABLE INCOME (₹)", "CGST 9% (₹)", "SGST 9% (₹)", "IGST 18% (₹)", "TOTAL GST (₹)"]
+        for c_idx, h in enumerate(headers_tax, start=2):
+            cell = ws_summary.cell(row=r_ptr, column=c_idx, value=h)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center")
+
+        r_ptr += 1
+        for b_name in INCOME_MASTER_BRANCHES:
+            b_entries = branch_map.get(b_name, [])
+            b_tax = sum(e['income_amount'] for e in b_entries if e['is_taxable'])
+            b_cgst = sum(e['cgst'] for e in b_entries if e['is_taxable'])
+            b_sgst = sum(e['sgst'] for e in b_entries if e['is_taxable'])
+            b_igst = sum(e['igst'] for e in b_entries if e['is_taxable'])
+            b_tot_gst = b_cgst + b_sgst + b_igst
+
+            ws_summary.cell(row=r_ptr, column=2, value=b_name).font = num_font
+            ws_summary.cell(row=r_ptr, column=3, value=b_tax).font = num_font
+            ws_summary.cell(row=r_ptr, column=4, value=b_cgst).font = num_font
+            ws_summary.cell(row=r_ptr, column=5, value=b_sgst).font = num_font
+            ws_summary.cell(row=r_ptr, column=6, value=b_igst).font = num_font
+            ws_summary.cell(row=r_ptr, column=7, value=b_tot_gst).font = num_font
+
+            taxable_total += b_tax
+            cgst_total += b_cgst
+            sgst_total += b_sgst
+            igst_total += b_igst
+            r_ptr += 1
+
+        ws_summary.cell(row=r_ptr, column=2, value="CONSOLIDATED TOTAL").font = bold_num_font
+        ws_summary.cell(row=r_ptr, column=3, value=taxable_total).font = bold_num_font
+        ws_summary.cell(row=r_ptr, column=4, value=cgst_total).font = bold_num_font
+        ws_summary.cell(row=r_ptr, column=5, value=sgst_total).font = bold_num_font
+        ws_summary.cell(row=r_ptr, column=6, value=igst_total).font = bold_num_font
+        ws_summary.cell(row=r_ptr, column=7, value=cgst_total + sgst_total + igst_total).font = bold_num_font
+
+        for b_name in INCOME_MASTER_BRANCHES:
+            ws_b = wb.create_sheet(title=b_name[:31])
+            ws_b['A1'] = f"{client_cfg.get('name', 'Nutan Nagrik Sahakari Bank Ltd.')}"
+            ws_b['A1'].font = title_font
+            ws_b['A3'] = f"BRANCH NAME : {b_name} BRANCH"
+            ws_b['A3'].font = section_font
+            ws_b['A5'] = f"SUMMARY OF INCOME FOR THE MONTH OF {month.upper()} {fy}"
+            ws_b['A5'].font = num_font
+
+            headers_b = ["CODE NO.", "PARTICULARS", "TOTAL INCOME", "GGST (9%)", "CGST (9%)", "IGST (18%)", "REFUND WITHOUT GST", "REFUND WITH GST"]
+            for col_i, h_text in enumerate(headers_b, start=1):
+                c = ws_b.cell(row=7, column=col_i, value=h_text)
+                c.fill = header_fill
+                c.font = header_font
+                c.alignment = Alignment(horizontal="center")
+
+            b_list = branch_map.get(b_name, [])
+            e_by_code = {e['gl_code'].strip(): e for e in b_list}
+
+            b_row = 8
+            for m_item in INCOME_MASTER_CODES:
+                c_code = m_item['code']
+                c_part = m_item['particulars']
+                rec = e_by_code.get(c_code)
+                
+                t_amt = rec['income_amount'] if rec else 0.0
+                c_cgst = rec['cgst'] if rec else (t_amt * 0.09 if m_item.get('is_taxable') else 0.0)
+                c_sgst = rec['sgst'] if rec else (t_amt * 0.09 if m_item.get('is_taxable') else 0.0)
+                c_igst = rec['igst'] if rec else 0.0
+
+                ws_b.cell(row=b_row, column=1, value=c_code).font = num_font
+                ws_b.cell(row=b_row, column=2, value=c_part).font = num_font
+                ws_b.cell(row=b_row, column=3, value=t_amt if t_amt > 0 else "").font = num_font
+                ws_b.cell(row=b_row, column=4, value=c_sgst if c_sgst > 0 else 0).font = num_font
+                ws_b.cell(row=b_row, column=5, value=c_cgst if c_cgst > 0 else 0).font = num_font
+                ws_b.cell(row=b_row, column=6, value=c_igst if c_igst > 0 else "").font = num_font
+                ws_b.cell(row=b_row, column=7, value="").font = num_font
+                ws_b.cell(row=b_row, column=8, value="").font = num_font
+                b_row += 1
+
+            ws_b.cell(row=b_row, column=2, value="TOTAL").font = bold_num_font
+            ws_b.cell(row=b_row, column=3, value=f"=SUM(C8:C{b_row-1})").font = bold_num_font
+            ws_b.cell(row=b_row, column=4, value=f"=SUM(D8:D{b_row-1})").font = bold_num_font
+            ws_b.cell(row=b_row, column=5, value=f"=SUM(E8:E{b_row-1})").font = bold_num_font
+            ws_b.cell(row=b_row, column=6, value=f"=SUM(F8:F{b_row-1})").font = bold_num_font
+
+        for sheet in wb.worksheets:
+            for col in sheet.columns:
+                max_len = 0
+                col_letter = get_column_letter(col[0].column)
+                for cell in col:
+                    if cell.value:
+                        max_len = max(max_len, len(str(cell.value)))
+                sheet.column_dimensions[col_letter].width = max(max_len + 3, 12)
+
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        
+        out_filename = f"BRANCH_WISE_CALCULATION_{month.upper()}_{fy}_WORKING_SHEET.xlsx"
+        return send_file(
+            buf,
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            as_attachment=True,
+            download_name=out_filename
+        )
+    except Exception as e:
+        print(f"Error generating CA working sheet: {e}")
+        return jsonify({"error": str(e)}), 500
