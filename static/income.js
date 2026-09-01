@@ -8,6 +8,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentBranch = 'ALL';
     let allIncomeEntries = [];
     let masterBranches = [];
+    const selectedIncomeIds = new Set();
 
     // Elements
     const clientTabs = document.querySelectorAll('.client-tab-btn[data-client-id]');
@@ -23,6 +24,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const incomeProgressCount = document.getElementById('incomeProgressCount');
     const incomeProgressBarFill = document.getElementById('incomeProgressBarFill');
     const btnExportWorkingSheet = document.getElementById('btnExportWorkingSheet');
+    const selectAllIncome = document.getElementById('selectAllIncome');
+    const btnDeleteSelectedIncome = document.getElementById('btnDeleteSelectedIncome');
+    const selectedIncomeCount = document.getElementById('selectedIncomeCount');
 
     // KPI Card Elements
     const cardTotalRevenue = document.getElementById('card-total-revenue');
@@ -70,6 +74,8 @@ document.addEventListener('DOMContentLoaded', () => {
             if (cid && cid !== currentClientId) {
                 currentClientId = cid;
                 sessionStorage.setItem('active_client_id', cid);
+                selectedIncomeIds.clear();
+                updateBulkDeleteUI();
                 updateClientTabUI();
                 loadIncomeData();
             }
@@ -168,37 +174,171 @@ document.addEventListener('DOMContentLoaded', () => {
         if (filtered.length === 0) {
             incomeTableBody.innerHTML = `
                 <tr>
-                    <td colspan="8" style="text-align: center; padding: 36px; color: #94a3b8;">
+                    <td colspan="11" style="text-align: center; padding: 36px; color: #94a3b8;">
                         <i class="fa-solid fa-folder-open" style="font-size: 28px; margin-bottom: 8px; display: block;"></i>
                         No income statement records match the selected branch or search filter.
                     </td>
                 </tr>
             `;
+            selectAllIncome.checked = false;
             return;
         }
 
-        incomeTableBody.innerHTML = filtered.map(e => `
-            <tr style="border-bottom: 1px solid var(--border-color); font-size: 13px;">
-                <td style="padding: 12px 16px; font-weight: 700; color: #1e3a8a;">${e.branch}</td>
-                <td style="padding: 12px 16px; font-weight: 600; font-family: monospace; color: #0f172a;">${e.gl_code}</td>
-                <td style="padding: 12px 16px; color: #334155;">${e.particulars || 'Bank Revenue'}</td>
-                <td style="padding: 12px 16px; text-align: right; font-weight: 700; color: #0f172a;">${formatINR(e.income_amount)}</td>
-                <td style="padding: 12px 16px; text-align: right; color: #64748b;">${formatINR(e.sgst)}</td>
-                <td style="padding: 12px 16px; text-align: right; color: #64748b;">${formatINR(e.cgst)}</td>
-                <td style="padding: 12px 16px; text-align: right; color: #64748b;">${formatINR(e.igst)}</td>
-                <td style="padding: 12px 16px; text-align: center;">
+        incomeTableBody.innerHTML = filtered.map(e => {
+            const isChecked = selectedIncomeIds.has(e.id);
+            const docBadge = e.has_file ? 
+                `<a href="/api/income-file/${e.id}" target="_blank" style="display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 6px; background: #eff6ff; color: #2563eb; border: 1px solid #bfdbfe; font-size: 11.5px; font-weight: 600; text-decoration: none; transition: all 0.2s ease;" title="View uploaded bank voucher / statement">
+                    <i class="fa-solid fa-file-pdf"></i> View Voucher
+                </a>` : 
+                `<span style="color: #94a3b8; font-size: 12px; font-style: italic;">No file</span>`;
+
+            return `
+            <tr style="border-bottom: 1px solid var(--border-color); font-size: 13px; ${isChecked ? 'background-color: #f0f7ff;' : ''}">
+                <td style="text-align: center; padding: 12px 10px;">
+                    <input type="checkbox" class="income-row-check" data-id="${e.id}" ${isChecked ? 'checked' : ''} style="cursor: pointer; width: 16px; height: 16px;">
+                </td>
+                <td style="padding: 12px 14px; font-weight: 700; color: #1e3a8a;">${e.branch}</td>
+                <td style="padding: 12px 14px; font-weight: 600; font-family: monospace; color: #0f172a;">${e.gl_code}</td>
+                <td style="padding: 12px 14px; color: #334155;">${e.particulars || 'Bank Revenue'}</td>
+                <td style="padding: 12px 14px; text-align: right; font-weight: 700; color: #0f172a;">${formatINR(e.income_amount)}</td>
+                <td style="padding: 12px 14px; text-align: right; color: #64748b;">${formatINR(e.sgst)}</td>
+                <td style="padding: 12px 14px; text-align: right; color: #64748b;">${formatINR(e.cgst)}</td>
+                <td style="padding: 12px 14px; text-align: right; color: #64748b;">${formatINR(e.igst)}</td>
+                <td style="padding: 12px 14px; text-align: center;">
                     ${e.is_taxable ? 
                         '<span style="display:inline-block; padding: 4px 10px; border-radius: 12px; font-size: 11px; font-weight: 700; background: #dcfce7; color: #15803d;">18% Taxable</span>' : 
                         '<span style="display:inline-block; padding: 4px 10px; border-radius: 12px; font-size: 11px; font-weight: 700; background: #f1f5f9; color: #475569;">Exempt</span>'}
                 </td>
+                <td style="padding: 12px 14px; text-align: center;">
+                    ${docBadge}
+                </td>
+                <td style="padding: 12px 14px; text-align: center;">
+                    <button type="button" class="btn-delete-single-income" data-id="${e.id}" data-desc="${e.branch} - ${e.gl_code}" style="background: none; border: none; color: #ef4444; cursor: pointer; padding: 4px 8px; font-size: 14px; border-radius: 6px;" title="Delete this income entry">
+                        <i class="fa-solid fa-trash-can"></i>
+                    </button>
+                </td>
             </tr>
-        `).join('');
+            `;
+        }).join('');
+
+        // Attach Checkbox Listeners
+        document.querySelectorAll('.income-row-check').forEach(cb => {
+            cb.addEventListener('change', (e) => {
+                const id = parseInt(e.target.getAttribute('data-id'));
+                if (e.target.checked) {
+                    selectedIncomeIds.add(id);
+                } else {
+                    selectedIncomeIds.delete(id);
+                }
+                updateBulkDeleteUI();
+                renderTableRows();
+            });
+        });
+
+        // Attach Single Delete Listeners
+        document.querySelectorAll('.btn-delete-single-income').forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                const id = parseInt(btn.getAttribute('data-id'));
+                const desc = btn.getAttribute('data-desc');
+                if (confirm(`Are you sure you want to delete income entry: ${desc}?`)) {
+                    try {
+                        const res = await fetch('/api/delete-income-entry', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ id: id })
+                        });
+                        const data = await res.json();
+                        if (data.success) {
+                            selectedIncomeIds.delete(id);
+                            updateBulkDeleteUI();
+                            loadIncomeData();
+                        } else {
+                            alert(data.error || 'Failed to delete entry');
+                        }
+                    } catch (err) {
+                        console.error('Error deleting entry:', err);
+                        alert('Network error while deleting entry');
+                    }
+                }
+            });
+        });
+
+        // Update Select All Checkbox state
+        const allFilteredIds = filtered.map(e => e.id);
+        const allSelected = allFilteredIds.length > 0 && allFilteredIds.every(id => selectedIncomeIds.has(id));
+        selectAllIncome.checked = allSelected;
     }
+
+    // 5. Checkbox & Bulk Delete Management
+    selectAllIncome.addEventListener('change', () => {
+        const query = (searchIncomeInput.value || '').trim().toLowerCase();
+        const taxFilter = filterTaxable.value;
+
+        let filtered = allIncomeEntries.filter(e => {
+            if (currentBranch !== 'ALL' && e.branch.toUpperCase() !== currentBranch.toUpperCase()) return false;
+            if (taxFilter === 'TAXABLE' && !e.is_taxable) return false;
+            if (taxFilter === 'EXEMPT' && e.is_taxable) return false;
+            if (query) {
+                const matchCode = (e.gl_code || '').toLowerCase().includes(query);
+                const matchPart = (e.particulars || '').toLowerCase().includes(query);
+                const matchBranch = (e.branch || '').toLowerCase().includes(query);
+                if (!matchCode && !matchPart && !matchBranch) return false;
+            }
+            return true;
+        });
+
+        if (selectAllIncome.checked) {
+            filtered.forEach(e => selectedIncomeIds.add(e.id));
+        } else {
+            filtered.forEach(e => selectedIncomeIds.delete(e.id));
+        }
+        updateBulkDeleteUI();
+        renderTableRows();
+    });
+
+    function updateBulkDeleteUI() {
+        const count = selectedIncomeIds.size;
+        if (count > 0) {
+            btnDeleteSelectedIncome.style.display = 'inline-flex';
+            selectedIncomeCount.textContent = count;
+        } else {
+            btnDeleteSelectedIncome.style.display = 'none';
+            selectedIncomeCount.textContent = '0';
+        }
+    }
+
+    btnDeleteSelectedIncome.addEventListener('click', async () => {
+        const count = selectedIncomeIds.size;
+        if (count === 0) return;
+
+        if (confirm(`Are you sure you want to PERMANENTLY DELETE ${count} selected income statement entries?`)) {
+            try {
+                const res = await fetch('/api/delete-income-batch', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ids: Array.from(selectedIncomeIds) })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    alert(`Successfully deleted ${data.deleted_count} income entries.`);
+                    selectedIncomeIds.clear();
+                    updateBulkDeleteUI();
+                    loadIncomeData();
+                } else {
+                    alert(data.error || 'Failed to delete entries');
+                }
+            } catch (err) {
+                console.error('Error during bulk delete:', err);
+                alert('Network error during bulk delete.');
+            }
+        }
+    });
 
     searchIncomeInput.addEventListener('input', renderTableRows);
     filterTaxable.addEventListener('change', renderTableRows);
 
-    // 5. Recursive Folder File Reader
+    // 6. Recursive Folder File Reader
     const SUPPORTED_EXTS = ['pdf', 'xlsx', 'xls', 'csv', 'zip'];
 
     function isSupportedIncomeFile(file) {
@@ -265,7 +405,7 @@ document.addEventListener('DOMContentLoaded', () => {
         return files.filter(isSupportedIncomeFile);
     }
 
-    // 6. Drag & Drop Handlers
+    // 7. Drag & Drop Handlers
     incomeDropZone.addEventListener('dragover', (e) => {
         e.preventDefault();
         incomeDropZone.style.borderColor = '#2563eb';
@@ -311,7 +451,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // 7. Chunked Multi-File Upload to Prevent Timeout
+    // 8. Chunked Multi-File Upload to Prevent Timeout
     async function handleFileUpload(files) {
         if (!files || files.length === 0) return;
 
@@ -320,7 +460,7 @@ document.addEventListener('DOMContentLoaded', () => {
         let processedCount = 0;
         let totalSaved = 0;
 
-        const CHUNK_SIZE = 30; // Upload in batches of 30 files
+        const CHUNK_SIZE = 30;
         const chunks = [];
         for (let i = 0; i < files.length; i += CHUNK_SIZE) {
             chunks.push(files.slice(i, i + CHUNK_SIZE));
@@ -364,7 +504,7 @@ document.addEventListener('DOMContentLoaded', () => {
         loadIncomeData();
     }
 
-    // 8. Export CA Working Sheet
+    // 9. Export CA Working Sheet
     btnExportWorkingSheet.addEventListener('click', () => {
         window.location.href = `/api/export-income-working-sheet?client_id=${currentClientId}&financial_year=2026-27&month=July`;
     });

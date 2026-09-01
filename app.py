@@ -4442,7 +4442,9 @@ def get_income_entries():
         query = '''
             SELECT id, branch, state, financial_year, month, gl_code, particulars,
                    is_taxable, income_amount::float, cgst::float, sgst::float, igst::float,
-                   refund_without_gst::float, refund_with_gst::float, file_name, created_at
+                   refund_without_gst::float, refund_with_gst::float, file_name,
+                   CASE WHEN file_data IS NOT NULL THEN true ELSE false END as has_file,
+                   created_at
             FROM income_entries
             WHERE client_id = %s
         '''
@@ -4491,9 +4493,13 @@ def upload_income_api():
 
         if ext == 'pdf':
             entries = parse_income_pdf_bytes(fbytes, fname)
+            for item in entries:
+                item['file_data'] = fbytes
             parsed_entries.extend(entries)
         elif ext in ['xlsx', 'xls', 'csv']:
             entries = parse_income_excel_bytes(fbytes, fname)
+            for item in entries:
+                item['file_data'] = fbytes
             parsed_entries.extend(entries)
         elif ext == 'zip':
             import zipfile
@@ -4504,9 +4510,12 @@ def upload_income_api():
                         if zext in ['pdf', 'xlsx', 'xls', 'csv'] and not zname.startswith('__MACOSX'):
                             zbytes = z.read(zname)
                             if zext == 'pdf':
-                                parsed_entries.extend(parse_income_pdf_bytes(zbytes, zname))
+                                z_items = parse_income_pdf_bytes(zbytes, zname)
                             else:
-                                parsed_entries.extend(parse_income_excel_bytes(zbytes, zname))
+                                z_items = parse_income_excel_bytes(zbytes, zname)
+                            for item in z_items:
+                                item['file_data'] = zbytes
+                            parsed_entries.extend(z_items)
             except Exception as ze:
                 print(f"Error reading zip file {fname}: {ze}")
 
@@ -4522,8 +4531,8 @@ def upload_income_api():
 
         for e in unique_entries.values():
             cur.execute('''
-                INSERT INTO income_entries (user_id, client_id, branch, state, financial_year, month, gl_code, particulars, is_taxable, income_amount, cgst, sgst, igst, refund_without_gst, refund_with_gst, file_name)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO income_entries (user_id, client_id, branch, state, financial_year, month, gl_code, particulars, is_taxable, income_amount, cgst, sgst, igst, refund_without_gst, refund_with_gst, file_name, file_data)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (client_id, branch, financial_year, month, gl_code)
                 DO UPDATE SET
                     user_id = EXCLUDED.user_id,
@@ -4553,7 +4562,8 @@ def upload_income_api():
                 e.get('igst', 0.0),
                 e.get('refund_without_gst', 0.0),
                 e.get('refund_with_gst', 0.0),
-                e.get('filename', 'upload')
+                e.get('filename', 'upload'),
+                psycopg2.Binary(e['file_data']) if e.get('file_data') else None
             ))
             saved_count += 1
         conn.commit()
@@ -4673,6 +4683,86 @@ def get_income_summary():
         })
     except Exception as e:
         print(f"Error generating income summary: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/income-file/<int:entry_id>', methods=['GET'])
+@login_required
+def get_income_file(entry_id):
+    client_id = get_current_client_id()
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute('SELECT file_data, file_name FROM income_entries WHERE id = %s AND client_id = %s', (entry_id, client_id))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+
+        if not row or row[0] is None:
+            return jsonify({"error": "No statement file attached to this income entry"}), 404
+
+        file_data, file_name = row
+        fname = file_name or f"income-statement-{entry_id}.pdf"
+        ext = fname.lower().split('.')[-1] if '.' in fname else 'pdf'
+        mimetypes = {
+            'pdf': 'application/pdf',
+            'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'xls': 'application/vnd.ms-excel',
+            'csv': 'text/csv',
+            'png': 'image/png',
+            'jpg': 'image/jpeg',
+            'jpeg': 'image/jpeg'
+        }
+        mime = mimetypes.get(ext, 'application/octet-stream')
+
+        return send_file(
+            io.BytesIO(bytes(file_data)),
+            mimetype=mime,
+            as_attachment=False,
+            download_name=fname
+        )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/delete-income-entry', methods=['POST'])
+@login_required
+def delete_income_entry():
+    client_id = get_current_client_id()
+    data = request.json or {}
+    entry_id = data.get('id')
+    if not entry_id:
+        return jsonify({"error": "Entry ID required"}), 400
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute('DELETE FROM income_entries WHERE id = %s AND client_id = %s', (entry_id, client_id))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/delete-income-batch', methods=['POST'])
+@login_required
+def delete_income_batch():
+    client_id = get_current_client_id()
+    data = request.json or {}
+    ids = data.get('ids')
+    if not ids or not isinstance(ids, list):
+        return jsonify({"error": "No entries selected"}), 400
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute('DELETE FROM income_entries WHERE id = ANY(%s) AND client_id = %s', (ids, client_id))
+        deleted_count = cur.rowcount
+        conn.commit()
+        cur.close()
+        conn.close()
+        return jsonify({"success": True, "deleted_count": deleted_count})
+    except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/export-income-working-sheet', methods=['POST', 'GET'])
