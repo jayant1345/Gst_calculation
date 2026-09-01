@@ -17,7 +17,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const filterTaxable = document.getElementById('filterTaxable');
     const incomeDropZone = document.getElementById('incomeDropZone');
     const incomeFileInput = document.getElementById('incomeFileInput');
+    const incomeFolderInput = document.getElementById('incomeFolderInput');
     const uploadProgress = document.getElementById('uploadIncomeProgress');
+    const incomeProgressText = document.getElementById('incomeProgressText');
+    const incomeProgressCount = document.getElementById('incomeProgressCount');
+    const incomeProgressBarFill = document.getElementById('incomeProgressBarFill');
     const btnExportWorkingSheet = document.getElementById('btnExportWorkingSheet');
 
     // KPI Card Elements
@@ -107,7 +111,6 @@ document.addEventListener('DOMContentLoaded', () => {
     // 3. Load Income Summary & Table Entries
     async function loadIncomeData() {
         try {
-            // Summary KPI & Net Tax Offset
             const sumRes = await fetch(`/api/income-summary?client_id=${currentClientId}`);
             const sumData = await sumRes.json();
             
@@ -128,7 +131,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 boxNetPayable.textContent = formatINR(netPayable);
             }
 
-            // Entries List
             const entriesRes = await fetch(`/api/get-income-entries?client_id=${currentClientId}`);
             const entriesData = await entriesRes.json();
             
@@ -196,7 +198,74 @@ document.addEventListener('DOMContentLoaded', () => {
     searchIncomeInput.addEventListener('input', renderTableRows);
     filterTaxable.addEventListener('change', renderTableRows);
 
-    // 5. Drag and Drop File Upload
+    // 5. Recursive Folder File Reader
+    const SUPPORTED_EXTS = ['pdf', 'xlsx', 'xls', 'csv', 'zip'];
+
+    function isSupportedIncomeFile(file) {
+        if (!file || !file.name) return false;
+        if (file.name.startsWith('.') || file.name.startsWith('~$') || file.name.endsWith('.db')) return false;
+        const ext = file.name.split('.').pop().toLowerCase();
+        return SUPPORTED_EXTS.includes(ext);
+    }
+
+    async function getFilesFromDataTransfer(dataTransfer) {
+        const files = [];
+        const items = dataTransfer.items;
+
+        if (items && items.length > 0 && items[0].webkitGetAsEntry) {
+            const entries = [];
+            for (let i = 0; i < items.length; i++) {
+                const entry = items[i].webkitGetAsEntry();
+                if (entry) entries.push(entry);
+            }
+
+            async function readEntry(entry, path = '') {
+                if (entry.isFile) {
+                    return new Promise((resolve) => {
+                        entry.file((file) => {
+                            const relPath = path ? `${path}/${file.name}` : file.name;
+                            Object.defineProperty(file, 'webkitRelativePath', {
+                                value: relPath,
+                                writable: true
+                            });
+                            files.push(file);
+                            resolve();
+                        }, () => resolve());
+                    });
+                } else if (entry.isDirectory) {
+                    const dirReader = entry.createReader();
+                    const readBatch = async () => {
+                        return new Promise((resolve) => {
+                            dirReader.readEntries(async (subEntries) => {
+                                if (!subEntries || subEntries.length === 0) {
+                                    resolve();
+                                } else {
+                                    for (const subEntry of subEntries) {
+                                        await readEntry(subEntry, path ? `${path}/${entry.name}` : entry.name);
+                                    }
+                                    await readBatch();
+                                    resolve();
+                                }
+                            }, () => resolve());
+                        });
+                    };
+                    await readBatch();
+                }
+            }
+
+            for (const entry of entries) {
+                await readEntry(entry);
+            }
+        } else if (dataTransfer.files && dataTransfer.files.length > 0) {
+            for (let i = 0; i < dataTransfer.files.length; i++) {
+                files.push(dataTransfer.files[i]);
+            }
+        }
+
+        return files.filter(isSupportedIncomeFile);
+    }
+
+    // 6. Drag & Drop Handlers
     incomeDropZone.addEventListener('dragover', (e) => {
         e.preventDefault();
         incomeDropZone.style.borderColor = '#2563eb';
@@ -208,51 +277,94 @@ document.addEventListener('DOMContentLoaded', () => {
         incomeDropZone.style.background = '#f8fafc';
     });
 
-    incomeDropZone.addEventListener('drop', (e) => {
+    incomeDropZone.addEventListener('drop', async (e) => {
         e.preventDefault();
         incomeDropZone.style.borderColor = '#93c5fd';
         incomeDropZone.style.background = '#f8fafc';
-        if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-            handleFileUpload(e.dataTransfer.files);
+        const files = await getFilesFromDataTransfer(e.dataTransfer);
+        if (files.length > 0) {
+            handleFileUpload(files);
+        } else {
+            alert('No supported income files (PDF, XLSX, XLS, CSV, ZIP) were found in the dropped item.');
         }
     });
 
     incomeFileInput.addEventListener('change', () => {
         if (incomeFileInput.files && incomeFileInput.files.length > 0) {
-            handleFileUpload(incomeFileInput.files);
+            const files = Array.from(incomeFileInput.files).filter(isSupportedIncomeFile);
+            if (files.length > 0) handleFileUpload(files);
         }
+        incomeFileInput.value = '';
     });
 
-    async function handleFileUpload(files) {
-        uploadProgress.style.display = 'block';
-        const formData = new FormData();
-        formData.append('client_id', currentClientId);
-        for (let i = 0; i < files.length; i++) {
-            formData.append('income_files', files[i]);
-        }
-
-        try {
-            const res = await fetch('/api/upload-income', {
-                method: 'POST',
-                body: formData
-            });
-            const data = await res.json();
-            if (data.success) {
-                uploadProgress.style.display = 'none';
-                alert(`Successfully parsed and saved ${data.saved_count} income statement records!`);
-                loadIncomeData();
-            } else {
-                uploadProgress.style.display = 'none';
-                alert(`Upload error: ${data.error || 'Failed to process files'}`);
+    if (incomeFolderInput) {
+        incomeFolderInput.addEventListener('change', () => {
+            if (incomeFolderInput.files && incomeFolderInput.files.length > 0) {
+                const files = Array.from(incomeFolderInput.files).filter(isSupportedIncomeFile);
+                if (files.length > 0) {
+                    handleFileUpload(files);
+                } else {
+                    alert('No supported income files (PDF, XLSX, XLS, CSV) were found in that folder.');
+                }
             }
-        } catch (err) {
-            uploadProgress.style.display = 'none';
-            console.error('Error during upload:', err);
-            alert('An error occurred during income upload.');
-        }
+            incomeFolderInput.value = '';
+        });
     }
 
-    // 6. Export CA Working Sheet
+    // 7. Chunked Multi-File Upload to Prevent Timeout
+    async function handleFileUpload(files) {
+        if (!files || files.length === 0) return;
+
+        uploadProgress.style.display = 'block';
+        const totalFiles = files.length;
+        let processedCount = 0;
+        let totalSaved = 0;
+
+        const CHUNK_SIZE = 30; // Upload in batches of 30 files
+        const chunks = [];
+        for (let i = 0; i < files.length; i += CHUNK_SIZE) {
+            chunks.push(files.slice(i, i + CHUNK_SIZE));
+        }
+
+        incomeProgressText.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Ingesting ${totalFiles} income files...`;
+        incomeProgressCount.textContent = `0 / ${totalFiles}`;
+        incomeProgressBarFill.style.width = '0%';
+
+        for (let cIdx = 0; cIdx < chunks.length; cIdx++) {
+            const currentChunk = chunks[cIdx];
+            const formData = new FormData();
+            formData.append('client_id', currentClientId);
+            
+            currentChunk.forEach(file => {
+                const uploadName = file.webkitRelativePath || file.name;
+                formData.append('income_files', file, uploadName);
+            });
+
+            try {
+                const res = await fetch('/api/upload-income', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await res.json();
+                if (data.success) {
+                    totalSaved += data.saved_count || currentChunk.length;
+                }
+            } catch (err) {
+                console.error('Error during chunk upload:', err);
+            }
+
+            processedCount += currentChunk.length;
+            const pct = Math.min(100, Math.round((processedCount / totalFiles) * 100));
+            incomeProgressCount.textContent = `${processedCount} / ${totalFiles}`;
+            incomeProgressBarFill.style.width = `${pct}%`;
+        }
+
+        uploadProgress.style.display = 'none';
+        alert(`Upload Complete!\nSuccessfully processed and saved ${totalSaved} income statement records across branches.`);
+        loadIncomeData();
+    }
+
+    // 8. Export CA Working Sheet
     btnExportWorkingSheet.addEventListener('click', () => {
         window.location.href = `/api/export-income-working-sheet?client_id=${currentClientId}&financial_year=2026-27&month=July`;
     });

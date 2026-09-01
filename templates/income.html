@@ -265,21 +265,38 @@
                 <div class="section-header">
                     <div>
                         <h2><i class="fa-solid fa-cloud-arrow-up" style="color: var(--accent-blue);"></i> Ingest CBS Income Statements & Vouchers</h2>
-                        <p class="section-desc">Upload Core Banking statement PDFs (e.g. <code>PL 3270.pdf</code>, <code>GL 1720.pdf</code>), multi-account Excel exports (e.g. <code>ALL PL JULY-26.xlsx</code>), or ZIP folders across all 26 branches.</p>
+                        <p class="section-desc">Upload Core Banking statement PDFs (e.g. <code>PL 3270.pdf</code>, <code>GL 1720.pdf</code>), multi-account Excel exports (e.g. <code>ALL PL JULY-26.xlsx</code>), or entire branch folders.</p>
                     </div>
                 </div>
 
-                <div class="drop-zone" id="incomeDropZone" style="border: 2px dashed #93c5fd; border-radius: 14px; padding: 32px 20px; text-align: center; background: #f8fafc; cursor: pointer; transition: all 0.2s ease;">
-                    <i class="fa-solid fa-file-pdf" style="font-size: 38px; color: #3b82f6; margin-bottom: 12px;"></i>
-                    <h3 style="font-size: 16px; font-weight: 700; color: #0f172a;">Drag & Drop Bank Income Statements / Vouchers here</h3>
-                    <p style="font-size: 13px; color: #64748b; margin-top: 6px;">Supports <strong>PDF, XLSX, XLS, CSV, and ZIP</strong> archives with automatic branch & GL code classification</p>
+                <div class="drop-zone drop-zone-income" id="incomeDropZone">
+                    <i class="fa-solid fa-folder-open" style="font-size: 42px; color: #3b82f6; margin-bottom: 12px; display: block;"></i>
+                    <h3 style="font-size: 17px; font-weight: 700; color: #0f172a;">Drag & Drop Bank Income Files or Folders here</h3>
+                    <p style="font-size: 13.5px; color: #64748b; margin-top: 6px;">Supports uploading <strong>Folders</strong> (e.g. <code>3 INCOME CODE & PURCHASE BILL</code>), multi-page <strong>PDFs, XLSX, XLS, CSV, and ZIP</strong> archives simultaneously</p>
+                    
                     <input type="file" id="incomeFileInput" multiple accept=".pdf,.xlsx,.xls,.csv,.zip" style="display: none;">
-                    <button class="btn-secondary" style="margin-top: 14px; padding: 8px 18px; border-radius: 8px; font-weight: 600; border: 1px solid var(--border-color); background: #ffffff; cursor: pointer;" onclick="document.getElementById('incomeFileInput').click();">
-                        <i class="fa-solid fa-folder-open"></i> Browse Income Files
-                    </button>
+                    <input type="file" id="incomeFolderInput" webkitdirectory directory multiple style="display: none;">
+                    
+                    <div style="display: flex; gap: 12px; justify-content: center; margin-top: 18px; flex-wrap: wrap;">
+                        <button type="button" class="btn-primary" style="padding: 10px 20px; border-radius: 10px; font-weight: 700; border: none; background: #2563eb; color: #ffffff; cursor: pointer; display: flex; align-items: center; gap: 8px; box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);" onclick="document.getElementById('incomeFileInput').click();">
+                            <i class="fa-solid fa-file-circle-plus"></i> Select Files
+                        </button>
+                        <button type="button" class="btn-secondary" style="padding: 10px 20px; border-radius: 10px; font-weight: 700; border: 1px solid var(--border-color); background: #ffffff; color: #0f172a; cursor: pointer; display: flex; align-items: center; gap: 8px; box-shadow: 0 2px 6px rgba(0,0,0,0.04);" onclick="document.getElementById('incomeFolderInput').click();">
+                            <i class="fa-solid fa-folder-tree" style="color: #2563eb;"></i> Select Folder (All Branches)
+                        </button>
+                    </div>
                 </div>
-                <div id="uploadIncomeProgress" style="display: none; margin-top: 14px; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; padding: 12px 16px; font-size: 13px; color: #1e40af; font-weight: 600;">
-                    <i class="fa-solid fa-spinner fa-spin"></i> Parsing and extracting income statements...
+                
+                <div id="uploadIncomeProgress" style="display: none; margin-top: 16px; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 12px; padding: 16px 20px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                        <span id="incomeProgressText" style="font-size: 13.5px; color: #1e40af; font-weight: 700;">
+                            <i class="fa-solid fa-spinner fa-spin"></i> Processing files...
+                        </span>
+                        <span id="incomeProgressCount" style="font-size: 13px; color: #3b82f6; font-weight: 600;">0 / 0</span>
+                    </div>
+                    <div style="width: 100%; height: 8px; background: #dbeafe; border-radius: 6px; overflow: hidden;">
+                        <div id="incomeProgressBarFill" style="width: 0%; height: 100%; background: linear-gradient(90deg, #2563eb, #38bdf8); border-radius: 6px; transition: width 0.2s ease;"></div>
+                    </div>
                 </div>
             </div>
 
