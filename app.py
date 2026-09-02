@@ -4867,17 +4867,51 @@ def export_income_working_sheet():
         if os.path.exists(template_path):
             try:
                 wb = openpyxl.load_workbook(template_path)
+                
+                # Remove duplicate trailing template tabs like ODHAV1, SURAT1, etc.
+                for sname in list(wb.sheetnames):
+                    if sname.endswith('1') and sname[:-1].strip().upper() in branch_map:
+                        try:
+                            wb.remove(wb[sname])
+                        except Exception:
+                            pass
+
+                # Populate branch sheets with full revenue and tax breakdown
                 for sname in wb.sheetnames:
                     b_clean = sname.strip().upper()
-                    if b_clean in branch_map:
+                    matched_branch = None
+                    for b_name in branch_map:
+                        if b_clean == b_name or b_clean in b_name or b_name in b_clean:
+                            matched_branch = b_name
+                            break
+
+                    if matched_branch:
                         ws_b = wb[sname]
-                        b_dict = branch_map[b_clean]
+                        b_dict = branch_map[matched_branch]
                         for r in range(7, 75):
                             c_val = ws_b.cell(r, 1).value
                             if c_val is not None:
                                 c_str = str(c_val).strip()
                                 if c_str in b_dict:
-                                    ws_b.cell(r, 3, value=b_dict[c_str]['income_amount'])
+                                    item = b_dict[c_str]
+                                    inc_amt = float(item.get('income_amount') or 0.0)
+                                    sgst_amt = float(item.get('sgst') or 0.0)
+                                    cgst_amt = float(item.get('cgst') or 0.0)
+                                    igst_amt = float(item.get('igst') or 0.0)
+                                    ref_wo = float(item.get('refund_without_gst') or 0.0)
+                                    ref_w = float(item.get('refund_with_gst') or 0.0)
+
+                                    ws_b.cell(r, 3, value=inc_amt)
+                                    if sgst_amt > 0:
+                                        ws_b.cell(r, 4, value=sgst_amt)
+                                    if cgst_amt > 0:
+                                        ws_b.cell(r, 5, value=cgst_amt)
+                                    if igst_amt > 0:
+                                        ws_b.cell(r, 6, value=igst_amt)
+                                    if ref_wo > 0:
+                                        ws_b.cell(r, 7, value=ref_wo)
+                                    if ref_w > 0:
+                                        ws_b.cell(r, 8, value=ref_w)
 
                 buf = io.BytesIO()
                 wb.save(buf)
