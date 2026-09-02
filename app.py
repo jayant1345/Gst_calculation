@@ -8,6 +8,7 @@ import ssl
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask import Flask, request, jsonify, render_template, send_file, redirect, url_for, session, flash
 import pandas as pd
+import openpyxl
 from pypdf import PdfReader
 import pymupdf
 from dotenv import load_dotenv
@@ -4854,64 +4855,154 @@ def export_income_working_sheet():
         cur.close()
         conn.close()
 
-        # Group by branch
+        # Group entries by normalized branch and GL code
         branch_map = collections.defaultdict(dict)
-        branch_entries_list = collections.defaultdict(list)
         for e in entries:
-            b_name = e['branch'].upper().strip()
+            b_name = re.sub(r'[^A-Z0-9]', '', e['branch'].upper().strip())
             c_code = str(e['gl_code']).strip()
             branch_map[b_name][c_code] = e
-            branch_entries_list[b_name].append(e)
 
-        # 1. Use Golden Master Template if available
+        # 1. Use Golden Master Template
         if os.path.exists(template_path):
             try:
                 wb = openpyxl.load_workbook(template_path)
-                
-                # Remove duplicate trailing template tabs like ODHAV1, SURAT1, etc.
+                wb.calculation.fullCalcOnLoad = True
+
+                # Clean up duplicate trailing tabs (ODHAV1, SURAT1, etc.)
                 for sname in list(wb.sheetnames):
-                    if sname.endswith('1') and sname[:-1].strip().upper() in branch_map:
+                    if sname.endswith('1') and sname not in ['Sheet1'] and sname[:-1].strip().upper() in INCOME_MASTER_BRANCHES:
                         try:
                             wb.remove(wb[sname])
                         except Exception:
                             pass
 
-                # Populate branch sheets with full revenue and tax breakdown
+                grand_income = 0.0
+                grand_ggst = 0.0
+                grand_cgst = 0.0
+                grand_igst = 0.0
+                grand_ref_wo = 0.0
+                grand_ref_w = 0.0
+
+                # Populate branch sheets
                 for sname in wb.sheetnames:
-                    b_clean = sname.strip().upper()
-                    matched_branch = None
-                    for b_name in branch_map:
-                        if b_clean == b_name or b_clean in b_name or b_name in b_clean:
-                            matched_branch = b_name
+                    if sname in ['SUMMARY SHEET GST', 'Notes', 'GSTN CANCELLTED', 'Sheet1'] or sname.endswith('1'):
+                        continue
+
+                    ws_b = wb[sname]
+                    b_norm = re.sub(r'[^A-Z0-9]', '', sname.upper().strip())
+                    
+                    # Match branch
+                    matched_dict = None
+                    for b_key in branch_map:
+                        if b_key == b_norm or b_key in b_norm or b_norm in b_key:
+                            matched_dict = branch_map[b_key]
                             break
 
-                    if matched_branch:
-                        ws_b = wb[sname]
-                        b_dict = branch_map[matched_branch]
-                        for r in range(7, 75):
-                            c_val = ws_b.cell(r, 1).value
-                            if c_val is not None:
-                                c_str = str(c_val).strip()
-                                if c_str in b_dict:
-                                    item = b_dict[c_str]
-                                    inc_amt = float(item.get('income_amount') or 0.0)
-                                    sgst_amt = float(item.get('sgst') or 0.0)
-                                    cgst_amt = float(item.get('cgst') or 0.0)
-                                    igst_amt = float(item.get('igst') or 0.0)
-                                    ref_wo = float(item.get('refund_without_gst') or 0.0)
-                                    ref_w = float(item.get('refund_with_gst') or 0.0)
+                    b_tot_inc = 0.0
+                    b_tot_ggst = 0.0
+                    b_tot_cgst = 0.0
+                    b_tot_igst = 0.0
+                    b_tot_ref_wo = 0.0
+                    b_tot_ref_w = 0.0
 
-                                    ws_b.cell(r, 3, value=inc_amt)
-                                    if sgst_amt > 0:
-                                        ws_b.cell(r, 4, value=sgst_amt)
-                                    if cgst_amt > 0:
-                                        ws_b.cell(r, 5, value=cgst_amt)
-                                    if igst_amt > 0:
-                                        ws_b.cell(r, 6, value=igst_amt)
-                                    if ref_wo > 0:
-                                        ws_b.cell(r, 7, value=ref_wo)
-                                    if ref_w > 0:
-                                        ws_b.cell(r, 8, value=ref_w)
+                    for r in range(7, 62):
+                        c_val = ws_b.cell(r, 1).value
+                        if c_val is not None:
+                            c_str = str(c_val).strip()
+                            if matched_dict and c_str in matched_dict:
+                                item = matched_dict[c_str]
+                                inc_amt = float(item.get('income_amount') or 0.0)
+                                sgst_amt = float(item.get('sgst') or 0.0)
+                                cgst_amt = float(item.get('cgst') or 0.0)
+                                igst_amt = float(item.get('igst') or 0.0)
+                                ref_wo = float(item.get('refund_without_gst') or 0.0)
+                                ref_w = float(item.get('refund_with_gst') or 0.0)
+
+                                ws_b.cell(r, 3, value=inc_amt)
+                                ws_b.cell(r, 4, value=sgst_amt)
+                                ws_b.cell(r, 5, value=cgst_amt)
+                                if igst_amt > 0:
+                                    ws_b.cell(r, 6, value=igst_amt)
+                                if ref_wo > 0:
+                                    ws_b.cell(r, 7, value=ref_wo)
+                                if ref_w > 0:
+                                    ws_b.cell(r, 8, value=ref_w)
+
+                                b_tot_inc += inc_amt
+                                b_tot_ggst += sgst_amt
+                                b_tot_cgst += cgst_amt
+                                b_tot_igst += igst_amt
+                                b_tot_ref_wo += ref_wo
+                                b_tot_ref_w += ref_w
+                            else:
+                                cur_inc = ws_b.cell(r, 3).value
+                                if isinstance(cur_inc, (int, float)):
+                                    b_tot_inc += float(cur_inc)
+                                cur_ggst = ws_b.cell(r, 4).value
+                                if isinstance(cur_ggst, (int, float)):
+                                    b_tot_ggst += float(cur_ggst)
+                                cur_cgst = ws_b.cell(r, 5).value
+                                if isinstance(cur_cgst, (int, float)):
+                                    b_tot_cgst += float(cur_cgst)
+
+                    # Update branch Total row (Row 62)
+                    ws_b.cell(62, 3, value=b_tot_inc)
+                    ws_b.cell(62, 4, value=b_tot_ggst)
+                    ws_b.cell(62, 5, value=b_tot_cgst)
+                    ws_b.cell(62, 6, value=b_tot_igst)
+                    ws_b.cell(62, 7, value=b_tot_ref_wo)
+                    ws_b.cell(62, 8, value=b_tot_ref_w)
+
+                    grand_income += b_tot_inc
+                    grand_ggst += b_tot_ggst
+                    grand_cgst += b_tot_cgst
+                    grand_igst += b_tot_igst
+                    grand_ref_wo += b_tot_ref_wo
+                    grand_ref_w += b_tot_ref_w
+
+                # Update Sheet1 Totals
+                if 'Sheet1' in wb.sheetnames:
+                    ws_s1 = wb['Sheet1']
+                    ws_s1.cell(73, 3, value=grand_income)
+                    ws_s1.cell(73, 4, value=grand_ggst)
+                    ws_s1.cell(73, 5, value=grand_cgst)
+                    ws_s1.cell(73, 6, value=grand_igst)
+                    ws_s1.cell(74, 3, value=grand_ref_wo)
+                    ws_s1.cell(74, 4, value=grand_ref_wo * 0.09 if grand_ref_wo else 0.0)
+                    ws_s1.cell(74, 5, value=grand_ref_wo * 0.09 if grand_ref_wo else 0.0)
+
+                # Update SUMMARY SHEET GST Totals
+                if 'SUMMARY SHEET GST' in wb.sheetnames:
+                    ws_sum = wb['SUMMARY SHEET GST']
+                    # Row 27: (1) INCOME AS PER LEDGERWISE CALCULATION
+                    ws_sum.cell(27, 3, value=grand_income)
+                    ws_sum.cell(27, 4, value=grand_ggst)
+                    ws_sum.cell(27, 5, value=grand_cgst)
+                    ws_sum.cell(27, 6, value=grand_igst)
+                    ws_sum.cell(27, 7, value=grand_ggst + grand_cgst + grand_igst)
+                    ws_sum.cell(27, 8, value=grand_income * 0.18)
+                    ws_sum.cell(27, 9, value=(grand_ggst + grand_cgst + grand_igst) - (grand_income * 0.18))
+
+                    # Row 29: (3) REFUND GIVEN BUT GST REFUND NOT GIVEN
+                    ref_gst = round(grand_ref_wo * 0.09, 2)
+                    ws_sum.cell(29, 3, value=grand_ref_wo)
+                    ws_sum.cell(29, 4, value=ref_gst)
+                    ws_sum.cell(29, 5, value=ref_gst)
+                    ws_sum.cell(29, 6, value=0.0)
+                    ws_sum.cell(29, 7, value=ref_gst * 2)
+
+                    # Row 30: TOTAL TAXABLE
+                    tot_taxable_inc = grand_income + grand_ref_wo
+                    tot_taxable_ggst = grand_ggst + ref_gst
+                    tot_taxable_cgst = grand_cgst + ref_gst
+                    tot_taxable_igst = grand_igst
+                    tot_output_gst = tot_taxable_ggst + tot_taxable_cgst + tot_taxable_igst
+                    ws_sum.cell(30, 3, value=tot_taxable_inc)
+                    ws_sum.cell(30, 4, value=tot_taxable_ggst)
+                    ws_sum.cell(30, 5, value=tot_taxable_cgst)
+                    ws_sum.cell(30, 6, value=tot_taxable_igst)
+                    ws_sum.cell(30, 7, value=tot_output_gst)
+                    ws_sum.cell(30, 8, value=tot_taxable_inc * 0.18)
 
                 buf = io.BytesIO()
                 wb.save(buf)
