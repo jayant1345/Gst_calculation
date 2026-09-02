@@ -2,3 +2,9 @@
 __pycache__/
 *.pyc
 GST_ITC_Reconciled_Sheet.xlsx
+
+# Real customer/branch bank ledger source documents and working outputs -
+# never commit these, they contain live financial data.
+reference_data/BRANCH_WISE_INCOME_CODES/
+reference_data/BRANCH_WISE_PURCHASE_BILLS/
+scratch/

@@ -4286,192 +4286,404 @@ def get_income_code_meta(code_str):
             return m
     return None
 
-def parse_income_pdf_bytes(file_bytes, filename):
-    results = []
+# ---------------------------------------------------------------------------
+# Ledger statement parsing (reads the bank's actual GL/PL account statements)
+#
+# The core banking system exports these in four different layouts depending
+# on branch and report type:
+#   1. Multi-account ledger ("Statement of Acct with Narration") - many
+#      accounts in one file. Anchor: "Account ID" line / "Total :" line.
+#   2. Single-account "R009007 - Statement of GL Account" report.
+#      Anchor: "Account Id" (code embedded as "CODE - NAME") / bare "Total"
+#      line (which is preceded by an entry-count token, unlike format 1).
+#   3. Single-account "Statement Of Account" report. Anchor: "A/c No" /
+#      "Closing Balance" (the summary row, not the opening-balance row).
+#   4. "Acct No : CODE / NAME" combined single-line variant / "Total :".
+# Each is read as text (PDF) or flattened cell-by-cell (Excel, in row-major
+# order) into the same line stream and walked by one shared scanner, so a
+# period's income is always "credits total minus debits total" taken from
+# the account's own printed total - never the closing balance, which is a
+# cumulative running balance and would double-count every prior period.
+#
+# Two GL codes (1836 rent-not-accrued -> 3320 rent on locker; 1720 commission
+# -not-accrued -> 3230 commission on guarantee) sometimes carry an internal
+# reclass transfer between them when an item closes/accrues. On the two
+# branches checked first (single locker closure that month) "deferred code's
+# income = gross credits, paired code's income = net minus the deferred
+# code's period debit total" reproduced golden exactly. It does NOT
+# generalise: branches with more than one closure/accrual event in the month
+# make it worse, not better (the deferred code's debit total isn't purely
+# 1:1 with the paired code's credit - some of it is other activity on that
+# account). Proper handling needs transaction-line-level detection of the
+# specific reclass entries, not a period-total adjustment, so this is left
+# as a plain net (credits minus debits) per account - matching golden on
+# most branches, with a small, self-explained, self-cancelling residual
+# on branches that had a reclass event that month (see the verification
+# report). RECLASS_DEFERRED_TO_INCOME is kept empty deliberately.
+RECLASS_DEFERRED_TO_INCOME = {}
+
+_LEDGER_NUM_RE = re.compile(r'^-?[\d,]+(?:\.\d+)?$')
+_ACCTNO_COLON_RE = re.compile(r'^Acct No\s*:\s*(\d{3,6})\s*/\s*(.*)$', re.IGNORECASE)
+_LEDGER_PDF_ACCOUNT_LABELS = ('account id', 'account id.')
+# format 1 ("Total :"/"Total:") has no leading count; format 2 (bare "Total")
+# prints a leading entry-count token before Dr/Cr.
+_LEDGER_PDF_TOTAL_LABELS = {'total :': 0, 'total:': 0, 'total': 1}
+_LEDGER_XLSX_ACCOUNT_LABELS = ('a/c no', 'a/c no.')
+_LEDGER_XLSX_TOTAL_LABELS = {'closing balance': 0}
+
+
+def _ledger_num(tok):
+    tok = tok.strip().replace(',', '')
+    if not tok:
+        return None
     try:
-        doc = pymupdf.open(stream=file_bytes, filetype="pdf")
-        full_text = ""
-        for page in doc:
-            full_text += page.get_text("text") + "\n"
-        
-        branch = "Unassigned"
-        for b in INCOME_MASTER_BRANCHES:
-            if b.upper() in filename.upper() or b.upper() in full_text.upper():
-                branch = b
-                break
-        
-        if branch == "Unassigned":
-            for b in INCOME_MASTER_BRANCHES:
-                if re.search(r'\b' + re.escape(b) + r'\b', filename, re.IGNORECASE):
-                    branch = b
-                    break
+        return float(tok)
+    except ValueError:
+        return None
 
-        gl_code = "N/A"
-        m_fn = re.search(r'(?:PL|GL)?\s*(\d{4})', filename, re.IGNORECASE)
-        if m_fn:
-            gl_code = m_fn.group(1)
-        else:
-            m_txt = re.search(r'(?:Account Id|A/c No)\s*[:]?\s*\d*?(\d{4})', full_text, re.IGNORECASE)
-            if m_txt:
-                gl_code = m_txt.group(1)
 
-        particulars = "Bank Service Income"
-        m_meta = get_income_code_meta(gl_code)
-        if m_meta:
-            particulars = m_meta.get('particulars')
-        else:
-            m_cust = re.search(r'(?:Customer Name|Product Name|Name)\s*[:]?\s*([^\n]+)', full_text, re.IGNORECASE)
-            if m_cust:
-                particulars = m_cust.group(1).strip()
+def _extract_ledger_code(cand):
+    cand = cand.strip()
+    m2 = re.match(r'^(\d{3,6})\s*-\s*(.+)$', cand)
+    if m2:
+        return m2.group(1), m2.group(2).strip()
+    if '/' in cand:
+        parts = [p.strip() for p in cand.split('/') if p.strip()]
+        if parts and re.match(r'^\d{3,6}$', parts[-1]):
+            return parts[-1], None
+    if re.match(r'^\d{6,}$', cand):
+        return cand[-4:], None
+    m4 = re.match(r'^(\d{3,6})\b', cand)
+    if m4:
+        return m4.group(1), None
+    return None, None
 
-        m_period = re.search(r'(\d{2}[/-]\d{2}[/-]\d{4})', full_text)
-        date_str = m_period.group(1) if m_period else "01/07/2026"
-        fy, month = parse_date_to_fy_and_month(date_str)
-        if not fy:
-            fy, month = "2026-27", "July"
 
-        total_income = 0.0
-        m_closing = re.search(r'(?:Closing Balance|Total Amount)\s*\n?([\d,]+\.\d{2})', full_text, re.IGNORECASE)
-        if m_closing:
-            try:
-                total_income = float(m_closing.group(1).replace(',', ''))
-            except Exception:
-                pass
-        
-        if total_income == 0.0:
-            cr_matches = re.findall(r'\b(\d{1,3}(?:,\d{3})*\.\d{2})\b', full_text)
-            if cr_matches:
-                nums = [float(x.replace(',', '')) for x in cr_matches]
-                total_income = max(nums) if nums else 0.0
-
-        is_taxable = True
-        if m_meta:
-            is_taxable = m_meta.get('is_taxable', True)
-        elif 'EXEMPT' in particulars.upper() or 'STAMP' in particulars.upper():
-            is_taxable = False
-
-        cgst = round(total_income * 0.09, 2) if is_taxable else 0.0
-        sgst = round(total_income * 0.09, 2) if is_taxable else 0.0
-        igst = 0.0
-
-        results.append({
-            "branch": branch,
-            "financial_year": fy,
-            "month": month,
-            "gl_code": gl_code,
-            "particulars": particulars,
-            "income_amount": total_income,
-            "is_taxable": is_taxable,
-            "cgst": cgst,
-            "sgst": sgst,
-            "igst": igst,
-            "refund_without_gst": 0.0,
-            "refund_with_gst": 0.0,
-            "filename": filename
-        })
-    except Exception as e:
-        print(f"Error parsing income PDF {filename}: {e}")
-    return results
-
-def parse_income_excel_bytes(file_bytes, filename):
-    results = []
-    try:
-        wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
-        
-        if 'SUMMARY SHEET GST' in wb.sheetnames:
-            for bs_name in wb.sheetnames:
-                if bs_name in ['SUMMARY SHEET GST', 'Notes', 'GSTN CANCELLTED', 'Sheet1'] or '1' in bs_name:
+def _scan_ledger_lines(lines, account_labels, total_labels):
+    n = len(lines)
+    accounts = []
+    i = 0
+    while i < n:
+        line = lines[i].strip()
+        if line.lower() in account_labels:
+            j = i + 1
+            code = None
+            name = None
+            look = j
+            while look < n and look < j + 8:
+                cand = lines[look].strip()
+                if cand.lower() in account_labels:
+                    i = look
+                    j = look + 1
+                    look = j
                     continue
-                bws = wb[bs_name]
-                b_name = bs_name.strip()
-                for r in range(7, 75):
-                    c_no = bws.cell(r, 1).value
-                    part = bws.cell(r, 2).value
-                    tot = bws.cell(r, 3).value
-                    ggst = bws.cell(r, 4).value
-                    cgst_val = bws.cell(r, 5).value
-                    igst_val = bws.cell(r, 6).value
-                    if c_no and part and (tot is not None or cgst_val is not None):
-                        c_str = str(c_no).strip()
-                        p_str = str(part).strip()
-                        if c_str in ['CODE NO.', 'PL', 'GL', 'TOTAL']:
-                            continue
-                        t_val = float(tot or 0.0)
-                        cgst_amt = float(cgst_val or (t_val * 0.09 if t_val else 0.0))
-                        sgst_amt = float(ggst or (t_val * 0.09 if t_val else 0.0))
-                        igst_amt = float(igst_val or 0.0)
-                        is_tax = (cgst_amt + sgst_amt + igst_amt) > 0 or t_val > 0
-                        if 'E-STAMPING' in p_str.upper() or 'EXEMPT' in p_str.upper():
-                            is_tax = False
-                        results.append({
-                            "branch": b_name,
-                            "financial_year": "2026-27",
-                            "month": "July",
-                            "gl_code": c_str,
-                            "particulars": p_str,
-                            "income_amount": t_val,
-                            "is_taxable": is_tax,
-                            "cgst": round(cgst_amt, 2),
-                            "sgst": round(sgst_amt, 2),
-                            "igst": round(igst_amt, 2),
-                            "refund_without_gst": 0.0,
-                            "refund_with_gst": 0.0,
-                            "filename": filename
-                        })
-            return results
-
-        for sname in wb.sheetnames:
-            ws = wb[sname]
-            branch = "Unassigned"
-            for b in INCOME_MASTER_BRANCHES:
-                if b.upper() in filename.upper() or b.upper() in sname.upper():
-                    branch = b
+                c, nm = _extract_ledger_code(cand)
+                if c:
+                    code = c
+                    name = nm
+                    if name is None:
+                        look2 = look + 1
+                        while look2 < n and lines[look2].strip() != 'Name':
+                            look2 += 1
+                            if look2 > look + 4:
+                                break
+                        if look2 < n and lines[look2].strip() == 'Name':
+                            nn = look2 + 1
+                            while nn < n and not lines[nn].strip():
+                                nn += 1
+                            if nn < n:
+                                name = lines[nn].strip()
                     break
-            
-            for r in range(1, 10):
-                line = " ".join([str(ws.cell(r, c).value or '') for c in range(1, 10)])
-                for b in INCOME_MASTER_BRANCHES:
-                    if b.upper() in line.upper():
-                        branch = b
-                        break
+                look += 1
 
-            gl_code = "3270"
-            m_fn = re.search(r'(?:PL|GL)?\s*(\d{4})', filename, re.IGNORECASE)
-            if m_fn:
-                gl_code = m_fn.group(1)
+            if code is None:
+                i += 1
+                continue
 
-            particulars = "Processing Charges"
-            meta = get_income_code_meta(gl_code)
-            if meta:
-                particulars = meta.get('particulars')
+            k = look
+            total_dr = total_cr = None
+            while k < n:
+                lk = lines[k].strip()
+                if lk.lower() in account_labels:
+                    break
+                if lk.lower() in total_labels:
+                    skip = total_labels[lk.lower()]
+                    nums = []
+                    kk = k + 1
+                    steps = 0
+                    while kk < n and len(nums) < 2 + skip and steps < 20:
+                        val = lines[kk].strip()
+                        if val.lower() in account_labels:
+                            break
+                        if _LEDGER_NUM_RE.match(val):
+                            nums.append(_ledger_num(val))
+                        kk += 1
+                        steps += 1
+                    nums = nums[skip:]
+                    if len(nums) >= 2:
+                        total_dr, total_cr = nums[0], nums[1]
+                    k = kk
+                    continue
+                k += 1
 
-            total_income = 0.0
-            for r in range(1, 100):
-                row_str = " ".join([str(ws.cell(r, c).value or '') for c in range(1, 8)])
-                if 'Closing Balance' in row_str:
-                    vals = [ws.cell(r, c).value for c in range(1, 8) if isinstance(ws.cell(r, c).value, (int, float))]
-                    if vals:
-                        total_income = float(vals[-1])
-                        break
-            
-            is_tax = True if not meta else meta.get('is_taxable', True)
-            results.append({
+            if total_dr is not None and total_cr is not None:
+                accounts.append({
+                    'gl_code': code, 'name': name, 'dr': total_dr, 'cr': total_cr,
+                    'net': round(total_cr - total_dr, 2),
+                })
+            i = k
+        else:
+            i += 1
+    return accounts
+
+
+def _scan_acctno_colon_format(lines):
+    n = len(lines)
+    accounts = []
+    i = 0
+    while i < n:
+        m = _ACCTNO_COLON_RE.match(lines[i].strip())
+        if m:
+            code, name = m.group(1), m.group(2).strip()
+            k = i + 1
+            total_dr = total_cr = None
+            while k < n:
+                lk = lines[k].strip()
+                if _ACCTNO_COLON_RE.match(lk):
+                    break
+                if lk.lower() in ('total :', 'total:'):
+                    nums = []
+                    kk = k + 1
+                    steps = 0
+                    while kk < n and len(nums) < 2 and steps < 20:
+                        val = lines[kk].strip()
+                        if _ACCTNO_COLON_RE.match(val):
+                            break
+                        if _LEDGER_NUM_RE.match(val):
+                            nums.append(_ledger_num(val))
+                        kk += 1
+                        steps += 1
+                    if len(nums) >= 2:
+                        total_dr, total_cr = nums[0], nums[1]
+                    k = kk
+                    continue
+                k += 1
+            if total_dr is not None and total_cr is not None:
+                accounts.append({
+                    'gl_code': code, 'name': name, 'dr': total_dr, 'cr': total_cr,
+                    'net': round(total_cr - total_dr, 2),
+                })
+            i = k
+        else:
+            i += 1
+    return accounts
+
+
+def _flatten_ledger_rows(rows_iter):
+    """Row-major cell flatten -> text lines, matching PDF-text conventions.
+    Numeric cells are re-rendered as "X.XX" so they match the same decimal
+    token pattern as PDF-extracted text (already literal "X.XX")."""
+    lines = []
+    for row in rows_iter:
+        for v in row:
+            if v is None or isinstance(v, bool):
+                continue
+            s = f'{v:.2f}' if isinstance(v, (int, float)) else str(v).strip()
+            if s == '':
+                continue
+            lines.append(s)
+    return lines
+
+
+def _detect_ledger_branch(text, filename):
+    for b in INCOME_MASTER_BRANCHES:
+        if b.upper() in filename.upper() or b.upper() in text.upper():
+            return b
+    for b in INCOME_MASTER_BRANCHES:
+        if re.search(r'\b' + re.escape(b) + r'\b', filename, re.IGNORECASE):
+            return b
+    return None
+
+
+def extract_raw_ledger_accounts_pdf(file_bytes, filename):
+    doc = pymupdf.open(stream=file_bytes, filetype="pdf")
+    text = ""
+    for page in doc:
+        text += page.get_text("text") + "\n"
+    lines = text.split('\n')
+    if re.search(r'Acct No\s*:', text, re.IGNORECASE):
+        accounts = _scan_acctno_colon_format(lines)
+    elif re.search(r'A/c No', text, re.IGNORECASE):
+        accounts = _scan_ledger_lines(lines, _LEDGER_XLSX_ACCOUNT_LABELS, _LEDGER_XLSX_TOTAL_LABELS)
+    else:
+        accounts = _scan_ledger_lines(lines, _LEDGER_PDF_ACCOUNT_LABELS, _LEDGER_PDF_TOTAL_LABELS)
+    branch = _detect_ledger_branch(text, filename)
+    for a in accounts:
+        a['branch'] = branch
+        a['filename'] = filename
+    return accounts
+
+
+def extract_raw_ledger_accounts_xlsx(file_bytes, filename):
+    wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
+    all_accounts = []
+    for sname in wb.sheetnames:
+        ws = wb[sname]
+        rows = [[ws.cell(r, c).value for c in range(1, ws.max_column + 1)]
+                for r in range(1, ws.max_row + 1)]
+        flat_text = " ".join(str(v) for row in rows for v in row if v)
+        if re.search(r'A/c No', flat_text, re.IGNORECASE):
+            lines = _flatten_ledger_rows(rows)
+            accounts = _scan_ledger_lines(lines, _LEDGER_XLSX_ACCOUNT_LABELS, _LEDGER_XLSX_TOTAL_LABELS)
+        elif re.search(r'Account\s*Id', flat_text, re.IGNORECASE):
+            lines = _flatten_ledger_rows(rows)
+            accounts = _scan_ledger_lines(lines, _LEDGER_PDF_ACCOUNT_LABELS, _LEDGER_PDF_TOTAL_LABELS)
+        else:
+            continue
+        branch = _detect_ledger_branch(flat_text, filename)
+        for a in accounts:
+            a['branch'] = branch
+            a['filename'] = filename
+        all_accounts.extend(accounts)
+    return all_accounts
+
+
+def extract_raw_ledger_accounts_xls(file_bytes, filename):
+    """Legacy .xls: either SpreadsheetML XML (Excel 2003 "XML Spreadsheet"
+    saved with a .xls extension) or true binary OLE2 .xls."""
+    head = file_bytes[:200]
+    all_accounts = []
+    if head.startswith(b'<?xml') or b'mso-application' in head:
+        import xml.etree.ElementTree as ET
+        ns = {'ss': 'urn:schemas-microsoft-com:office:spreadsheet'}
+        root = ET.fromstring(file_bytes)
+        sheets = []
+        for ws in root.findall('ss:Worksheet', ns):
+            table = ws.find('ss:Table', ns)
+            if table is None:
+                continue
+            rows = []
+            for row in table.findall('ss:Row', ns):
+                vals = [c.find('ss:Data', ns).text if c.find('ss:Data', ns) is not None else None
+                        for c in row.findall('ss:Cell', ns)]
+                rows.append(vals)
+            sheets.append(rows)
+    elif head.startswith(b'\xd0\xcf\x11\xe0'):
+        import xlrd
+        wb = xlrd.open_workbook(file_contents=file_bytes)
+        sheets = [[sh.row_values(r) for r in range(sh.nrows)] for sh in wb.sheets()]
+    else:
+        return []
+
+    for rows in sheets:
+        flat_text = " ".join(str(v) for row in rows for v in row if v not in (None, ''))
+        lines = _flatten_ledger_rows(rows)
+        if re.search(r'A/c No', flat_text, re.IGNORECASE):
+            accounts = _scan_ledger_lines(lines, _LEDGER_XLSX_ACCOUNT_LABELS, _LEDGER_XLSX_TOTAL_LABELS)
+        else:
+            accounts = _scan_ledger_lines(lines, _LEDGER_PDF_ACCOUNT_LABELS, _LEDGER_PDF_TOTAL_LABELS)
+        branch = _detect_ledger_branch(flat_text, filename)
+        for a in accounts:
+            a['branch'] = branch
+            a['filename'] = filename
+        all_accounts.extend(accounts)
+    return all_accounts
+
+
+def finalize_ledger_accounts(raw_accounts, financial_year='2026-27', month='July'):
+    """Group raw {branch, gl_code, dr, cr, net} accounts by branch, apply the
+    deferred/recognised-income reclassification rule (RECLASS_DEFERRED_TO_INCOME),
+    and return final entry dicts ready to save to income_entries."""
+    by_branch = collections.defaultdict(dict)
+    for a in raw_accounts:
+        if not a.get('branch') or not a.get('gl_code'):
+            continue
+        code_map = by_branch[a['branch']]
+        if a['gl_code'] not in code_map:
+            code_map[a['gl_code']] = a
+        # else: same code already seen for this branch in this upload batch -
+        # keep the first one found rather than summing, so the same account
+        # appearing in more than one uploaded file can't double-count.
+
+    entries = []
+    for branch, code_map in by_branch.items():
+        finals = {}
+        for code, a in code_map.items():
+            finals[code] = a['cr'] if code in RECLASS_DEFERRED_TO_INCOME else a['net']
+        for deferred_code, income_code in RECLASS_DEFERRED_TO_INCOME.items():
+            if deferred_code in code_map and income_code in finals:
+                finals[income_code] = round(finals[income_code] - code_map[deferred_code]['dr'], 2)
+
+        for code, amount in finals.items():
+            a = code_map[code]
+            meta = get_income_code_meta(code)
+            particulars = meta.get('particulars') if meta else (a.get('name') or 'Bank Service Income')
+            is_taxable = meta.get('is_taxable', True) if meta else True
+            rate = meta.get('gst_rate', 18.0) if meta else 18.0
+            cgst = round(amount * (rate / 200.0), 2) if is_taxable else 0.0
+            entries.append({
                 "branch": branch,
-                "financial_year": "2026-27",
-                "month": "July",
-                "gl_code": gl_code,
+                "financial_year": financial_year,
+                "month": month,
+                "gl_code": code,
                 "particulars": particulars,
-                "income_amount": total_income,
-                "is_taxable": is_tax,
-                "cgst": round(total_income * 0.09, 2) if is_tax else 0.0,
-                "sgst": round(total_income * 0.09, 2) if is_tax else 0.0,
+                "income_amount": round(amount, 2),
+                "is_taxable": is_taxable,
+                "cgst": cgst,
+                "sgst": cgst,
                 "igst": 0.0,
                 "refund_without_gst": 0.0,
                 "refund_with_gst": 0.0,
-                "filename": filename
+                "filename": a.get('filename', 'upload'),
             })
-    except Exception as e:
-        print(f"Error parsing income Excel {filename}: {e}")
+    return entries
+
+
+def parse_full_workbook_excel(file_bytes, filename):
+    """Bulk re-import of a complete branch-wise-calculation workbook (has its
+    own 'SUMMARY SHEET GST' tab) - reads each branch tab's own columns
+    directly rather than treating it as a raw ledger statement."""
+    results = []
+    wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
+    for bs_name in wb.sheetnames:
+        if bs_name in ['SUMMARY SHEET GST', 'Notes', 'GSTN CANCELLTED', 'Sheet1'] or '1' in bs_name:
+            continue
+        bws = wb[bs_name]
+        b_name = bs_name.strip()
+        for r in range(7, 75):
+            c_no = bws.cell(r, 1).value
+            part = bws.cell(r, 2).value
+            tot = bws.cell(r, 3).value
+            ggst = bws.cell(r, 4).value
+            cgst_val = bws.cell(r, 5).value
+            igst_val = bws.cell(r, 6).value
+            if c_no and part and (tot is not None or cgst_val is not None):
+                c_str = str(c_no).strip()
+                p_str = str(part).strip()
+                if c_str in ['CODE NO.', 'PL', 'GL', 'TOTAL']:
+                    continue
+                t_val = float(tot or 0.0)
+                cgst_amt = float(cgst_val or (t_val * 0.09 if t_val else 0.0))
+                sgst_amt = float(ggst or (t_val * 0.09 if t_val else 0.0))
+                igst_amt = float(igst_val or 0.0)
+                is_tax = (cgst_amt + sgst_amt + igst_amt) > 0 or t_val > 0
+                if 'E-STAMPING' in p_str.upper() or 'EXEMPT' in p_str.upper():
+                    is_tax = False
+                results.append({
+                    "branch": b_name,
+                    "financial_year": "2026-27",
+                    "month": "July",
+                    "gl_code": c_str,
+                    "particulars": p_str,
+                    "income_amount": t_val,
+                    "is_taxable": is_tax,
+                    "cgst": round(cgst_amt, 2),
+                    "sgst": round(sgst_amt, 2),
+                    "igst": round(igst_amt, 2),
+                    "refund_without_gst": 0.0,
+                    "refund_with_gst": 0.0,
+                    "filename": filename
+                })
     return results
 
 @app.route('/income')
@@ -4544,8 +4756,28 @@ def upload_income_api():
     if not files or all(f.filename == '' for f in files):
         return jsonify({"error": "No files selected for income upload"}), 400
 
-    parsed_entries = []
-    
+    parsed_entries = []  # already-finalized entries (bulk full-workbook uploads)
+    raw_accounts = []    # raw {branch, gl_code, dr, cr, net, filename, file_data} - needs finalize_ledger_accounts
+
+    def is_full_workbook_xlsx(fbytes):
+        try:
+            wb = openpyxl.load_workbook(io.BytesIO(fbytes), data_only=True, read_only=True)
+            return 'SUMMARY SHEET GST' in wb.sheetnames
+        except Exception:
+            return False
+
+    def process_one(ext, fbytes, fname):
+        """Returns (finalized_entries, raw_accounts) - exactly one is non-empty."""
+        if ext == 'pdf':
+            return [], extract_raw_ledger_accounts_pdf(fbytes, fname)
+        elif ext == 'xlsx':
+            if is_full_workbook_xlsx(fbytes):
+                return parse_full_workbook_excel(fbytes, fname), []
+            return [], extract_raw_ledger_accounts_xlsx(fbytes, fname)
+        elif ext == 'xls':
+            return [], extract_raw_ledger_accounts_xls(fbytes, fname)
+        return [], []
+
     for f in files:
         if not f.filename:
             continue
@@ -4553,33 +4785,47 @@ def upload_income_api():
         ext = fname.lower().split('.')[-1] if '.' in fname else ''
         fbytes = f.read()
 
-        if ext == 'pdf':
-            entries = parse_income_pdf_bytes(fbytes, fname)
-            for item in entries:
+        if ext in ('pdf', 'xlsx', 'xls'):
+            try:
+                finalized, raw = process_one(ext, fbytes, fname)
+            except Exception as pe:
+                print(f"Error parsing income file {fname}: {pe}")
+                continue
+            for item in finalized:
                 item['file_data'] = fbytes
-            parsed_entries.extend(entries)
-        elif ext in ['xlsx', 'xls', 'csv']:
-            entries = parse_income_excel_bytes(fbytes, fname)
-            for item in entries:
-                item['file_data'] = fbytes
-            parsed_entries.extend(entries)
+            parsed_entries.extend(finalized)
+            for a in raw:
+                a['file_data'] = fbytes
+            raw_accounts.extend(raw)
         elif ext == 'zip':
             import zipfile
             try:
                 with zipfile.ZipFile(io.BytesIO(fbytes)) as z:
                     for zname in z.namelist():
                         zext = zname.lower().split('.')[-1] if '.' in zname else ''
-                        if zext in ['pdf', 'xlsx', 'xls', 'csv'] and not zname.startswith('__MACOSX'):
+                        if zext in ('pdf', 'xlsx', 'xls') and not zname.startswith('__MACOSX'):
                             zbytes = z.read(zname)
-                            if zext == 'pdf':
-                                z_items = parse_income_pdf_bytes(zbytes, zname)
-                            else:
-                                z_items = parse_income_excel_bytes(zbytes, zname)
-                            for item in z_items:
+                            try:
+                                finalized, raw = process_one(zext, zbytes, zname)
+                            except Exception as pe:
+                                print(f"Error parsing {zname} in {fname}: {pe}")
+                                continue
+                            for item in finalized:
                                 item['file_data'] = zbytes
-                            parsed_entries.extend(z_items)
+                            parsed_entries.extend(finalized)
+                            for a in raw:
+                                a['file_data'] = zbytes
+                            raw_accounts.extend(raw)
             except Exception as ze:
                 print(f"Error reading zip file {fname}: {ze}")
+
+    finalized_from_raw = finalize_ledger_accounts(raw_accounts)
+    file_data_by_key = {}
+    for a in raw_accounts:
+        file_data_by_key.setdefault((a.get('branch'), a.get('gl_code')), a.get('file_data'))
+    for e in finalized_from_raw:
+        e['file_data'] = file_data_by_key.get((e['branch'], e['gl_code']))
+    parsed_entries.extend(finalized_from_raw)
 
     saved_count = 0
     try:
@@ -4831,6 +5077,15 @@ def delete_income_batch():
 @login_required
 def export_income_working_sheet():
     import collections, openpyxl, io, re
+    from openpyxl.cell.cell import MergedCell
+
+    def _set(ws, r, c, value):
+        """Write a cell, silently skipping merged-range member cells (only
+        the top-left cell of a merge is writable in openpyxl)."""
+        cell = ws.cell(r, c)
+        if isinstance(cell, MergedCell):
+            return
+        cell.value = value
 
     month = request.args.get('month', 'July')
     fy = request.args.get('financial_year', '2026-27')
@@ -4874,142 +5129,216 @@ def export_income_working_sheet():
                             pass
 
                 # Update branch sheets with uploaded statement numbers
+                grand_income = grand_ggst = grand_cgst = grand_igst = 0.0
+                grand_ref_wo = grand_ref_w = 0.0
+                code_row_re = re.compile(r'^(?:PL|GL)?\s*(\d{3,6})$', re.IGNORECASE)
+                code_level = collections.defaultdict(lambda: {
+                    'inc': 0.0, 'sgst': 0.0, 'cgst': 0.0, 'igst': 0.0, 'refwo': 0.0, 'refw': 0.0,
+                })
+                # Sheet1 is titled "ALL BRANCHES EXCEPT HO AND DEMAT" - keep a
+                # separate rollup that excludes those two for it specifically.
+                s1_code_level = collections.defaultdict(lambda: {
+                    'inc': 0.0, 'sgst': 0.0, 'cgst': 0.0, 'igst': 0.0, 'refwo': 0.0, 'refw': 0.0,
+                })
+                s1_grand = {'inc': 0.0, 'sgst': 0.0, 'cgst': 0.0, 'igst': 0.0, 'refwo': 0.0}
+
                 for sname in wb.sheetnames:
                     if sname in ['SUMMARY SHEET GST', 'Notes', 'GSTN CANCELLTED', 'Sheet1'] or sname.endswith('1'):
                         continue
 
                     ws_b = wb[sname]
                     b_norm = re.sub(r'[^A-Z0-9]', '', sname.upper().strip())
-                    
+
                     matched_dict = None
                     for b_key in branch_map:
                         if b_key == b_norm or b_key in b_norm or b_norm in b_key:
                             matched_dict = branch_map[b_key]
                             break
+                    matched_dict = matched_dict or {}
+                    total_row = {'HO': 57, 'DEMAT': 31}.get(sname.strip().upper(), 62)
 
-                    if matched_dict:
-                        b_tot_inc = 0.0
-                        b_tot_ggst = 0.0
-                        b_tot_cgst = 0.0
-                        b_tot_igst = 0.0
-                        b_tot_ref_wo = 0.0
-                        b_tot_ref_w = 0.0
+                    b_tot_inc = 0.0
+                    b_tot_ggst = 0.0
+                    b_tot_cgst = 0.0
+                    b_tot_igst = 0.0
+                    b_tot_ref_wo = 0.0
+                    b_tot_ref_w = 0.0
 
-                        for r in range(7, 62):
-                            c_val = ws_b.cell(r, 1).value
-                            if c_val is not None:
-                                c_str = str(c_val).strip()
-                                if c_str in matched_dict:
-                                    item = matched_dict[c_str]
-                                    inc_amt = float(item.get('income_amount') or 0.0)
-                                    sgst_amt = float(item.get('sgst') or 0.0)
-                                    cgst_amt = float(item.get('cgst') or 0.0)
-                                    igst_amt = float(item.get('igst') or 0.0)
-                                    ref_wo = float(item.get('refund_without_gst') or 0.0)
-                                    ref_w = float(item.get('refund_with_gst') or 0.0)
+                    for r in range(7, total_row):
+                        c_val = ws_b.cell(r, 1).value
+                        if c_val is None:
+                            continue
+                        c_str = str(c_val).strip()
+                        m_code = code_row_re.match(c_str)
+                        if not m_code:
+                            continue  # section-header / label row, not a GL-code data row
+                        norm_code = m_code.group(1)
 
-                                    ws_b.cell(r, 3, value=inc_amt)
-                                    ws_b.cell(r, 4, value=sgst_amt)
-                                    ws_b.cell(r, 5, value=cgst_amt)
-                                    if igst_amt > 0:
-                                        ws_b.cell(r, 6, value=igst_amt)
-                                    if ref_wo > 0:
-                                        ws_b.cell(r, 7, value=ref_wo)
-                                    if ref_w > 0:
-                                        ws_b.cell(r, 8, value=ref_w)
+                        item = matched_dict.get(c_str) or matched_dict.get(norm_code)
+                        if item:
+                            inc_amt = float(item.get('income_amount') or 0.0)
+                            sgst_amt = float(item.get('sgst') or 0.0)
+                            cgst_amt = float(item.get('cgst') or 0.0)
+                            igst_amt = float(item.get('igst') or 0.0)
+                            ref_wo = float(item.get('refund_without_gst') or 0.0)
+                            ref_w = float(item.get('refund_with_gst') or 0.0)
+                        else:
+                            # No ingested data for this code - write zero rather than
+                            # leaving whatever the template happened to already hold.
+                            inc_amt = sgst_amt = cgst_amt = igst_amt = ref_wo = ref_w = 0.0
 
-                                    b_tot_inc += inc_amt
-                                    b_tot_ggst += sgst_amt
-                                    b_tot_cgst += cgst_amt
-                                    b_tot_igst += igst_amt
-                                    b_tot_ref_wo += ref_wo
-                                    b_tot_ref_w += ref_w
+                        _set(ws_b, r, 3, inc_amt)
+                        _set(ws_b, r, 4, sgst_amt)
+                        _set(ws_b, r, 5, cgst_amt)
+                        _set(ws_b, r, 6, igst_amt if igst_amt else None)
+                        _set(ws_b, r, 7, ref_wo if ref_wo else None)
+                        _set(ws_b, r, 8, ref_w if ref_w else None)
 
-                        if b_tot_inc > 0:
-                            ws_b.cell(62, 3, value=b_tot_inc)
-                            ws_b.cell(62, 4, value=b_tot_ggst)
-                            ws_b.cell(62, 5, value=b_tot_cgst)
-                            if b_tot_igst > 0:
-                                ws_b.cell(62, 6, value=b_tot_igst)
-                            if b_tot_ref_wo > 0:
-                                ws_b.cell(62, 7, value=b_tot_ref_wo)
-                            if b_tot_ref_w > 0:
-                                ws_b.cell(62, 8, value=b_tot_ref_w)
+                        b_tot_inc += inc_amt
+                        b_tot_ggst += sgst_amt
+                        b_tot_cgst += cgst_amt
+                        b_tot_igst += igst_amt
+                        b_tot_ref_wo += ref_wo
+                        b_tot_ref_w += ref_w
 
-                # Ensure SUMMARY SHEET GST Section (1) and Section (2) always have complete figures
+                        cl = code_level[norm_code]
+                        cl['inc'] += inc_amt
+                        cl['sgst'] += sgst_amt
+                        cl['cgst'] += cgst_amt
+                        cl['igst'] += igst_amt
+                        cl['refwo'] += ref_wo
+                        cl['refw'] += ref_w
+
+                        if sname.strip().upper() not in ('HO', 'DEMAT'):
+                            s1cl = s1_code_level[norm_code]
+                            s1cl['inc'] += inc_amt
+                            s1cl['sgst'] += sgst_amt
+                            s1cl['cgst'] += cgst_amt
+                            s1cl['igst'] += igst_amt
+                            s1cl['refwo'] += ref_wo
+                            s1cl['refw'] += ref_w
+
+                    _set(ws_b, total_row, 3, b_tot_inc)
+                    _set(ws_b, total_row, 4, b_tot_ggst)
+                    _set(ws_b, total_row, 5, b_tot_cgst)
+                    _set(ws_b, total_row, 6, b_tot_igst if b_tot_igst else None)
+                    _set(ws_b, total_row, 7, b_tot_ref_wo if b_tot_ref_wo else None)
+                    _set(ws_b, total_row, 8, b_tot_ref_w if b_tot_ref_w else None)
+
+                    grand_income += b_tot_inc
+                    grand_ggst += b_tot_ggst
+                    grand_cgst += b_tot_cgst
+                    grand_igst += b_tot_igst
+                    grand_ref_wo += b_tot_ref_wo
+                    grand_ref_w += b_tot_ref_w
+
+                    if sname.strip().upper() not in ('HO', 'DEMAT'):
+                        s1_grand['inc'] += b_tot_inc
+                        s1_grand['sgst'] += b_tot_ggst
+                        s1_grand['cgst'] += b_tot_cgst
+                        s1_grand['igst'] += b_tot_igst
+                        s1_grand['refwo'] += b_tot_ref_wo
+
+                if 'Sheet1' in wb.sheetnames:
+                    # Sheet1 is a bank-wide (all branches except HO & DEMAT), GL-code
+                    # level roll-up - the same code_level totals accumulated above,
+                    # written the same zero-if-absent way as each branch sheet so no
+                    # template-contaminated figure can survive.
+                    ws_s1 = wb['Sheet1']
+                    s1_total = {'inc': 0.0, 'sgst': 0.0, 'cgst': 0.0, 'igst': 0.0, 'refwo': 0.0}
+                    for r in range(9, 68):
+                        c_val = ws_s1.cell(r, 1).value
+                        if c_val is None:
+                            continue
+                        m_code = code_row_re.match(str(c_val).strip())
+                        if not m_code:
+                            continue
+                        cl = s1_code_level.get(m_code.group(1))
+                        inc_amt = cl['inc'] if cl else 0.0
+                        sgst_amt = cl['sgst'] if cl else 0.0
+                        cgst_amt = cl['cgst'] if cl else 0.0
+                        igst_amt = cl['igst'] if cl else 0.0
+                        refwo_amt = cl['refwo'] if cl else 0.0
+                        _set(ws_s1, r, 3, inc_amt)
+                        _set(ws_s1, r, 4, sgst_amt)
+                        _set(ws_s1, r, 5, cgst_amt)
+                        _set(ws_s1, r, 6, igst_amt if igst_amt else None)
+                        _set(ws_s1, r, 7, refwo_amt if refwo_amt else None)
+                        s1_total['inc'] += inc_amt
+                        s1_total['sgst'] += sgst_amt
+                        s1_total['cgst'] += cgst_amt
+                        s1_total['igst'] += igst_amt
+                        s1_total['refwo'] += refwo_amt
+
+                    _set(ws_s1, 64, 3, s1_total['inc'])
+                    _set(ws_s1, 64, 4, s1_total['sgst'])
+                    _set(ws_s1, 64, 5, s1_total['cgst'])
+                    _set(ws_s1, 64, 6, s1_total['igst'] if s1_total['igst'] else None)
+                    _set(ws_s1, 64, 7, s1_total['refwo'] if s1_total['refwo'] else None)
+
+                    for rr in range(73, 76):
+                        for cc in range(3, 8):
+                            _set(ws_s1, rr, cc, None)
+                    _set(ws_s1, 73, 3, s1_grand['inc'])
+                    _set(ws_s1, 73, 4, s1_grand['sgst'])
+                    _set(ws_s1, 73, 5, s1_grand['cgst'])
+                    _set(ws_s1, 73, 6, s1_grand['igst'])
+                    ref_gst_s1 = round(s1_grand['refwo'] * 0.09, 2)
+                    _set(ws_s1, 74, 3, s1_grand['refwo'])
+                    _set(ws_s1, 74, 4, ref_gst_s1)
+                    _set(ws_s1, 74, 5, ref_gst_s1)
+                    _set(ws_s1, 75, 3, s1_grand['inc'] + s1_grand['refwo'])
+                    _set(ws_s1, 75, 4, s1_grand['sgst'] + ref_gst_s1)
+                    _set(ws_s1, 75, 5, s1_grand['cgst'] + ref_gst_s1)
+
+                # SUMMARY SHEET GST - computed from real ingested data, not hardcoded.
                 if 'SUMMARY SHEET GST' in wb.sheetnames:
                     ws_sum = wb['SUMMARY SHEET GST']
-                    # Section 1: Non-Taxable / Exempt Incomes
-                    ws_sum.cell(7, 4, value=777178818.30)  # Income as on 31/07/2026
-                    ws_sum.cell(7, 5, value=579848249.88)  # Income as on 30/06/2026
-                    ws_sum.cell(7, 6, value=197330568.42)  # Diff (Current month)
 
-                    ws_sum.cell(10, 4, value=1541000.00)
-                    ws_sum.cell(10, 5, value=881000.17)
-                    ws_sum.cell(10, 6, value=659999.83)
+                    # The master template's SUMMARY SHEET GST cells were previously
+                    # pre-filled with the CA's golden figures as literal numbers, not
+                    # computed. Clear all of them first so nothing stale survives
+                    # under the genuinely-computed values written below.
+                    for rr in range(7, 33):
+                        for cc in range(3, 10):
+                            _set(ws_sum, rr, cc, None)
 
-                    ws_sum.cell(14, 4, value=33000.00)
-                    ws_sum.cell(14, 5, value=23000.00)
-                    ws_sum.cell(14, 6, value=10000.00)
+                    # Section 1: Non-Taxable / Exempt Income (rows 7-21, "as on"
+                    # columns D/E/F). These are bank-wide ledger/trial-balance items
+                    # (interest income exempted, dividend, profit on sale of
+                    # investments, provisions written back, etc.) - this app has no
+                    # source document for them (they aren't branch commission GL
+                    # codes), so only the total (row 21) is summed from any
+                    # income_entries explicitly marked is_taxable=False, rather than
+                    # left as stale copied figures. Reads 0 until such entries exist.
+                    exempt_total = 0.0
+                    for e in entries:
+                        if not e.get('is_taxable'):
+                            exempt_total += float(e.get('income_amount') or 0.0)
+                    _set(ws_sum, 21, 4, exempt_total)
 
-                    ws_sum.cell(18, 4, value=42512986.88)
-                    ws_sum.cell(18, 5, value=44652444.50)
-                    ws_sum.cell(18, 6, value=-2139457.62)
+                    # Section 2: Taxable income, rolled up from the branch totals
+                    # actually computed above - not copied from the golden file.
+                    _set(ws_sum, 27, 3, grand_income)
+                    _set(ws_sum, 27, 4, grand_ggst)
+                    _set(ws_sum, 27, 5, grand_cgst)
+                    _set(ws_sum, 27, 6, grand_igst)
+                    _set(ws_sum, 27, 7, grand_ggst + grand_cgst + grand_igst)
 
-                    ws_sum.cell(19, 4, value=264000.00)
-                    ws_sum.cell(19, 5, value=0.00)
-                    ws_sum.cell(19, 6, value=264000.00)
+                    _set(ws_sum, 29, 3, grand_ref_wo)
+                    ref_gst = round(grand_ref_wo * 0.09, 2)
+                    _set(ws_sum, 29, 4, ref_gst)
+                    _set(ws_sum, 29, 5, ref_gst)
+                    _set(ws_sum, 29, 7, ref_gst * 2)
 
-                    # Row 21: Total Exempt Income
-                    ws_sum.cell(21, 4, value=821529805.18)
-                    ws_sum.cell(21, 5, value=625404694.55)
-                    ws_sum.cell(21, 6, value=196125110.63)
-
-                    # Section 2: Taxable Income
-                    # Row 27: (1) INCOME AS PER LEDGERWISE CALCULATION
-                    ws_sum.cell(27, 3, value=8444038.55)
-                    ws_sum.cell(27, 4, value=740049.90)
-                    ws_sum.cell(27, 5, value=740049.90)
-                    ws_sum.cell(27, 6, value=39832.89)
-                    ws_sum.cell(27, 7, value=1519932.70)
-                    ws_sum.cell(27, 8, value=1519926.94)
-                    ws_sum.cell(27, 9, value=5.76)
-
-                    # Row 28: Sale of asset
-                    ws_sum.cell(28, 3, value=0.00)
-                    ws_sum.cell(28, 4, value=0.00)
-                    ws_sum.cell(28, 5, value=0.00)
-                    ws_sum.cell(28, 6, value=0.00)
-                    ws_sum.cell(28, 7, value=0.00)
-                    ws_sum.cell(28, 8, value=0.00)
-                    ws_sum.cell(28, 9, value=0.00)
-
-                    # Row 29: (3) REFUND GIVEN BUT GST REFUND NOT GIVEN
-                    ws_sum.cell(29, 3, value=149127.00)
-                    ws_sum.cell(29, 4, value=13421.43)
-                    ws_sum.cell(29, 5, value=13421.43)
-                    ws_sum.cell(29, 6, value=0.00)
-                    ws_sum.cell(29, 7, value=26842.86)
-                    ws_sum.cell(29, 8, value=26842.86)
-                    ws_sum.cell(29, 9, value=0.00)
-
-                    # Row 30: TOTAL
-                    ws_sum.cell(30, 3, value=8593165.55)
-                    ws_sum.cell(30, 4, value=753471.33)
-                    ws_sum.cell(30, 5, value=753471.33)
-                    ws_sum.cell(30, 6, value=39832.89)
-                    ws_sum.cell(30, 7, value=1546775.56)
-                    ws_sum.cell(30, 8, value=1546769.80)
-
-                    # Row 31: PAYABLE AS PER LEDGER
-                    ws_sum.cell(31, 4, value=749932.01)
-                    ws_sum.cell(31, 5, value=749932.01)
-                    ws_sum.cell(31, 6, value=39833.60)
-
-                    # Row 32: DIFFERENCE TO BE TRF AS EXPS
-                    ws_sum.cell(32, 4, value=3539.32)
-                    ws_sum.cell(32, 5, value=3539.32)
-                    ws_sum.cell(32, 6, value=0.00)
+                    tot_inc = grand_income + grand_ref_wo
+                    tot_ggst = grand_ggst + ref_gst
+                    tot_cgst = grand_cgst + ref_gst
+                    _set(ws_sum, 30, 3, tot_inc)
+                    _set(ws_sum, 30, 4, tot_ggst)
+                    _set(ws_sum, 30, 5, tot_cgst)
+                    _set(ws_sum, 30, 6, grand_igst)
+                    _set(ws_sum, 30, 7, tot_ggst + tot_cgst + grand_igst)
 
                 buf = io.BytesIO()
                 wb.save(buf)

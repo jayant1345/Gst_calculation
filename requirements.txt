@@ -3,5 +3,6 @@ pandas
 openpyxl
 pypdf
 pymupdf
+xlrd
 python-dotenv
 psycopg2-binary
