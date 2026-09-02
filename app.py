@@ -4334,33 +4334,80 @@ def filing_history():
 def get_filing_history():
     user_id = session['user_id']
     is_admin = is_admin_user()
+
+    action_filter = request.args.get('action', '').strip()
+    search = request.args.get('search', '').strip()
+    try:
+        page = max(1, int(request.args.get('page', 1)))
+    except (TypeError, ValueError):
+        page = 1
+    try:
+        page_size = int(request.args.get('page_size', 100))
+    except (TypeError, ValueError):
+        page_size = 100
+    page_size = min(500, max(25, page_size))  # nothing is ever deleted from
+    # activity_log - the old LIMIT 200 was only ever a display cap on this API
+    # response, not a retention limit. Paging + filtering here is what lets
+    # the CA actually reach older entries instead of always seeing the same
+    # cut-off "last 200" slice.
+    offset = (page - 1) * page_size
+
+    where_clauses = []
+    params = []
+    if not is_admin:
+        where_clauses.append('activity_log.user_id = %s')
+        params.append(user_id)
+    if action_filter and action_filter != 'ALL':
+        where_clauses.append('activity_log.action = %s')
+        params.append(action_filter)
+    if search:
+        where_clauses.append('activity_log.description ILIKE %s')
+        params.append(f'%{search}%')
+    where_sql = ('WHERE ' + ' AND '.join(where_clauses)) if where_clauses else ''
+
     try:
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+        cur.execute(f'SELECT COUNT(*) as total FROM activity_log {where_sql}', params)
+        total_count = cur.fetchone()['total']
+
         if is_admin:
-            cur.execute('''
+            cur.execute(f'''
                 SELECT activity_log.id, action, description, financial_year, month, record_count,
                        activity_log.created_at, users.username
                 FROM activity_log
                 JOIN users ON users.id = activity_log.user_id
+                {where_sql}
                 ORDER BY activity_log.created_at DESC
-                LIMIT 200
-            ''')
+                LIMIT %s OFFSET %s
+            ''', params + [page_size, offset])
         else:
-            cur.execute('''
+            cur.execute(f'''
                 SELECT id, action, description, financial_year, month, record_count, created_at
                 FROM activity_log
-                WHERE user_id = %s
+                {where_sql}
                 ORDER BY created_at DESC
-                LIMIT 200
-            ''', (user_id,))
+                LIMIT %s OFFSET %s
+            ''', params + [page_size, offset])
         rows = cur.fetchall()
+
+        cur.execute('SELECT DISTINCT action FROM activity_log ORDER BY action ASC')
+        available_actions = [r['action'] for r in cur.fetchall()]
+
         cur.close()
         conn.close()
         for r in rows:
             if r.get('created_at'):
                 r['created_at'] = r['created_at'].isoformat()
-        return jsonify({"success": True, "history": rows})
+        return jsonify({
+            "success": True,
+            "history": rows,
+            "total_count": total_count,
+            "page": page,
+            "page_size": page_size,
+            "available_actions": available_actions,
+        })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

@@ -153,7 +153,14 @@
             <section class="dashboard-panel">
                 <div class="panel-header">
                     <h2><i class="fa-solid fa-clock-rotate-left"></i> Activity Log</h2>
-                    <p class="panel-subtitle">Last 200 actions{% if is_admin %} across all users{% endif %}</p>
+                    <p class="panel-subtitle">Every action is kept permanently{% if is_admin %} across all users{% endif %} - filter or page through below</p>
+                </div>
+
+                <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 14px;">
+                    <select id="history-action-filter" style="padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border-color); font-size: 13px;">
+                        <option value="ALL">All Actions</option>
+                    </select>
+                    <input type="text" id="history-search" placeholder="Search description (e.g. GL code, branch, filename)..." style="padding: 8px 14px; border-radius: 8px; border: 1px solid var(--border-color); font-size: 13px; width: 280px; flex: 1; min-width: 200px;">
                 </div>
 
                 <div id="history-status" class="section-desc" style="padding: 12px 0;">Loading activity log&hellip;</div>
@@ -175,6 +182,18 @@
                         </thead>
                         <tbody id="history-table-body"></tbody>
                     </table>
+                </div>
+
+                <div id="history-pagination" style="display:none; justify-content: space-between; align-items: center; margin-top: 14px; flex-wrap: wrap; gap: 10px;">
+                    <span id="history-pagination-label" style="font-size: 12.5px; color: #64748b;"></span>
+                    <div style="display: flex; gap: 8px;">
+                        <button type="button" id="history-prev-btn" class="btn-secondary" style="padding: 6px 14px; border-radius: 8px; font-size: 12.5px; font-weight: 700; border: 1px solid var(--border-color); background: #fff; cursor: pointer;">
+                            <i class="fa-solid fa-chevron-left"></i> Newer
+                        </button>
+                        <button type="button" id="history-next-btn" class="btn-secondary" style="padding: 6px 14px; border-radius: 8px; font-size: 12.5px; font-weight: 700; border: 1px solid var(--border-color); background: #fff; cursor: pointer;">
+                            Older <i class="fa-solid fa-chevron-right"></i>
+                        </button>
+                    </div>
                 </div>
             </section>
 

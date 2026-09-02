@@ -21,8 +21,19 @@
         gstr2b_deleted: { label: 'GSTR-2B Deleted', badge: 'badge-red', icon: 'fa-trash-can' },
         export_excel: { label: 'Excel Export', badge: 'badge-green', icon: 'fa-file-excel' },
         export_annual_report: { label: 'Annual Report Export', badge: 'badge-green', icon: 'fa-file-excel' },
-        export_vendor_discrepancy: { label: 'Vendor Discrepancy Export', badge: 'badge-yellow', icon: 'fa-file-excel' }
+        export_vendor_discrepancy: { label: 'Vendor Discrepancy Export', badge: 'badge-yellow', icon: 'fa-file-excel' },
+        ADD_GL_CODE: { label: 'GL/PL Code Added', badge: 'badge-green', icon: 'fa-list-check' },
+        EDIT_GL_CODE: { label: 'GL/PL Code Edited', badge: 'badge-yellow', icon: 'fa-list-check' },
+        DELETE_GL_CODE: { label: 'GL/PL Code Deleted', badge: 'badge-red', icon: 'fa-trash-can' },
+        CREATE_USER: { label: 'User Created', badge: 'badge-blue', icon: 'fa-user-plus' },
+        CHANGE_USER_ROLE: { label: 'User Role Changed', badge: 'badge-yellow', icon: 'fa-user-gear' },
+        RESET_PASSWORD: { label: 'Password Reset', badge: 'badge-yellow', icon: 'fa-key' },
+        DELETE_USER: { label: 'User Deleted', badge: 'badge-red', icon: 'fa-user-xmark' },
+        UPDATE_AVATAR: { label: 'Avatar Updated', badge: 'badge-blue', icon: 'fa-image' }
     };
+
+    var historyState = { page: 1, pageSize: 100, action: 'ALL', search: '', totalCount: 0, actionsPopulated: false };
+    var searchDebounceTimer = null;
 
     function formatDateTime(iso) {
         if (!iso) return '-';
@@ -67,20 +78,73 @@
         tbody.innerHTML = rows.join('');
     }
 
+    function actionDisplayLabel(action) {
+        return (ACTION_LABELS[action] && ACTION_LABELS[action].label) || action;
+    }
+
+    function populateActionFilter(availableActions) {
+        var select = document.getElementById('history-action-filter');
+        if (!select || historyState.actionsPopulated) return;
+        historyState.actionsPopulated = true;
+        (availableActions || []).forEach(function (action) {
+            var opt = document.createElement('option');
+            opt.value = action;
+            opt.textContent = actionDisplayLabel(action);
+            select.appendChild(opt);
+        });
+    }
+
+    function renderPagination() {
+        var wrap = document.getElementById('history-pagination');
+        var label = document.getElementById('history-pagination-label');
+        var prevBtn = document.getElementById('history-prev-btn');
+        var nextBtn = document.getElementById('history-next-btn');
+        var total = historyState.totalCount;
+
+        if (total === 0) {
+            wrap.style.display = 'none';
+            return;
+        }
+        wrap.style.display = 'flex';
+
+        var start = (historyState.page - 1) * historyState.pageSize + 1;
+        var end = Math.min(total, historyState.page * historyState.pageSize);
+        label.textContent = 'Showing ' + start + '–' + end + ' of ' + total + ' actions';
+
+        prevBtn.disabled = historyState.page <= 1;
+        prevBtn.style.opacity = prevBtn.disabled ? '0.5' : '1';
+        prevBtn.style.cursor = prevBtn.disabled ? 'not-allowed' : 'pointer';
+
+        var hasMore = end < total;
+        nextBtn.disabled = !hasMore;
+        nextBtn.style.opacity = nextBtn.disabled ? '0.5' : '1';
+        nextBtn.style.cursor = nextBtn.disabled ? 'not-allowed' : 'pointer';
+    }
+
     function loadHistory() {
         var statusEl = document.getElementById('history-status');
         var wrapperEl = document.getElementById('history-table-wrapper');
         var table = document.getElementById('history-table');
         var isAdmin = table.querySelectorAll('thead th').length === 7;
 
-        fetch('/api/filing-history')
+        var params = new URLSearchParams({
+            page: historyState.page,
+            page_size: historyState.pageSize,
+            action: historyState.action,
+            search: historyState.search
+        });
+
+        fetch('/api/filing-history?' + params.toString())
             .then(function (res) { return res.json(); })
             .then(function (data) {
                 if (data.error) {
                     statusEl.textContent = 'Failed to load activity log: ' + data.error;
                     return;
                 }
+                populateActionFilter(data.available_actions);
+                historyState.totalCount = data.total_count || 0;
                 renderRows(data.history || [], isAdmin);
+                renderPagination();
                 statusEl.style.display = 'none';
                 wrapperEl.style.display = '';
             })
@@ -184,6 +248,41 @@
     }
 
     document.addEventListener('DOMContentLoaded', function () {
+        var actionFilter = document.getElementById('history-action-filter');
+        var searchInput = document.getElementById('history-search');
+        var prevBtn = document.getElementById('history-prev-btn');
+        var nextBtn = document.getElementById('history-next-btn');
+
+        actionFilter.addEventListener('change', function () {
+            historyState.action = actionFilter.value;
+            historyState.page = 1;
+            loadHistory();
+        });
+
+        searchInput.addEventListener('input', function () {
+            clearTimeout(searchDebounceTimer);
+            searchDebounceTimer = setTimeout(function () {
+                historyState.search = searchInput.value.trim();
+                historyState.page = 1;
+                loadHistory();
+            }, 350);
+        });
+
+        prevBtn.addEventListener('click', function () {
+            if (historyState.page > 1) {
+                historyState.page -= 1;
+                loadHistory();
+            }
+        });
+
+        nextBtn.addEventListener('click', function () {
+            var end = historyState.page * historyState.pageSize;
+            if (end < historyState.totalCount) {
+                historyState.page += 1;
+                loadHistory();
+            }
+        });
+
         loadHistory();
         loadMonthlySummary();
     });
