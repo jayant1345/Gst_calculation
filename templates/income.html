@@ -284,6 +284,18 @@
                 <div id="cashLedgerSavedNote" class="cash-ledger-saved-note" style="display:none;"></div>
             </div>
 
+            <!-- Needs-Review Banner: entries with an unmapped GL/PL code or a possible reclass event -->
+            <div id="incomeReviewBanner" style="display:none; margin-bottom: 20px; background: #fffbeb; border: 1px solid #fde68a; border-radius: 12px; padding: 14px 18px; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap;">
+                <div style="display: flex; align-items: center; gap: 12px;">
+                    <i class="fa-solid fa-triangle-exclamation" style="color: #d97706; font-size: 20px;"></i>
+                    <div>
+                        <div style="font-weight: 700; color: #92400e; font-size: 14px;" id="incomeReviewBannerTitle">0 entries need manual review</div>
+                        <div style="font-size: 12.5px; color: #b45309;">Taxability was defaulted or a possible transfer was detected — verify before filing.</div>
+                    </div>
+                </div>
+                <button type="button" id="btnFilterReview" style="padding: 7px 14px; border-radius: 8px; font-size: 12.5px; font-weight: 700; background: #d97706; color: #fff; border: none; cursor: pointer;">Show these entries</button>
+            </div>
+
             <!-- Top KPI Cards -->
             <div class="summary-cards">
                 <div class="card card-blue">
@@ -368,6 +380,11 @@
                         <span style="font-size: 13px; color: #64748b;">Review structured revenue and GST liability per branch</span>
                     </div>
                     <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+                        {% if is_admin %}
+                        <button type="button" id="btnManageCodes" style="padding: 7px 16px; border-radius: 8px; font-size: 13px; font-weight: 700; background: #ffffff; color: #334155; border: 1px solid var(--border-color); cursor: pointer; display: flex; align-items: center; gap: 6px;">
+                            <i class="fa-solid fa-list-check"></i> Manage GL/PL Codes
+                        </button>
+                        {% endif %}
                         <button type="button" id="btnDeleteSelectedIncome" style="display: none; padding: 7px 16px; border-radius: 8px; font-size: 13px; font-weight: 700; background: #ef4444; color: #ffffff; border: none; cursor: pointer; align-items: center; gap: 6px; box-shadow: 0 2px 8px rgba(239, 68, 68, 0.25);">
                             <i class="fa-solid fa-trash"></i> Delete Selected (<span id="selectedIncomeCount">0</span>)
                         </button>
@@ -418,6 +435,69 @@
             </div>
         </main>
     </div>
+
+    {% if is_admin %}
+    <!-- Manage GL/PL Codes Modal (admin-only) -->
+    <div class="modal-overlay" id="codesModalOverlay" style="display: none;">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3><i class="fa-solid fa-list-check"></i> Manage GL/PL Codes</h3>
+                <button type="button" class="modal-close" id="codesModalClose" aria-label="Close">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+            <div class="modal-body">
+                <p style="font-size: 12.5px; color: #64748b; margin: -4px 0 4px;">
+                    New or unrecognized bank GL/PL codes are auto-flagged "Needs Review" and taxed at 18% by default until classified here. Adding or editing a code here also fixes every already-uploaded entry using that code.
+                </p>
+                <form id="codeForm" class="form-grid" style="margin-bottom: 4px;">
+                    <div class="form-field">
+                        <label for="codeInputCode">GL / PL Code</label>
+                        <input type="text" id="codeInputCode" placeholder="e.g. 3270" autocomplete="off" required>
+                    </div>
+                    <div class="form-field">
+                        <label for="codeInputParticulars">Particulars</label>
+                        <input type="text" id="codeInputParticulars" placeholder="e.g. Loan Processing Charges" autocomplete="off" required>
+                    </div>
+                    <div class="form-field">
+                        <label for="codeInputTaxable">Taxability</label>
+                        <select id="codeInputTaxable">
+                            <option value="true">Taxable</option>
+                            <option value="false">Exempt (0% GST)</option>
+                        </select>
+                    </div>
+                    <div class="form-field">
+                        <label for="codeInputRate">GST Rate (%)<span class="field-hint" id="codeRateHint"></span></label>
+                        <input type="number" id="codeInputRate" value="18" min="0" max="28" step="0.1">
+                    </div>
+                    <div class="form-field" style="grid-column: 1 / -1;">
+                        <label for="codeInputCategory">Category <span class="field-hint">(optional)</span></label>
+                        <input type="text" id="codeInputCategory" placeholder="e.g. Taxable Income / Exempt Income" autocomplete="off">
+                    </div>
+                </form>
+                <div id="codeFormMsg" style="display:none; font-size: 12.5px; padding: 8px 12px; border-radius: 8px;"></div>
+
+                <div style="margin-top: 6px; max-height: 260px; overflow-y: auto; border: 1px solid var(--border-color); border-radius: 10px;">
+                    <table style="width: 100%; border-collapse: collapse; font-size: 12.5px;">
+                        <thead style="position: sticky; top: 0; background: #f8fafc;">
+                            <tr style="text-align: left; color: #64748b; text-transform: uppercase; font-size: 11px;">
+                                <th style="padding: 8px 10px;">Code</th>
+                                <th style="padding: 8px 10px;">Particulars</th>
+                                <th style="padding: 8px 10px;">Rate</th>
+                                <th style="padding: 8px 10px;"></th>
+                            </tr>
+                        </thead>
+                        <tbody id="codesTableBody"></tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" id="codesModalCancel">Close</button>
+                <button type="button" class="btn btn-primary" id="btnSaveCode">Save Code</button>
+            </div>
+        </div>
+    </div>
+    {% endif %}
 
     <script src="{{ asset_url('income.js') }}"></script>
 </body>

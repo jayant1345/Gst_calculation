@@ -8,6 +8,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentBranch = 'ALL';
     let allIncomeEntries = [];
     let masterBranches = [];
+    let reviewOnlyFilter = false;
     const selectedIncomeIds = new Set();
 
     // Elements
@@ -27,6 +28,24 @@ document.addEventListener('DOMContentLoaded', () => {
     const selectAllIncome = document.getElementById('selectAllIncome');
     const btnDeleteSelectedIncome = document.getElementById('btnDeleteSelectedIncome');
     const selectedIncomeCount = document.getElementById('selectedIncomeCount');
+
+    // Needs-Review Banner & GL/PL Code Management (admin-only elements may be null)
+    const incomeReviewBanner = document.getElementById('incomeReviewBanner');
+    const incomeReviewBannerTitle = document.getElementById('incomeReviewBannerTitle');
+    const btnFilterReview = document.getElementById('btnFilterReview');
+    const btnManageCodes = document.getElementById('btnManageCodes');
+    const codesModalOverlay = document.getElementById('codesModalOverlay');
+    const codesModalClose = document.getElementById('codesModalClose');
+    const codesModalCancel = document.getElementById('codesModalCancel');
+    const codeInputCode = document.getElementById('codeInputCode');
+    const codeInputParticulars = document.getElementById('codeInputParticulars');
+    const codeInputTaxable = document.getElementById('codeInputTaxable');
+    const codeInputRate = document.getElementById('codeInputRate');
+    const codeInputCategory = document.getElementById('codeInputCategory');
+    const codeRateHint = document.getElementById('codeRateHint');
+    const codeFormMsg = document.getElementById('codeFormMsg');
+    const codesTableBody = document.getElementById('codesTableBody');
+    const btnSaveCode = document.getElementById('btnSaveCode');
 
     // KPI Card Elements
     const cardTotalRevenue = document.getElementById('card-total-revenue');
@@ -147,6 +166,15 @@ document.addEventListener('DOMContentLoaded', () => {
                         ? Number(sumData.cash_ledger_balance).toFixed(2) : '';
                 }
                 boxActualDeposit.textContent = formatINR(sumData.actual_cash_to_deposit);
+
+                const reviewCount = inc.review_count || 0;
+                if (reviewCount > 0) {
+                    incomeReviewBannerTitle.textContent = `${reviewCount} ${reviewCount === 1 ? 'entry needs' : 'entries need'} manual review`;
+                    incomeReviewBanner.style.display = 'flex';
+                } else {
+                    incomeReviewBanner.style.display = 'none';
+                    reviewOnlyFilter = false;
+                }
             }
 
             const entriesRes = await fetch(`/api/get-income-entries?client_id=${currentClientId}`);
@@ -173,6 +201,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             if (taxFilter === 'TAXABLE' && !e.is_taxable) return false;
             if (taxFilter === 'EXEMPT' && e.is_taxable) return false;
+            if (reviewOnlyFilter && !e.needs_review) return false;
 
             if (query) {
                 const matchCode = (e.gl_code || '').toLowerCase().includes(query);
@@ -188,7 +217,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 <tr>
                     <td colspan="11" style="text-align: center; padding: 36px; color: #94a3b8;">
                         <i class="fa-solid fa-folder-open" style="font-size: 28px; margin-bottom: 8px; display: block;"></i>
-                        No income statement records match the selected branch or search filter.
+                        ${reviewOnlyFilter ? 'No entries currently need review.' : 'No income statement records match the selected branch or search filter.'}
                     </td>
                 </tr>
             `;
@@ -217,9 +246,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 <td style="padding: 12px 14px; text-align: right; color: #64748b;">${formatINR(e.cgst)}</td>
                 <td style="padding: 12px 14px; text-align: right; color: #64748b;">${formatINR(e.igst)}</td>
                 <td style="padding: 12px 14px; text-align: center;">
-                    ${e.is_taxable ? 
-                        '<span style="display:inline-block; padding: 4px 10px; border-radius: 12px; font-size: 11px; font-weight: 700; background: #dcfce7; color: #15803d;">18% Taxable</span>' : 
+                    ${e.is_taxable ?
+                        '<span style="display:inline-block; padding: 4px 10px; border-radius: 12px; font-size: 11px; font-weight: 700; background: #dcfce7; color: #15803d;">18% Taxable</span>' :
                         '<span style="display:inline-block; padding: 4px 10px; border-radius: 12px; font-size: 11px; font-weight: 700; background: #f1f5f9; color: #475569;">Exempt</span>'}
+                    ${e.needs_review ? `<button type="button" class="btn-review-flag" data-code="${e.gl_code}" title="${(e.review_reason || 'Needs manual review').replace(/"/g, '&quot;')}" style="display:block; margin: 6px auto 0; padding: 3px 8px; border-radius: 10px; font-size: 10px; font-weight: 700; background: #fef3c7; color: #92400e; border: 1px solid #fde68a; cursor: pointer;"><i class="fa-solid fa-triangle-exclamation"></i> Needs Review</button>` : ''}
                 </td>
                 <td style="padding: 12px 14px; text-align: center;">
                     ${docBadge}
@@ -244,6 +274,20 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
                 updateBulkDeleteUI();
                 renderTableRows();
+            });
+        });
+
+        // Attach Review-Flag Listeners - clicking opens Manage Codes pre-filled
+        // with this GL code (admin only; the modal doesn't exist for others)
+        document.querySelectorAll('.btn-review-flag').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const code = btn.getAttribute('data-code');
+                if (codesModalOverlay && window.openCodesModal) {
+                    window.openCodesModal(code);
+                } else {
+                    alert(btn.getAttribute('title') || 'This entry needs manual review.');
+                }
             });
         });
 
@@ -349,6 +393,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
     searchIncomeInput.addEventListener('input', renderTableRows);
     filterTaxable.addEventListener('change', renderTableRows);
+
+    btnFilterReview.addEventListener('click', () => {
+        reviewOnlyFilter = !reviewOnlyFilter;
+        btnFilterReview.textContent = reviewOnlyFilter ? 'Show all entries' : 'Show these entries';
+        renderTableRows();
+    });
 
     // 6. Recursive Folder File Reader
     const SUPPORTED_EXTS = ['pdf', 'xlsx', 'xls', 'csv', 'zip'];
@@ -471,6 +521,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const totalFiles = files.length;
         let processedCount = 0;
         let totalSaved = 0;
+        let totalReview = 0;
+        const unrecognizedFiles = new Set();
+        const duplicateWarnings = [];
 
         const CHUNK_SIZE = 30;
         const chunks = [];
@@ -500,6 +553,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 const data = await res.json();
                 if (data.success) {
                     totalSaved += data.saved_count || currentChunk.length;
+                    totalReview += data.review_count || 0;
+                    (data.unrecognized_branch_files || []).forEach(f => unrecognizedFiles.add(f));
+                    (data.duplicate_warnings || []).forEach(w => duplicateWarnings.push(w));
                 }
             } catch (err) {
                 console.error('Error during chunk upload:', err);
@@ -512,7 +568,21 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         uploadProgress.style.display = 'none';
-        alert(`Upload Complete!\nSuccessfully processed and saved ${totalSaved} income statement records across branches.`);
+
+        let summary = `Upload Complete!\nSuccessfully processed and saved ${totalSaved} income statement records across branches.`;
+        if (totalReview > 0) {
+            summary += `\n\n⚠ ${totalReview} of them need manual review (new GL/PL code not yet classified, or a possible locker/guarantee reclass) - see the yellow banner on the page.`;
+        }
+        if (unrecognizedFiles.size > 0) {
+            summary += `\n\n⚠ ${unrecognizedFiles.size} file(s) could NOT be matched to a branch and were skipped entirely - nothing from these was saved:\n` +
+                Array.from(unrecognizedFiles).slice(0, 10).join('\n') +
+                (unrecognizedFiles.size > 10 ? `\n...and ${unrecognizedFiles.size - 10} more` : '') +
+                `\nRename the file to include the branch name and re-upload.`;
+        }
+        if (duplicateWarnings.length > 0) {
+            summary += `\n\n⚠ ${duplicateWarnings.length} duplicate GL/PL code(s) were seen more than once in this upload for the same branch - only the first file for each was kept.`;
+        }
+        alert(summary);
         loadIncomeData();
     }
 
@@ -558,6 +628,137 @@ document.addEventListener('DOMContentLoaded', () => {
             btnSaveCashLedger.textContent = 'Save';
         }
     });
+
+    // 11. Manage GL/PL Codes (admin-only - elements are absent for non-admins)
+    if (btnManageCodes) {
+        function escapeHtml(s) {
+            return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+        }
+
+        function showCodeFormMsg(text, isError) {
+            codeFormMsg.textContent = text;
+            codeFormMsg.style.display = 'block';
+            codeFormMsg.style.background = isError ? '#fef2f2' : '#f0fdf4';
+            codeFormMsg.style.color = isError ? '#991b1b' : '#166534';
+            codeFormMsg.style.border = `1px solid ${isError ? '#fca5a5' : '#bbf7d0'}`;
+        }
+
+        function resetCodeForm(prefillCode) {
+            codeInputCode.value = prefillCode || '';
+            codeInputParticulars.value = '';
+            codeInputTaxable.value = 'true';
+            codeInputRate.value = '18';
+            codeInputRate.disabled = false;
+            codeInputCategory.value = '';
+            codeFormMsg.style.display = 'none';
+        }
+
+        async function loadCodesTable() {
+            codesTableBody.innerHTML = `<tr><td colspan="4" style="padding:14px; text-align:center; color:#94a3b8;">Loading...</td></tr>`;
+            try {
+                const res = await fetch('/api/income-codes-master');
+                const data = await res.json();
+                const codes = (data.codes || []).slice().sort((a, b) => String(a.code).localeCompare(String(b.code)));
+                if (codes.length === 0) {
+                    codesTableBody.innerHTML = `<tr><td colspan="4" style="padding:14px; text-align:center; color:#94a3b8;">No codes in the catalog yet.</td></tr>`;
+                    return;
+                }
+                codesTableBody.innerHTML = codes.map(c => `
+                    <tr style="border-top: 1px solid var(--border-color);">
+                        <td style="padding: 7px 10px; font-family: monospace; font-weight: 700;">${escapeHtml(c.code)}</td>
+                        <td style="padding: 7px 10px;">${escapeHtml(c.particulars)}</td>
+                        <td style="padding: 7px 10px;">${c.is_taxable ? (c.gst_rate + '%') : 'Exempt'}</td>
+                        <td style="padding: 7px 10px; text-align: right;">
+                            <button type="button" class="btn-edit-code" data-code="${escapeHtml(c.code)}" style="background:none; border:none; color:#2563eb; cursor:pointer; font-size:12px;">Edit</button>
+                        </td>
+                    </tr>
+                `).join('');
+                document.querySelectorAll('.btn-edit-code').forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        const c = codes.find(x => String(x.code) === btn.getAttribute('data-code'));
+                        if (!c) return;
+                        codeInputCode.value = c.code;
+                        codeInputParticulars.value = c.particulars || '';
+                        codeInputTaxable.value = c.is_taxable ? 'true' : 'false';
+                        codeInputRate.value = c.gst_rate || 0;
+                        codeInputRate.disabled = !c.is_taxable;
+                        codeInputCategory.value = c.category || '';
+                        codeFormMsg.style.display = 'none';
+                        codeInputParticulars.focus();
+                    });
+                });
+            } catch (e) {
+                codesTableBody.innerHTML = `<tr><td colspan="4" style="padding:14px; text-align:center; color:#ef4444;">Failed to load codes.</td></tr>`;
+            }
+        }
+
+        function openCodesModal(prefillCode) {
+            resetCodeForm(prefillCode);
+            codesModalOverlay.style.display = 'flex';
+            loadCodesTable();
+            if (prefillCode) {
+                codeInputParticulars.focus();
+            } else {
+                codeInputCode.focus();
+            }
+        }
+        window.openCodesModal = openCodesModal; // used by the row-level "Needs Review" buttons above
+
+        function closeCodesModal() {
+            codesModalOverlay.style.display = 'none';
+        }
+
+        btnManageCodes.addEventListener('click', () => openCodesModal());
+        codesModalClose.addEventListener('click', closeCodesModal);
+        codesModalCancel.addEventListener('click', closeCodesModal);
+        codesModalOverlay.addEventListener('click', (e) => {
+            if (e.target === codesModalOverlay) closeCodesModal();
+        });
+
+        codeInputTaxable.addEventListener('change', () => {
+            const taxable = codeInputTaxable.value === 'true';
+            codeInputRate.disabled = !taxable;
+            codeRateHint.textContent = taxable ? '' : ' (locked at 0% for exempt)';
+            if (!taxable) codeInputRate.value = '0';
+            else if (codeInputRate.value === '0') codeInputRate.value = '18';
+        });
+
+        btnSaveCode.addEventListener('click', async () => {
+            const code = codeInputCode.value.trim();
+            const particulars = codeInputParticulars.value.trim();
+            if (!code || !particulars) {
+                showCodeFormMsg('GL/PL code and particulars are both required.', true);
+                return;
+            }
+            const is_taxable = codeInputTaxable.value === 'true';
+            const gst_rate = parseFloat(codeInputRate.value) || 0;
+            const category = codeInputCategory.value.trim();
+
+            btnSaveCode.disabled = true;
+            btnSaveCode.textContent = 'Saving…';
+            try {
+                const res = await fetch('/api/income-codes-master', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ code, particulars, is_taxable, gst_rate, category })
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Save failed');
+                let msg = `Saved code ${code}.`;
+                if (data.entries_fixed > 0) {
+                    msg += ` ${data.entries_fixed} already-uploaded entr${data.entries_fixed === 1 ? 'y' : 'ies'} using this code ${data.entries_fixed === 1 ? 'was' : 'were'} corrected.`;
+                }
+                showCodeFormMsg(msg, false);
+                loadCodesTable();
+                loadIncomeData();
+            } catch (e) {
+                showCodeFormMsg('Could not save: ' + e.message, true);
+            } finally {
+                btnSaveCode.disabled = false;
+                btnSaveCode.textContent = 'Save Code';
+            }
+        });
+    }
 
     // Initialize
     updateClientTabUI();

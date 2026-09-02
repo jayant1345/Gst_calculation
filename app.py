@@ -353,6 +353,26 @@ def init_db():
                 refund_with_gst NUMERIC(15,2) DEFAULT 0.0,
                 file_name VARCHAR(255),
                 file_data BYTEA,
+                needs_review BOOLEAN DEFAULT FALSE,
+                review_reason VARCHAR(255),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        ''')
+        cur.execute("ALTER TABLE income_entries ADD COLUMN IF NOT EXISTS needs_review BOOLEAN DEFAULT FALSE;")
+        cur.execute("ALTER TABLE income_entries ADD COLUMN IF NOT EXISTS review_reason VARCHAR(255);")
+
+        # Admin-managed GL/PL code additions/corrections on top of the bundled
+        # reference_data/income_master_catalog.json. Kept in the database (not
+        # just the JSON file) because Railway's filesystem is rebuilt from the
+        # git image on every deploy - a file write here would be silently lost
+        # on the next push, while this table survives.
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS income_code_catalog (
+                code VARCHAR(50) PRIMARY KEY,
+                particulars VARCHAR(255) NOT NULL,
+                gst_rate NUMERIC(5,2) DEFAULT 18.0,
+                is_taxable BOOLEAN DEFAULT TRUE,
+                category VARCHAR(100),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         ''')
@@ -4412,6 +4432,32 @@ if os.path.exists(INCOME_CATALOG_PATH):
     except Exception as e:
         print(f"Error loading income master catalog: {e}")
 
+def load_income_code_overrides():
+    """Merge admin-added/edited GL/PL codes from income_code_catalog (durable
+    across redeploys) on top of the bundled JSON catalog. DB entries win on
+    conflict since they're the more recent, human-verified classification."""
+    global INCOME_MASTER_CODES
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute('SELECT code, particulars, gst_rate::float, is_taxable, category FROM income_code_catalog')
+        overrides = cur.fetchall()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print(f"Error loading income code overrides from DB: {e}")
+        return
+    for ov in overrides:
+        clean = str(ov['code']).strip().upper()
+        existing = next((m for m in INCOME_MASTER_CODES if str(m.get('code')).strip().upper() == clean), None)
+        entry = dict(ov)
+        if existing:
+            existing.update(entry)
+        else:
+            INCOME_MASTER_CODES.append(entry)
+
+load_income_code_overrides()
+
 def get_income_code_meta(code_str):
     clean = str(code_str).strip().upper()
     for m in INCOME_MASTER_CODES:
@@ -4723,20 +4769,43 @@ def extract_raw_ledger_accounts_xls(file_bytes, filename):
     return all_accounts
 
 
+# Codes that sometimes carry an internal accrual/closure transfer between them
+# (see the long comment above on RECLASS_DEFERRED_TO_INCOME). The amount-level
+# adjustment stays disabled (proven unreliable at scale) - this list is used
+# only to *detect* likely reclass activity that period and flag the two
+# affected entries for the CA to check manually, rather than to guess a number.
+RECLASS_PAIR_CODES = {'1836': '3320', '1720': '3230'}
+
+
 def finalize_ledger_accounts(raw_accounts, financial_year='2026-27', month='July'):
     """Group raw {branch, gl_code, dr, cr, net} accounts by branch, apply the
     deferred/recognised-income reclassification rule (RECLASS_DEFERRED_TO_INCOME),
-    and return final entry dicts ready to save to income_entries."""
+    and return (entries, warnings) ready to save to income_entries.
+
+    warnings is a list of dicts describing anything that could not be handled
+    with full confidence - a duplicate GL code seen twice in one upload batch,
+    or a GL/PL code with no entry in the master catalog - so the caller can
+    surface it to the CA instead of it passing through silently."""
     by_branch = collections.defaultdict(dict)
+    warnings = []
     for a in raw_accounts:
         if not a.get('branch') or not a.get('gl_code'):
             continue
         code_map = by_branch[a['branch']]
         if a['gl_code'] not in code_map:
             code_map[a['gl_code']] = a
-        # else: same code already seen for this branch in this upload batch -
-        # keep the first one found rather than summing, so the same account
-        # appearing in more than one uploaded file can't double-count.
+        else:
+            # Same code already seen for this branch in this upload batch -
+            # keep the first one found rather than summing (so the same
+            # account appearing in more than one uploaded file can't
+            # double-count), but tell the CA it happened.
+            warnings.append({
+                "type": "duplicate_code_in_batch",
+                "branch": a['branch'],
+                "gl_code": a['gl_code'],
+                "kept_filename": code_map[a['gl_code']].get('filename', 'upload'),
+                "skipped_filename": a.get('filename', 'upload'),
+            })
 
     entries = []
     for branch, code_map in by_branch.items():
@@ -4747,6 +4816,17 @@ def finalize_ledger_accounts(raw_accounts, financial_year='2026-27', month='July
             if deferred_code in code_map and income_code in finals:
                 finals[income_code] = round(finals[income_code] - code_map[deferred_code]['dr'], 2)
 
+        # Detect (don't adjust) possible reclass activity: if both codes of a
+        # known pair are present and the deferred code had debit movement
+        # this period, an internal transfer may have happened - flag both
+        # sides for manual verification instead of silently netting.
+        reclass_flagged_codes = set()
+        for deferred_code, income_code in RECLASS_PAIR_CODES.items():
+            if deferred_code in code_map and income_code in code_map:
+                if abs(code_map[deferred_code].get('dr', 0.0)) > 0.01:
+                    reclass_flagged_codes.add(deferred_code)
+                    reclass_flagged_codes.add(income_code)
+
         for code, amount in finals.items():
             a = code_map[code]
             meta = get_income_code_meta(code)
@@ -4754,6 +4834,17 @@ def finalize_ledger_accounts(raw_accounts, financial_year='2026-27', month='July
             is_taxable = meta.get('is_taxable', True) if meta else True
             rate = meta.get('gst_rate', 18.0) if meta else 18.0
             cgst = round(amount * (rate / 200.0), 2) if is_taxable else 0.0
+
+            needs_review = False
+            review_reason = None
+            if meta is None:
+                needs_review = True
+                review_reason = f"GL/PL code {code} not found in master catalog - taxability defaulted to 18% Taxable, please verify"
+                warnings.append({"type": "unmapped_code", "branch": branch, "gl_code": code})
+            elif code in reclass_flagged_codes:
+                needs_review = True
+                review_reason = "Possible locker/guarantee reclass transfer this period - verify split with paired code manually"
+
             entries.append({
                 "branch": branch,
                 "financial_year": financial_year,
@@ -4768,8 +4859,10 @@ def finalize_ledger_accounts(raw_accounts, financial_year='2026-27', month='July
                 "refund_without_gst": 0.0,
                 "refund_with_gst": 0.0,
                 "filename": a.get('filename', 'upload'),
+                "needs_review": needs_review,
+                "review_reason": review_reason,
             })
-    return entries
+    return entries, warnings
 
 
 def parse_full_workbook_excel(file_bytes, filename):
@@ -4822,7 +4915,7 @@ def parse_full_workbook_excel(file_bytes, filename):
 @app.route('/income')
 @login_required
 def income_page():
-    return render_template('income.html')
+    return render_template('income.html', is_admin=is_admin_user())
 
 @app.route('/api/income-codes-master', methods=['GET'])
 @login_required
@@ -4831,6 +4924,85 @@ def get_income_codes_master():
         "branches": INCOME_MASTER_BRANCHES,
         "codes": INCOME_MASTER_CODES
     })
+
+@app.route('/api/income-codes-master', methods=['POST'])
+@login_required
+def add_income_code_master():
+    """Admin-only: add a new GL/PL code to the master catalog, or correct an
+    existing one. Persists to the income_code_catalog DB table (durable across
+    Railway redeploys) and retroactively fixes any income_entries rows already
+    saved under this code - clearing the needs_review flag if it was unmapped,
+    and recomputing cgst/sgst if the taxability/rate changed."""
+    if not is_admin_user():
+        return jsonify({"error": "Adding or editing GL/PL codes is restricted to Administrator users only."}), 403
+
+    data = request.json or {}
+    code = str(data.get('code', '')).strip()
+    particulars = str(data.get('particulars', '')).strip()
+    if not code or not particulars:
+        return jsonify({"error": "GL/PL code and particulars are both required."}), 400
+    try:
+        gst_rate = float(data.get('gst_rate', 18.0))
+    except (TypeError, ValueError):
+        return jsonify({"error": "GST rate must be a number."}), 400
+    is_taxable = bool(data.get('is_taxable', True))
+    if not is_taxable:
+        gst_rate = 0.0
+    category = str(data.get('category') or ('Taxable Income' if is_taxable else 'Exempt Income')).strip()
+
+    global INCOME_MASTER_CODES
+    clean = code.upper()
+    entry = {"code": code, "particulars": particulars, "gst_rate": gst_rate, "is_taxable": is_taxable, "category": category}
+    existing = next((m for m in INCOME_MASTER_CODES if str(m.get('code')).strip().upper() == clean), None)
+    if existing:
+        existing.update(entry)
+    else:
+        INCOME_MASTER_CODES.append(entry)
+
+    # Best-effort only: on Railway the filesystem is rebuilt from the git image
+    # on every deploy, so this write does not survive a redeploy. It's kept
+    # purely as a local-dev convenience; the DB upsert below is the source of
+    # truth that actually persists.
+    try:
+        with open(INCOME_CATALOG_PATH, 'r', encoding='utf-8') as f:
+            cat_data = json.load(f)
+        cat_data['income_codes'] = INCOME_MASTER_CODES
+        cat_data.setdefault('branches', INCOME_MASTER_BRANCHES)
+        with open(INCOME_CATALOG_PATH, 'w', encoding='utf-8') as f:
+            json.dump(cat_data, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        print(f"Note: could not write income_master_catalog.json (expected on Railway, non-fatal): {e}")
+
+    fixed_count = 0
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute('''
+            INSERT INTO income_code_catalog (code, particulars, gst_rate, is_taxable, category)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (code) DO UPDATE SET
+                particulars = EXCLUDED.particulars,
+                gst_rate = EXCLUDED.gst_rate,
+                is_taxable = EXCLUDED.is_taxable,
+                category = EXCLUDED.category
+        ''', (code, particulars, gst_rate, is_taxable, category))
+        cur.execute('SELECT id, income_amount::float FROM income_entries WHERE UPPER(gl_code) = %s', (clean,))
+        rows = cur.fetchall()
+        for rid, amount in rows:
+            cgst = round((amount or 0.0) * (gst_rate / 200.0), 2) if is_taxable else 0.0
+            cur.execute('''
+                UPDATE income_entries
+                SET is_taxable = %s, cgst = %s, sgst = %s, needs_review = FALSE, review_reason = NULL
+                WHERE id = %s
+            ''', (is_taxable, cgst, cgst, rid))
+            fixed_count += 1
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print(f"Error retroactively fixing income_entries for code {code}: {e}")
+
+    return jsonify({"success": True, "code": entry, "updated_existing": existing is not None, "entries_fixed": fixed_count})
 
 @app.route('/api/get-income-entries', methods=['GET'])
 @login_required
@@ -4851,6 +5023,7 @@ def get_income_entries():
                    is_taxable, income_amount::float, cgst::float, sgst::float, igst::float,
                    refund_without_gst::float, refund_with_gst::float, file_name,
                    CASE WHEN file_data IS NOT NULL THEN true ELSE false END as has_file,
+                   needs_review, review_reason,
                    created_at
             FROM income_entries
             WHERE client_id = %s
@@ -4891,6 +5064,7 @@ def upload_income_api():
 
     parsed_entries = []  # already-finalized entries (bulk full-workbook uploads)
     raw_accounts = []    # raw {branch, gl_code, dr, cr, net, filename, file_data} - needs finalize_ledger_accounts
+    unrecognized_branch_files = set()  # filenames where no branch name could be matched at all
 
     def is_full_workbook_xlsx(fbytes):
         try:
@@ -4929,6 +5103,8 @@ def upload_income_api():
             parsed_entries.extend(finalized)
             for a in raw:
                 a['file_data'] = fbytes
+                if not a.get('branch'):
+                    unrecognized_branch_files.add(fname)
             raw_accounts.extend(raw)
         elif ext == 'zip':
             import zipfile
@@ -4948,11 +5124,13 @@ def upload_income_api():
                             parsed_entries.extend(finalized)
                             for a in raw:
                                 a['file_data'] = zbytes
+                                if not a.get('branch'):
+                                    unrecognized_branch_files.add(zname)
                             raw_accounts.extend(raw)
             except Exception as ze:
                 print(f"Error reading zip file {fname}: {ze}")
 
-    finalized_from_raw = finalize_ledger_accounts(raw_accounts)
+    finalized_from_raw, ingest_warnings = finalize_ledger_accounts(raw_accounts)
     file_data_by_key = {}
     for a in raw_accounts:
         file_data_by_key.setdefault((a.get('branch'), a.get('gl_code')), a.get('file_data'))
@@ -4970,10 +5148,11 @@ def upload_income_api():
             key = (client_id, e.get('branch', 'Unassigned').strip().upper(), e.get('financial_year', '2026-27'), e.get('month', 'July'), str(e.get('gl_code', 'N/A')).strip())
             unique_entries[key] = e
 
+        review_count = 0
         for e in unique_entries.values():
             cur.execute('''
-                INSERT INTO income_entries (user_id, client_id, branch, state, financial_year, month, gl_code, particulars, is_taxable, income_amount, cgst, sgst, igst, refund_without_gst, refund_with_gst, file_name, file_data)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO income_entries (user_id, client_id, branch, state, financial_year, month, gl_code, particulars, is_taxable, income_amount, cgst, sgst, igst, refund_without_gst, refund_with_gst, file_name, file_data, needs_review, review_reason)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (client_id, branch, financial_year, month, gl_code)
                 DO UPDATE SET
                     user_id = EXCLUDED.user_id,
@@ -4986,6 +5165,8 @@ def upload_income_api():
                     refund_without_gst = EXCLUDED.refund_without_gst,
                     refund_with_gst = EXCLUDED.refund_with_gst,
                     file_name = EXCLUDED.file_name,
+                    needs_review = EXCLUDED.needs_review,
+                    review_reason = EXCLUDED.review_reason,
                     created_at = CURRENT_TIMESTAMP
                 RETURNING id;
             ''', (
@@ -5004,16 +5185,23 @@ def upload_income_api():
                 e.get('refund_without_gst', 0.0),
                 e.get('refund_with_gst', 0.0),
                 e.get('filename', 'upload'),
-                psycopg2.Binary(e['file_data']) if e.get('file_data') else None
+                psycopg2.Binary(e['file_data']) if e.get('file_data') else None,
+                e.get('needs_review', False),
+                e.get('review_reason'),
             ))
             saved_count += 1
+            if e.get('needs_review'):
+                review_count += 1
         conn.commit()
         cur.close()
         conn.close()
         return jsonify({
             "success": True,
             "saved_count": saved_count,
-            "entries_preview": parsed_entries[:10]
+            "entries_preview": parsed_entries[:10],
+            "review_count": review_count,
+            "unrecognized_branch_files": sorted(unrecognized_branch_files),
+            "duplicate_warnings": [w for w in ingest_warnings if w['type'] == 'duplicate_code_in_batch'],
         })
     except Exception as e:
         print(f"Error saving uploaded income records: {e}")
@@ -5040,7 +5228,8 @@ def get_income_summary():
                    COALESCE(SUM(cgst), 0)::float as total_cgst,
                    COALESCE(SUM(sgst), 0)::float as total_sgst,
                    COALESCE(SUM(igst), 0)::float as total_igst,
-                   COALESCE(SUM(cgst + sgst + igst), 0)::float as total_output_gst
+                   COALESCE(SUM(cgst + sgst + igst), 0)::float as total_output_gst,
+                   COUNT(*) FILTER (WHERE needs_review) as review_count
             FROM income_entries
             WHERE client_id = %s
         '''
