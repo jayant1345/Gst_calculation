@@ -2338,6 +2338,7 @@ body {
 .btn-action-small.approve { background-color: var(--accent-green); }
 .btn-action-small.notify { background-color: var(--accent-blue); }
 .btn-action-small.hold { background-color: var(--text-muted); }
+.btn-action-small.view { background-color: #7c3aed; }
 .btn-action-small:hover { filter: brightness(0.9); }
 
 /* Applied to the .table-container div wrapping the reconciliation ledger
@@ -2487,6 +2488,7 @@ body {
 
 .mobile-action-btn.approve { background-color: var(--accent-green); }
 .mobile-action-btn.notify { background-color: var(--accent-blue); }
+.mobile-action-btn.view { background-color: #7c3aed; }
 
 /* STAGE 3 UI & DESIGN SYSTEM EXTENSIONS */
 .stage-nav-tabs {
@@ -3173,4 +3175,104 @@ body {
     background: #eff6ff;
     transform: translateY(-2px);
     box-shadow: 0 8px 24px rgba(37, 99, 235, 0.08);
+}
+
+/* Bill Preview Side Panel - slides in from the right when reviewing a
+   Value Mismatched row, so the ledger stays visible/usable underneath
+   rather than being blocked by a full modal. */
+.bill-preview-panel {
+    position: fixed;
+    top: 0;
+    right: 0;
+    height: 100vh;
+    width: min(480px, 92vw);
+    background: #ffffff;
+    border-left: 1px solid var(--border-color);
+    box-shadow: -10px 0 28px rgba(15, 23, 42, 0.18);
+    z-index: 200;
+    display: flex;
+    flex-direction: column;
+    transform: translateX(100%);
+    transition: transform 0.25s ease;
+}
+
+.bill-preview-panel.open {
+    transform: translateX(0);
+}
+
+.bill-preview-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border-color);
+    background: #f8fafc;
+}
+
+.bill-preview-header h4 {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.bill-preview-header span {
+    display: block;
+    margin-top: 3px;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.bill-preview-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+.bill-preview-header-actions a,
+.bill-preview-header-actions button {
+    width: 30px;
+    height: 30px;
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+    background: #ffffff;
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-size: 13px;
+    text-decoration: none;
+    transition: all 0.15s ease;
+}
+
+.bill-preview-header-actions a:hover,
+.bill-preview-header-actions button:hover {
+    background: #f1f5f9;
+    color: var(--text-primary);
+}
+
+.bill-preview-body {
+    flex: 1;
+    overflow: hidden;
+    background: #525659;
+}
+
+.bill-preview-body iframe {
+    width: 100%;
+    height: 100%;
+    border: none;
+    display: block;
+}
+
+/* Nudges the desktop table container to make a bit of room so the "Match
+   Status"/"Actions" columns aren't hidden entirely under the open panel
+   on wide screens; harmless no-op on narrower ones where the panel already
+   overlays everything. */
+@media (min-width: 1400px) {
+    body.bill-preview-active .table-container {
+        margin-right: min(480px, 92vw);
+    }
 }

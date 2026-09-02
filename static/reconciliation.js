@@ -553,6 +553,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
             } else if (item.status === 'Missing in GSTR-2B' || item.status === 'Value Mismatched') {
                 actionBtn = `<button class="btn-action-small notify" data-action="notify" title="Notify Vendor"><i class="fa-solid fa-envelope"></i></button>`;
+                if (item.status === 'Value Mismatched' && item.book && item.book.has_file) {
+                    actionBtn += `<button class="btn-action-small view" data-action="view-bill" title="View original bill"><i class="fa-solid fa-file-lines"></i></button>`;
+                }
             } else if (item.status === 'Missing in Books') {
                 actionBtn = `
                     <button class="btn-action-small hold" data-action="hold" title="Put on Hold"><i class="fa-solid fa-pause"></i></button>
@@ -592,6 +595,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     if (kind === 'approve') alert('ITC Approved!');
                     else if (kind === 'confirm-match') confirmPossibleMatch(item.book.id, item.portal.invoice_number, item.portal.gstin, supplier);
                     else if (kind === 'rescan') rescanInvoice(item.book.id, actionEl);
+                    else if (kind === 'view-bill') openBillPreview(item.book.id, supplier, bInv);
                     else if (kind === 'notify') alert(`Sending follow-up to vendor: ${supplier}`);
                     else if (kind === 'delete-portal-entry') {
                         const entryId = actionEl.dataset.id;
@@ -661,6 +665,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 `;
             } else {
                 actionHtml = `<button class="mobile-action-btn notify" data-action="notify"><i class="fa-solid fa-envelope"></i> Send Notice</button>`;
+                if (item.status === 'Value Mismatched' && item.book && item.book.has_file) {
+                    actionHtml += `<button class="mobile-action-btn view" data-action="view-bill"><i class="fa-solid fa-file-lines"></i> View Bill</button>`;
+                }
             }
 
             card.innerHTML = `
@@ -699,6 +706,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     if (kind === 'approve') alert('ITC Approved!');
                     else if (kind === 'confirm-match') confirmPossibleMatch(item.book.id, item.portal.invoice_number, item.portal.gstin, supplier);
                     else if (kind === 'rescan') rescanInvoice(item.book.id, cardActionEl);
+                    else if (kind === 'view-bill') openBillPreview(item.book.id, supplier, bInv);
                     else if (kind === 'delete-portal-entry') {
                         const entryId = cardActionEl.dataset.id;
                         if (!entryId) return;
@@ -804,6 +812,39 @@ document.addEventListener('DOMContentLoaded', function() {
             btnEl.innerHTML = originalHtml;
         });
     }
+
+    // Bill Preview Side Panel (Value Mismatched rows only)
+    const billPreviewPanel = document.getElementById('billPreviewPanel');
+    const billPreviewFrame = document.getElementById('billPreviewFrame');
+    const billPreviewTitle = document.getElementById('billPreviewTitle');
+    const billPreviewSub = document.getElementById('billPreviewSub');
+    const billPreviewClose = document.getElementById('billPreviewClose');
+    const billPreviewOpenTab = document.getElementById('billPreviewOpenTab');
+
+    function openBillPreview(bookId, supplier, invNo) {
+        if (!billPreviewPanel) return;
+        const fileUrl = `/api/invoice-file/${bookId}`;
+        billPreviewFrame.src = fileUrl;
+        billPreviewTitle.textContent = supplier || 'Bill';
+        billPreviewSub.textContent = invNo ? `Invoice: ${invNo}` : '';
+        billPreviewOpenTab.href = fileUrl;
+        billPreviewPanel.classList.add('open');
+        document.body.classList.add('bill-preview-active');
+    }
+
+    function closeBillPreview() {
+        if (!billPreviewPanel) return;
+        billPreviewPanel.classList.remove('open');
+        document.body.classList.remove('bill-preview-active');
+        billPreviewFrame.src = 'about:blank';
+    }
+
+    if (billPreviewClose) billPreviewClose.addEventListener('click', closeBillPreview);
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && billPreviewPanel && billPreviewPanel.classList.contains('open')) {
+            closeBillPreview();
+        }
+    });
 
     function renderEmptyLedger(msg) {
         const safeMsg = escapeHtml(msg);
