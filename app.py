@@ -356,6 +356,19 @@ def init_db():
         cur.execute("CREATE INDEX IF NOT EXISTS idx_income_branch ON income_entries(client_id, branch);")
         cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_income_branch_code_month ON income_entries(client_id, branch, financial_year, month, gl_code);")
 
+        # Electronic Cash Ledger balance already sitting on the GST portal
+        # (from a prior over-deposit) - entered manually since this app has
+        # no live connection to the GST portal. One running balance per
+        # client; the auditor updates it whenever they check the portal.
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS cash_ledger_balances (
+                client_id VARCHAR(50) PRIMARY KEY,
+                balance NUMERIC(15,2) NOT NULL DEFAULT 0.0,
+                updated_by INTEGER REFERENCES users(id),
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        ''')
+
                 # Multi-client data isolation schema
         cur.execute("ALTER TABLE invoices ADD COLUMN IF NOT EXISTS client_id VARCHAR(50) NOT NULL DEFAULT 'nutan_nagrik';")
         cur.execute("ALTER TABLE gstr2b_entries ADD COLUMN IF NOT EXISTS client_id VARCHAR(50) NOT NULL DEFAULT 'nutan_nagrik';")
@@ -4983,14 +4996,71 @@ def get_income_summary():
         eligible_itc = itc_stat['eligible_itc'] if itc_stat else 0.0
         net_gst_payable = max(0.0, round(output_gst - eligible_itc, 2))
 
+        conn2 = get_db_connection()
+        cur2 = conn2.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur2.execute('SELECT balance::float FROM cash_ledger_balances WHERE client_id = %s', (client_id,))
+        row = cur2.fetchone()
+        cur2.close()
+        conn2.close()
+        cash_ledger_balance = row['balance'] if row else 0.0
+        actual_cash_to_deposit = max(0.0, round(net_gst_payable - cash_ledger_balance, 2))
+
         return jsonify({
             "income": inc_stat,
             "itc": itc_stat,
             "net_gst_payable": net_gst_payable,
+            "cash_ledger_balance": cash_ledger_balance,
+            "actual_cash_to_deposit": actual_cash_to_deposit,
             "branches": branch_stats
         })
     except Exception as e:
         print(f"Error generating income summary: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/cash-ledger-balance', methods=['GET', 'POST'])
+@login_required
+def cash_ledger_balance_api():
+    client_id = get_current_client_id()
+    if request.method == 'GET':
+        try:
+            conn = get_db_connection()
+            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            cur.execute('SELECT balance::float, updated_at FROM cash_ledger_balances WHERE client_id = %s', (client_id,))
+            row = cur.fetchone()
+            cur.close()
+            conn.close()
+            return jsonify({"balance": row['balance'] if row else 0.0,
+                             "updated_at": row['updated_at'].isoformat() if row and row.get('updated_at') else None})
+        except Exception as e:
+            print(f"Error fetching cash ledger balance: {e}")
+            return jsonify({"error": str(e)}), 500
+
+    data = request.get_json(silent=True) or {}
+    try:
+        balance = float(data.get('balance', 0) or 0)
+    except (TypeError, ValueError):
+        return jsonify({"error": "balance must be a number"}), 400
+    if balance < 0:
+        return jsonify({"error": "balance cannot be negative"}), 400
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute('''
+            INSERT INTO cash_ledger_balances (client_id, balance, updated_by, updated_at)
+            VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
+            ON CONFLICT (client_id) DO UPDATE SET
+                balance = EXCLUDED.balance,
+                updated_by = EXCLUDED.updated_by,
+                updated_at = CURRENT_TIMESTAMP
+        ''', (client_id, balance, session['user_id']))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return jsonify({"success": True, "balance": balance})
+    except Exception as e:
+        print(f"Error saving cash ledger balance: {e}")
         return jsonify({"error": str(e)}), 500
 
 

@@ -40,6 +40,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const boxOutputGst = document.getElementById('box-output-gst');
     const boxEligibleItc = document.getElementById('box-eligible-itc');
     const boxNetPayable = document.getElementById('box-net-payable');
+    const boxActualDeposit = document.getElementById('box-actual-deposit');
+    const inputCashLedgerBalance = document.getElementById('inputCashLedgerBalance');
+    const btnSaveCashLedger = document.getElementById('btnSaveCashLedger');
+    const cashLedgerSavedNote = document.getElementById('cashLedgerSavedNote');
+    let currentNetPayable = 0;
 
     function formatINR(val) {
         if (val === null || val === undefined || isNaN(val)) return '₹0.00';
@@ -124,6 +129,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const inc = sumData.income;
                 const itc = sumData.itc;
                 const netPayable = sumData.net_gst_payable;
+                currentNetPayable = netPayable || 0;
 
                 cardTotalRevenue.textContent = formatINR(inc.total_income);
                 cardTaxableRevenue.textContent = formatINR(inc.taxable_income);
@@ -135,6 +141,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 boxOutputGst.textContent = formatINR(inc.total_output_gst);
                 boxEligibleItc.textContent = formatINR(itc ? itc.eligible_itc : 0);
                 boxNetPayable.textContent = formatINR(netPayable);
+
+                if (document.activeElement !== inputCashLedgerBalance) {
+                    inputCashLedgerBalance.value = sumData.cash_ledger_balance
+                        ? Number(sumData.cash_ledger_balance).toFixed(2) : '';
+                }
+                boxActualDeposit.textContent = formatINR(sumData.actual_cash_to_deposit);
             }
 
             const entriesRes = await fetch(`/api/get-income-entries?client_id=${currentClientId}`);
@@ -507,6 +519,44 @@ document.addEventListener('DOMContentLoaded', () => {
     // 9. Export CA Working Sheet
     btnExportWorkingSheet.addEventListener('click', () => {
         window.location.href = `/api/export-income-working-sheet?client_id=${currentClientId}&financial_year=2026-27&month=July`;
+    });
+
+    // 10. Cash Ledger Balance - manual credit adjustment
+    // Live preview as the auditor types, before saving.
+    inputCashLedgerBalance.addEventListener('input', () => {
+        const typed = parseFloat(inputCashLedgerBalance.value);
+        const balance = isNaN(typed) ? 0 : typed;
+        const actual = Math.max(0, currentNetPayable - balance);
+        boxActualDeposit.textContent = formatINR(actual);
+        cashLedgerSavedNote.style.display = 'none';
+    });
+
+    btnSaveCashLedger.addEventListener('click', async () => {
+        const typed = parseFloat(inputCashLedgerBalance.value);
+        const balance = isNaN(typed) ? 0 : typed;
+        if (balance < 0) {
+            alert('Cash ledger balance cannot be negative.');
+            return;
+        }
+        btnSaveCashLedger.disabled = true;
+        btnSaveCashLedger.textContent = 'Saving…';
+        try {
+            const res = await fetch(`/api/cash-ledger-balance?client_id=${currentClientId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ balance })
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || 'Save failed');
+            cashLedgerSavedNote.textContent = `Saved. Check the GST portal again before next month's filing — this figure doesn't update on its own.`;
+            cashLedgerSavedNote.style.display = 'block';
+            loadIncomeData();
+        } catch (e) {
+            alert('Could not save the cash ledger balance: ' + e.message);
+        } finally {
+            btnSaveCashLedger.disabled = false;
+            btnSaveCashLedger.textContent = 'Save';
+        }
     });
 
     // Initialize

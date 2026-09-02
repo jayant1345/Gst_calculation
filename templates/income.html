@@ -256,6 +256,28 @@
                         <div style="font-size: 11px; color: #6ee7b7; margin-top: 4px;">Electronic Cash Ledger Requirement</div>
                     </div>
                 </div>
+
+                <div class="cash-ledger-row">
+                    <div class="cash-ledger-label">
+                        <i class="fa-solid fa-wallet"></i>
+                        <div>
+                            <div class="cash-ledger-title">Existing Cash Ledger Balance</div>
+                            <div class="cash-ledger-sub">Check the balance on the GST portal and enter it here — this app has no live connection to the portal</div>
+                        </div>
+                    </div>
+                    <div class="cash-ledger-input-wrap">
+                        <span class="cash-ledger-prefix">₹</span>
+                        <input type="number" id="inputCashLedgerBalance" class="cash-ledger-input" min="0" step="0.01" placeholder="0.00">
+                        <button class="btn-save-ledger" id="btnSaveCashLedger">Save</button>
+                    </div>
+                    <div class="offset-operator" style="font-size:18px;"><i class="fa-solid fa-minus"></i></div>
+                    <div class="offset-card net-payable-card" style="padding:12px 20px;">
+                        <h4>Actual Amount to Deposit</h4>
+                        <div class="amount" id="box-actual-deposit" style="font-size:20px;">₹0.00</div>
+                        <div style="font-size: 11px; color: #6ee7b7; margin-top: 4px;">Net Payable minus your balance above</div>
+                    </div>
+                </div>
+                <div id="cashLedgerSavedNote" class="cash-ledger-saved-note" style="display:none;"></div>
             </div>
 
             <!-- Top KPI Cards -->
