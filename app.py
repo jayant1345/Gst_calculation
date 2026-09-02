@@ -1164,6 +1164,7 @@ def settings():
     return render_template('settings.html', error=error, is_admin=is_admin_user(), api_key_configured=bool(ANTHROPIC_API_KEY or OPENROUTER_API_KEY), ai_model_name=AI_MODEL_DISPLAY_NAME)
 
 # Admin User Management Routes
+@app.route('/users', methods=['GET'])
 @app.route('/admin/users', methods=['GET'])
 @admin_required
 def admin_users():
