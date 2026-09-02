@@ -2160,6 +2160,16 @@ def clear_invoices():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+def _insert_before_ext(filename, suffix):
+    """Inserts a descriptive suffix before the file extension, e.g.
+    ("Invoice.pdf", " (Page 1)") -> "Invoice (Page 1).pdf" - so the stored
+    download filename still ends in a real extension the OS recognizes,
+    instead of "Invoice.pdf (Page 1)" which has none."""
+    base, ext = os.path.splitext(filename or 'document')
+    if not ext:
+        ext = '.pdf'
+    return f"{base}{suffix}{ext}"
+
 def _parse_single_invoice_file(filename, file_bytes, batch_branch, batch_state, high_accuracy):
     """Processes a single uploaded bill file (PDF, Image, Excel/CSV) and returns
     its parsed invoice records, file storage buffers, and error state. Thread-safe."""
@@ -2282,9 +2292,15 @@ def _parse_single_invoice_file(filename, file_bytes, batch_branch, batch_state, 
                         bills = extract_from_pdf_binary(file_bytes, page_index=p_idx)
 
                     multi = len(bills) > 1
+                    suffix = f" (Page {p_idx+1})" + (f" - Bill {b_idx+1} of {len(bills)}" if multi else "")
                     for b_idx, b in enumerate(bills):
                         b['_store_file_bytes'] = single_bytes
-                        b['_store_file_name'] = f"{filename} (Page {p_idx+1})" + (f" - Bill {b_idx+1} of {len(bills)}" if multi else "")
+                        # Suffix goes before the extension (not appended after
+                        # it) so the downloaded filename still ends in .pdf -
+                        # a name like "Invoice.pdf (Page 1)" has no
+                        # recognizable extension, so the OS doesn't know what
+                        # app to open the downloaded file with.
+                        b['_store_file_name'] = _insert_before_ext(filename, suffix)
                         b['_store_mime_type'] = "application/pdf"
                         b['_page_number'] = p_idx + 1
                     return bills
@@ -2297,7 +2313,7 @@ def _parse_single_invoice_file(filename, file_bytes, batch_branch, batch_state, 
                         "vendor_name": f"Failed to parse page {p_idx+1} of {filename}",
                         "gstin": "N/A", "branch": None,
                         "taxable_value": 0.0, "cgst": 0.0, "sgst": 0.0, "igst": 0.0,
-                        "_store_file_bytes": None, "_store_file_name": f"{filename} (Page {p_idx+1})",
+                        "_store_file_bytes": None, "_store_file_name": _insert_before_ext(filename, f" (Page {p_idx+1})"),
                         "_store_mime_type": None, "_page_number": p_idx + 1, "_error": str(ex)
                     }]
 
