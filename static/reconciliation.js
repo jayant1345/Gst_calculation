@@ -518,8 +518,17 @@ document.addEventListener('DOMContentLoaded', function() {
             return;
         }
 
-        // Render Desktop Rows
+        // Render Desktop Rows. Built into a DocumentFragment and inserted
+        // into the live table with one appendChild at the end, instead of
+        // one appendChild per row -- with ~900 rows, appending each row
+        // directly to the already-attached <tbody> forces the browser to
+        // recompute layout on every single insertion (and the same again
+        // for the mobile card list below), which is what actually produces
+        // the multi-second "shows 0, then the table suddenly appears" delay
+        // -- the whole render is one blocking loop, so the browser can't
+        // paint anything until it's completely finished either way.
         reconTableBody.innerHTML = '';
+        const desktopFragment = document.createDocumentFragment();
         items.forEach(item => {
             const tr = document.createElement('tr');
             tr.className = `recon-row status-${item.status.toLowerCase().replace(/ /g, '-')}`;
@@ -624,11 +633,13 @@ document.addEventListener('DOMContentLoaded', function() {
                 });
             });
 
-            reconTableBody.appendChild(tr);
+            desktopFragment.appendChild(tr);
         });
+        reconTableBody.appendChild(desktopFragment);
 
-        // Render Mobile Comparison Cards
+        // Render Mobile Comparison Cards (same batching as above)
         reconCardList.innerHTML = '';
+        const mobileFragment = document.createDocumentFragment();
         items.forEach(item => {
             const card = document.createElement('div');
             card.className = `mobile-recon-card status-${item.status.toLowerCase().replace(/ /g, '-')}`;
@@ -735,8 +746,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 });
             });
 
-            reconCardList.appendChild(card);
+            mobileFragment.appendChild(card);
         });
+        reconCardList.appendChild(mobileFragment);
     }
 
     function getStatusBadgeClass(status) {

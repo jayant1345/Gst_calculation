@@ -3716,10 +3716,32 @@ def execute_reconciliation(fy, months, user_id, is_admin, client_id='nutan_nagri
         # number is a strong signal it's the same bill -- flag it for a human
         # to confirm rather than auto-merging (a wrong merge would hide a
         # genuine discrepancy).
+        #
+        # Comparing every unmatched book row against every unmatched portal
+        # row is O(n*m) -- with hundreds of rows on each side that's well
+        # into six figures of pair comparisons, and the original version
+        # re-cleaned the same portal invoice number/GSTIN from scratch on
+        # every single pair instead of once. That redundant work (not the
+        # frontend) is what actually produces the multi-second delay before
+        # the ledger populates. Fixed two ways without changing which matches
+        # get found: clean each portal row's GSTIN/invoice number once up
+        # front instead of once per pair, and bucket portal rows by rounded
+        # GST amount so a book row only scans the handful of portal rows
+        # whose amount could possibly fall within the existing ±10
+        # tolerance, instead of the entire unmatched-portal list.
         unmatched_book = [r for r in bucket_reconciled if r["status"] == "Missing in GSTR-2B"]
         unmatched_portal = [r for r in bucket_reconciled if r["status"] == "Missing in Books"]
         used_portal_ids = set()
         possible_match_count = 0
+
+        AMOUNT_BUCKET = 10.0
+        portal_precomputed = []  # index -> (pr, gstin_clean, num_clean)
+        portal_buckets = collections.defaultdict(list)  # bucket key -> indices
+        for pr in unmatched_portal:
+            pe = pr["portal"]
+            idx = len(portal_precomputed)
+            portal_precomputed.append((pr, pe['gstin'].strip().upper(), clean_invoice_number(pe['invoice_number'])))
+            portal_buckets[int(pe['total_gst'] // AMOUNT_BUCKET)].append(idx)
 
         for br in unmatched_book:
             bi = br["book"]
@@ -3728,14 +3750,20 @@ def execute_reconciliation(fy, months, user_id, is_admin, client_id='nutan_nagri
             best = None
             best_score = None
 
-            for pr in unmatched_portal:
+            center_key = int(bi['total_gst'] // AMOUNT_BUCKET)
+            candidate_idx = set()
+            for k in (center_key - 1, center_key, center_key + 1):
+                candidate_idx.update(portal_buckets.get(k, ()))
+
+            for idx in candidate_idx:
+                pr, p_gstin, p_num = portal_precomputed[idx]
                 pe = pr["portal"]
                 if pe['id'] in used_portal_ids:
                     continue
                 if abs(pe['total_gst'] - bi['total_gst']) > 10.0 or abs(pe['taxable_value'] - bi['taxable_value']) > 10.0:
                     continue
-                gstin_dist = levenshtein(bgst, pe['gstin'].strip().upper())
-                num_dist = levenshtein(bnum, clean_invoice_number(pe['invoice_number']))
+                gstin_dist = levenshtein(bgst, p_gstin)
+                num_dist = levenshtein(bnum, p_num)
                 if gstin_dist == 0 and num_dist == 0:
                     continue  # would already have matched exactly above
                 if gstin_dist > 2 or num_dist > 3:
