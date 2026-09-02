@@ -2205,6 +2205,25 @@ body {
     border-bottom: none !important;
 }
 
+/* Two-row sticky thead: every <th> inherits `top: 0` from the generic
+   .invoice-table th rule above, so without this the header-sub row (Branch
+   / Inv No / Date / GST Amt...) sticks at the exact same position as
+   header-main (State / Our Books Data / Portal GSTR-2B Data...) instead of
+   stacking beneath it - on vertical scroll the two rows overlap and paint
+   over the first body row, producing garbled overlapping text. Give the
+   colspan-only header-main cells (th-books/th-portal - NOT the rowspan="2"
+   cells, which already correctly span and stick across both rows) a fixed
+   height, then offset header-sub's sticky position by that same height so
+   it stacks below instead of on top of it. */
+.recon-table .th-books,
+.recon-table .th-portal {
+    height: 44px;
+}
+
+.recon-table .header-sub th {
+    top: 44px;
+}
+
 .th-books {
     background-color: rgba(59, 130, 246, 0.05) !important;
     border-left: 1px solid var(--border-color);
