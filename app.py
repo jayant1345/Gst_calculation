@@ -52,11 +52,24 @@ AI_RESCAN_MODEL_DISPLAY_NAME = "Gemini 2.5 Pro (High Accuracy)"
 AI_VISION_FALLBACK_MODEL_NAME = "x-ai/grok-4.6"
 AI_VISION_SECONDARY_FALLBACK = "claude-3-5-sonnet-20241022"
 
+def asset_url(path):
+    """Static asset URL with a cache-busting ?v=<mtime> query string, so a
+    deploy that changes style.css/app.js etc. is picked up immediately
+    instead of a browser serving a stale cached copy indefinitely (there's
+    no other cache-busting on /static/* today)."""
+    full_path = os.path.join(app.static_folder, path)
+    try:
+        version = int(os.path.getmtime(full_path))
+    except OSError:
+        version = 0
+    return f'/static/{path}?v={version}'
+
 @app.context_processor
 def inject_global_template_vars():
     return {
         'api_key_configured': bool(ANTHROPIC_API_KEY or OPENROUTER_API_KEY),
-        'ai_model_name': AI_MODEL_DISPLAY_NAME
+        'ai_model_name': AI_MODEL_DISPLAY_NAME,
+        'asset_url': asset_url
     }
 
 def render_pdf_page_to_png_base64(file_bytes, page_index=0, dpi=150):

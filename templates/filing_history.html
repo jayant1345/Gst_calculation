@@ -14,7 +14,7 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 
     <!-- Custom Style Sheet -->
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="{{ asset_url('style.css') }}">
 </head>
 <body class="light-mode">
     <div class="app-container">
@@ -237,7 +237,7 @@
         </main>
     </div>
 
-    <script src="/static/nav.js"></script>
-    <script src="/static/filing_history.js"></script>
+    <script src="{{ asset_url('nav.js') }}"></script>
+    <script src="{{ asset_url('filing_history.js') }}"></script>
 </body>
 </html>
