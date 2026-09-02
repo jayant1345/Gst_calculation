@@ -248,6 +248,7 @@ def init_db():
 
         # Migrate existing installs that predate the is_admin column
         cur.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT FALSE;')
+        cur.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_data TEXT;')
 
 
         # Create invoices table (using numeric for high-precision currency values)
@@ -1020,6 +1021,25 @@ def parse_excel_register(file_bytes):
     return invoices
 
 # Web Router Pages
+
+@app.context_processor
+def inject_user_avatar():
+    avatar_data = session.get('avatar_data')
+    if not avatar_data and 'user_id' in session:
+        try:
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute('SELECT avatar_data FROM users WHERE id = %s;', (session['user_id'],))
+            row = cur.fetchone()
+            cur.close()
+            conn.close()
+            if row and row[0]:
+                avatar_data = row[0]
+                session['avatar_data'] = avatar_data
+        except Exception:
+            pass
+    return dict(user_avatar=avatar_data)
+
 @app.route('/')
 @login_required
 def home():
@@ -1047,6 +1067,7 @@ def login():
                 session['user_id'] = user['id']
                 session['username'] = user['username']
                 session['is_admin'] = bool(user['is_admin'])
+                session['avatar_data'] = user.get('avatar_data') or ''
                 return redirect(url_for('home'))
             else:
                 error = "Invalid username or password"
@@ -1284,6 +1305,47 @@ def admin_delete_user(user_id):
     return redirect(url_for('admin_users'))
 
 # API Endpoints
+
+
+@app.route('/api/user/avatar', methods=['POST'])
+@login_required
+def update_user_avatar_api():
+    data = request.get_json(silent=True) or {}
+    avatar_data = data.get('avatar_data', '').strip()
+    if not avatar_data:
+        return jsonify({"success": False, "error": "No image data provided"}), 400
+
+    if len(avatar_data) > 3 * 1024 * 1024:
+        return jsonify({"success": False, "error": "Avatar image is too large. Please select a smaller photo."}), 400
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute('UPDATE users SET avatar_data = %s WHERE id = %s;', (avatar_data, session['user_id']))
+        conn.commit()
+        cur.close()
+        conn.close()
+        session['avatar_data'] = avatar_data
+        log_activity(session['user_id'], 'UPDATE_AVATAR', f"User '{session.get('username')}' updated profile avatar")
+        return jsonify({"success": True, "avatar_data": avatar_data})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/user/avatar', methods=['DELETE'])
+@login_required
+def delete_user_avatar_api():
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute('UPDATE users SET avatar_data = NULL WHERE id = %s;', (session['user_id'],))
+        conn.commit()
+        cur.close()
+        conn.close()
+        session.pop('avatar_data', None)
+        log_activity(session['user_id'], 'REMOVE_AVATAR', f"User '{session.get('username')}' removed profile avatar")
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
 
 @app.route('/api/clients', methods=['GET'])
 @login_required

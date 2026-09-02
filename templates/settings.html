@@ -163,15 +163,19 @@
                 </button>
                 <div class="header-title">
                     <h1>Portal Settings</h1>
-                    <p class="section-desc">Manage your account credentials</p>
+                    <p class="section-desc">Manage your account profile photo and credentials</p>
                 </div>
                 <div class="user-profile">
                     <div class="profile-info">
                         <span class="profile-name">{{ session['username'] }}</span>
                         <span class="profile-role">N. N. Shah & Co. (Auditor)</span>
                     </div>
-                    <div class="profile-avatar">
+                    <div class="profile-avatar" id="headerAvatarContainer">
+                        {% if user_avatar %}
+                        <img src="{{ user_avatar }}" alt="{{ session['username'] }}" class="user-avatar-img">
+                        {% else %}
                         <i class="fa-solid fa-user-tie"></i>
+                        {% endif %}
                     </div>
                 </div>
             </header>
@@ -205,48 +209,233 @@
                 </button>
             </div>
 
-            <section class="dashboard-panel settings-panel">
-                <div class="panel-header">
-                    <h2><i class="fa-solid fa-key"></i> Change Password</h2>
-                    <p class="panel-subtitle">Update the password for account "{{ session['username'] }}"</p>
-                </div>
-
-                {% if error %}
-                <div class="error-alert">
-                    <i class="fa-solid fa-triangle-exclamation"></i>
-                    <span>{{ error }}</span>
-                </div>
-                {% endif %}
-
-                {% for category, message in get_flashed_messages(with_categories=true) %}
-                <div class="{{ 'success-alert' if category == 'success' else 'error-alert' }}">
-                    <i class="fa-solid {{ 'fa-circle-check' if category == 'success' else 'fa-triangle-exclamation' }}"></i>
-                    <span>{{ message }}</span>
-                </div>
-                {% endfor %}
-
-                <form action="/settings" method="POST">
-                    <div class="form-group">
-                        <label for="current_password">Current Password</label>
-                        <input type="password" id="current_password" name="current_password" class="form-control" placeholder="Enter current password" required autofocus>
+            <div class="settings-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 28px; max-width: 1040px;">
+                <!-- Profile Avatar Card -->
+                <section class="dashboard-panel settings-panel" style="max-width: 100%;">
+                    <div class="panel-header">
+                        <h2><i class="fa-solid fa-circle-user" style="color: var(--accent-blue);"></i> Profile Avatar & Photo</h2>
+                        <p class="panel-subtitle">Personalize your auditor account profile photo</p>
                     </div>
 
-                    <div class="form-group">
-                        <label for="new_password">New Password</label>
-                        <input type="password" id="new_password" name="new_password" class="form-control" placeholder="Enter new password" required minlength="4">
+                    <div style="display: flex; flex-direction: column; align-items: center; text-align: center; padding: 18px 10px;">
+                        <!-- Avatar Preview Wrapper -->
+                        <div class="avatar-preview-box" style="position: relative; width: 120px; height: 120px; border-radius: 50%; background: #f1f5f9; border: 3px solid #3b82f6; box-shadow: 0 8px 24px rgba(37, 99, 235, 0.15); display: flex; align-items: center; justify-content: center; overflow: hidden; margin-bottom: 16px;">
+                            <img id="avatarPreviewImg" src="{{ user_avatar or '' }}" alt="Avatar Preview" style="width: 100%; height: 100%; object-fit: cover; {{ '' if user_avatar else 'display: none;' }}">
+                            <div id="avatarFallbackIcon" style="font-size: 52px; color: #64748b; {{ 'display: none;' if user_avatar else 'display: flex;' }} align-items: center; justify-content: center; width: 100%; height: 100%;">
+                                <i class="fa-solid fa-user-tie"></i>
+                            </div>
+                        </div>
+
+                        <div style="font-size: 15px; font-weight: 700; color: #0f172a; margin-bottom: 4px;">{{ session['username'] }}</div>
+                        <div style="font-size: 12.5px; color: #64748b; margin-bottom: 20px;">Auditor Profile (Naimish N. Shah & Co.)</div>
+
+                        <input type="file" id="avatarFileInput" accept="image/png,image/jpeg,image/webp,image/jpg,image/gif" style="display: none;">
+
+                        <div style="display: flex; gap: 10px; justify-content: center; flex-wrap: wrap;">
+                            <button type="button" class="btn btn-primary" id="btnUploadAvatar" style="display: flex; align-items: center; gap: 8px; padding: 10px 20px; border-radius: 8px; font-weight: 600; cursor: pointer;">
+                                <i class="fa-solid fa-camera"></i> Change Photo
+                            </button>
+                            <button type="button" class="btn btn-secondary" id="btnRemoveAvatar" style="{{ 'display: flex;' if user_avatar else 'display: none;' }} align-items: center; gap: 8px; padding: 10px 18px; border-radius: 8px; font-weight: 600; color: #ef4444; border-color: #fecaca; background: #fff; cursor: pointer;">
+                                <i class="fa-solid fa-trash"></i> Remove
+                            </button>
+                        </div>
+
+                        <div id="avatarStatusMsg" style="display: none; margin-top: 16px; font-size: 13px; font-weight: 600; padding: 8px 14px; border-radius: 8px;"></div>
+                        <small style="color: #94a3b8; font-size: 11.5px; margin-top: 14px; display: block;">Supports JPG, PNG, WEBP (automatically optimized)</small>
+                    </div>
+                </section>
+
+                <!-- Change Password Card -->
+                <section class="dashboard-panel settings-panel" style="max-width: 100%;">
+                    <div class="panel-header">
+                        <h2><i class="fa-solid fa-key"></i> Change Password</h2>
+                        <p class="panel-subtitle">Update the password for account "{{ session['username'] }}"</p>
                     </div>
 
-                    <div class="form-group">
-                        <label for="confirm_password">Confirm New Password</label>
-                        <input type="password" id="confirm_password" name="confirm_password" class="form-control" placeholder="Re-enter new password" required minlength="4">
+                    {% if error %}
+                    <div class="error-alert">
+                        <i class="fa-solid fa-triangle-exclamation"></i>
+                        <span>{{ error }}</span>
                     </div>
+                    {% endif %}
 
-                    <button type="submit" class="btn btn-primary">Update Password</button>
-                </form>
-            </section>
+                    {% for category, message in get_flashed_messages(with_categories=true) %}
+                    <div class="{{ 'success-alert' if category == 'success' else 'error-alert' }}">
+                        <i class="fa-solid {{ 'fa-circle-check' if category == 'success' else 'fa-triangle-exclamation' }}"></i>
+                        <span>{{ message }}</span>
+                    </div>
+                    {% endfor %}
+
+                    <form action="/settings" method="POST">
+                        <div class="form-group">
+                            <label for="current_password">Current Password</label>
+                            <input type="password" id="current_password" name="current_password" class="form-control" placeholder="Enter current password" required autofocus>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="new_password">New Password</label>
+                            <input type="password" id="new_password" name="new_password" class="form-control" placeholder="Enter new password" required minlength="4">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="confirm_password">Confirm New Password</label>
+                            <input type="password" id="confirm_password" name="confirm_password" class="form-control" placeholder="Re-enter new password" required minlength="4">
+                        </div>
+
+                        <button type="submit" class="btn btn-primary" style="padding: 10px 22px; border-radius: 8px; font-weight: 600;">Update Password</button>
+                    </form>
+                </section>
+            </div>
         </main>
     </div>
 
     <script src="{{ asset_url('nav.js') }}"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const btnUploadAvatar = document.getElementById('btnUploadAvatar');
+            const btnRemoveAvatar = document.getElementById('btnRemoveAvatar');
+            const avatarFileInput = document.getElementById('avatarFileInput');
+            const avatarPreviewImg = document.getElementById('avatarPreviewImg');
+            const avatarFallbackIcon = document.getElementById('avatarFallbackIcon');
+            const avatarStatusMsg = document.getElementById('avatarStatusMsg');
+            const headerAvatarContainer = document.getElementById('headerAvatarContainer');
+
+            function showStatus(msg, isSuccess) {
+                avatarStatusMsg.textContent = msg;
+                avatarStatusMsg.style.display = 'block';
+                avatarStatusMsg.style.background = isSuccess ? '#f0fdf4' : '#fef2f2';
+                avatarStatusMsg.style.color = isSuccess ? '#16a34a' : '#dc2626';
+                avatarStatusMsg.style.border = isSuccess ? '1px solid #bbf7d0' : '1px solid #fecaca';
+                setTimeout(() => {
+                    avatarStatusMsg.style.display = 'none';
+                }, 4000);
+            }
+
+            function updateHeaderAvatar(dataUrl) {
+                if (!headerAvatarContainer) return;
+                if (dataUrl) {
+                    headerAvatarContainer.innerHTML = `<img src="${dataUrl}" alt="User Avatar" class="user-avatar-img">`;
+                } else {
+                    headerAvatarContainer.innerHTML = `<i class="fa-solid fa-user-tie"></i>`;
+                }
+            }
+
+            if (btnUploadAvatar) {
+                btnUploadAvatar.addEventListener('click', () => {
+                    avatarFileInput.click();
+                });
+            }
+
+            if (avatarFileInput) {
+                avatarFileInput.addEventListener('change', (e) => {
+                    const file = e.target.files[0];
+                    if (!file) return;
+
+                    if (!file.type.startsWith('image/')) {
+                        showStatus('Please select a valid image file (JPG, PNG, WEBP).', false);
+                        return;
+                    }
+
+                    const reader = new FileReader();
+                    reader.onload = (event) => {
+                        const img = new Image();
+                        img.onload = () => {
+                            // Resize on canvas to max 256x256
+                            const canvas = document.createElement('canvas');
+                            const maxDim = 256;
+                            let width = img.width;
+                            let height = img.height;
+
+                            if (width > height) {
+                                if (width > maxDim) {
+                                    height = Math.round((height * maxDim) / width);
+                                    width = maxDim;
+                                }
+                            } else {
+                                if (height > maxDim) {
+                                    width = Math.round((width * maxDim) / height);
+                                    height = maxDim;
+                                }
+                            }
+
+                            canvas.width = width;
+                            canvas.height = height;
+                            const ctx = canvas.getContext('2d');
+                            ctx.drawImage(img, 0, 0, width, height);
+
+                            const optimizedDataUrl = canvas.toDataURL('image/webp', 0.85);
+
+                            // Send to server
+                            btnUploadAvatar.disabled = true;
+                            btnUploadAvatar.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving...';
+
+                            fetch('/api/user/avatar', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ avatar_data: optimizedDataUrl })
+                            })
+                            .then(res => res.json())
+                            .then(data => {
+                                btnUploadAvatar.disabled = false;
+                                btnUploadAvatar.innerHTML = '<i class="fa-solid fa-camera"></i> Change Photo';
+
+                                if (data.success) {
+                                    avatarPreviewImg.src = optimizedDataUrl;
+                                    avatarPreviewImg.style.display = 'block';
+                                    avatarFallbackIcon.style.display = 'none';
+                                    btnRemoveAvatar.style.display = 'flex';
+                                    updateHeaderAvatar(optimizedDataUrl);
+                                    showStatus('Profile avatar updated successfully!', true);
+                                } else {
+                                    showStatus(data.error || 'Failed to update avatar.', false);
+                                }
+                            })
+                            .catch(err => {
+                                btnUploadAvatar.disabled = false;
+                                btnUploadAvatar.innerHTML = '<i class="fa-solid fa-camera"></i> Change Photo';
+                                showStatus('Network error while saving avatar.', false);
+                            });
+                        };
+                        img.src = event.target.result;
+                    };
+                    reader.readAsDataURL(file);
+                });
+            }
+
+            if (btnRemoveAvatar) {
+                btnRemoveAvatar.addEventListener('click', () => {
+                    if (!confirm('Are you sure you want to remove your profile photo?')) return;
+
+                    btnRemoveAvatar.disabled = true;
+                    btnRemoveAvatar.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Removing...';
+
+                    fetch('/api/user/avatar', {
+                        method: 'DELETE'
+                    })
+                    .then(res => res.json())
+                    .then(data => {
+                        btnRemoveAvatar.disabled = false;
+                        btnRemoveAvatar.innerHTML = '<i class="fa-solid fa-trash"></i> Remove';
+
+                        if (data.success) {
+                            avatarPreviewImg.src = '';
+                            avatarPreviewImg.style.display = 'none';
+                            avatarFallbackIcon.style.display = 'flex';
+                            btnRemoveAvatar.style.display = 'none';
+                            updateHeaderAvatar(null);
+                            showStatus('Profile photo removed.', true);
+                        } else {
+                            showStatus(data.error || 'Failed to remove avatar.', false);
+                        }
+                    })
+                    .catch(err => {
+                        btnRemoveAvatar.disabled = false;
+                        btnRemoveAvatar.innerHTML = '<i class="fa-solid fa-trash"></i> Remove';
+                        showStatus('Network error while removing avatar.', false);
+                    });
+                });
+            }
+        });
+    </script>
 </body>
 </html>

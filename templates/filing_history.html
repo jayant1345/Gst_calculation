@@ -112,7 +112,11 @@
                         <span class="profile-role">N. N. Shah & Co. (Auditor)</span>
                     </div>
                     <div class="profile-avatar">
+                        {% if user_avatar %}
+                        <img src="{{ user_avatar }}" alt="{{ session['username'] }}" class="user-avatar-img">
+                        {% else %}
                         <i class="fa-solid fa-user-tie"></i>
+                        {% endif %}
                     </div>
                 </div>
             </header>
