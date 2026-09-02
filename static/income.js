@@ -668,8 +668,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         <td style="padding: 7px 10px; font-family: monospace; font-weight: 700;">${escapeHtml(c.code)}</td>
                         <td style="padding: 7px 10px;">${escapeHtml(c.particulars)}</td>
                         <td style="padding: 7px 10px;">${c.is_taxable ? (c.gst_rate + '%') : 'Exempt'}</td>
-                        <td style="padding: 7px 10px; text-align: right;">
+                        <td style="padding: 7px 10px; text-align: right; white-space: nowrap;">
                             <button type="button" class="btn-edit-code" data-code="${escapeHtml(c.code)}" style="background:none; border:none; color:#2563eb; cursor:pointer; font-size:12px;">Edit</button>
+                            <button type="button" class="btn-delete-code" data-code="${escapeHtml(c.code)}" style="background:none; border:none; color:#ef4444; cursor:pointer; font-size:12px; margin-left: 10px;">Delete</button>
                         </td>
                     </tr>
                 `).join('');
@@ -685,6 +686,24 @@ document.addEventListener('DOMContentLoaded', () => {
                         codeInputCategory.value = c.category || '';
                         codeFormMsg.style.display = 'none';
                         codeInputParticulars.focus();
+                    });
+                });
+                document.querySelectorAll('.btn-delete-code').forEach(btn => {
+                    btn.addEventListener('click', async () => {
+                        const delCode = btn.getAttribute('data-code');
+                        if (!confirm(`Delete GL/PL code ${delCode} from the catalog?\n\nAny already-uploaded entries using this code will keep their current figures but be re-flagged "Needs Review" since their classification no longer exists.`)) {
+                            return;
+                        }
+                        try {
+                            const res = await fetch(`/api/income-codes-master/${encodeURIComponent(delCode)}`, { method: 'DELETE' });
+                            const data = await res.json();
+                            if (!res.ok) throw new Error(data.error || 'Delete failed');
+                            showCodeFormMsg(`Deleted code ${delCode}. ${data.affected_entries} existing entr${data.affected_entries === 1 ? 'y was' : 'ies were'} re-flagged for review.`, false);
+                            loadCodesTable();
+                            loadIncomeData();
+                        } catch (e) {
+                            showCodeFormMsg('Could not delete: ' + e.message, true);
+                        }
                     });
                 });
             } catch (e) {

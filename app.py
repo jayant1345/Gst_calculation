@@ -4931,13 +4931,20 @@ def add_income_code_master():
     """Admin-only: add a new GL/PL code to the master catalog, or correct an
     existing one. Persists to the income_code_catalog DB table (durable across
     Railway redeploys) and retroactively fixes any income_entries rows already
-    saved under this code - clearing the needs_review flag if it was unmapped,
-    and recomputing cgst/sgst if the taxability/rate changed."""
+    saved under this code - clearing the needs_review flag only if it was
+    unmapped (an unrelated reclass-pair flag on the same code is left alone,
+    since correcting particulars/rate says nothing about whether that reclass
+    was actually resolved), and recomputing cgst/sgst if the rate changed."""
     if not is_admin_user():
         return jsonify({"error": "Adding or editing GL/PL codes is restricted to Administrator users only."}), 403
 
     data = request.json or {}
-    code = str(data.get('code', '')).strip()
+    # Normalize casing here so "gl1720" and "GL1720" always collapse to the
+    # same catalog row - the DB primary key is exact-match, so without this
+    # two differently-cased entries of the same code would silently split
+    # into two rows, only one of which (whichever loads first) ever actually
+    # takes effect via the case-insensitive lookup in get_income_code_meta.
+    code = str(data.get('code', '')).strip().upper()
     particulars = str(data.get('particulars', '')).strip()
     if not code or not particulars:
         return jsonify({"error": "GL/PL code and particulars are both required."}), 400
@@ -4951,9 +4958,8 @@ def add_income_code_master():
     category = str(data.get('category') or ('Taxable Income' if is_taxable else 'Exempt Income')).strip()
 
     global INCOME_MASTER_CODES
-    clean = code.upper()
     entry = {"code": code, "particulars": particulars, "gst_rate": gst_rate, "is_taxable": is_taxable, "category": category}
-    existing = next((m for m in INCOME_MASTER_CODES if str(m.get('code')).strip().upper() == clean), None)
+    existing = next((m for m in INCOME_MASTER_CODES if str(m.get('code')).strip().upper() == code), None)
     if existing:
         existing.update(entry)
     else:
@@ -4986,15 +4992,29 @@ def add_income_code_master():
                 is_taxable = EXCLUDED.is_taxable,
                 category = EXCLUDED.category
         ''', (code, particulars, gst_rate, is_taxable, category))
-        cur.execute('SELECT id, income_amount::float FROM income_entries WHERE UPPER(gl_code) = %s', (clean,))
+        cur.execute('''
+            SELECT id, income_amount::float, review_reason FROM income_entries
+            WHERE UPPER(gl_code) = %s
+        ''', (code,))
         rows = cur.fetchall()
-        for rid, amount in rows:
+        for rid, amount, review_reason in rows:
             cgst = round((amount or 0.0) * (gst_rate / 200.0), 2) if is_taxable else 0.0
-            cur.execute('''
-                UPDATE income_entries
-                SET is_taxable = %s, cgst = %s, sgst = %s, needs_review = FALSE, review_reason = NULL
-                WHERE id = %s
-            ''', (is_taxable, cgst, cgst, rid))
+            was_unmapped = review_reason is None or 'not found in master catalog' in review_reason
+            if was_unmapped:
+                cur.execute('''
+                    UPDATE income_entries
+                    SET is_taxable = %s, cgst = %s, sgst = %s, needs_review = FALSE, review_reason = NULL
+                    WHERE id = %s
+                ''', (is_taxable, cgst, cgst, rid))
+            else:
+                # Flagged for something else (e.g. a possible locker/guarantee
+                # reclass transfer) - fix the tax figures but leave that
+                # unrelated review flag standing; it still needs its own check.
+                cur.execute('''
+                    UPDATE income_entries
+                    SET is_taxable = %s, cgst = %s, sgst = %s
+                    WHERE id = %s
+                ''', (is_taxable, cgst, cgst, rid))
             fixed_count += 1
         conn.commit()
         cur.close()
@@ -5002,7 +5022,51 @@ def add_income_code_master():
     except Exception as e:
         print(f"Error retroactively fixing income_entries for code {code}: {e}")
 
+    log_activity(session['user_id'], 'EDIT_GL_CODE' if existing else 'ADD_GL_CODE',
+                 f"{'Edited' if existing else 'Added'} GL/PL code {code} ({particulars}) - {'Taxable ' + str(gst_rate) + '%' if is_taxable else 'Exempt'}, {fixed_count} existing entries updated")
+
     return jsonify({"success": True, "code": entry, "updated_existing": existing is not None, "entries_fixed": fixed_count})
+
+@app.route('/api/income-codes-master/<code>', methods=['DELETE'])
+@login_required
+def delete_income_code_master(code):
+    """Admin-only: remove a GL/PL code from the catalog. Any income_entries
+    already saved under this code are NOT deleted or re-taxed - they keep
+    their current figures - but are re-flagged needs_review, since the
+    classification that justified their current taxability no longer exists
+    in the catalog and needs a human to re-confirm it."""
+    if not is_admin_user():
+        return jsonify({"error": "Deleting GL/PL codes is restricted to Administrator users only."}), 403
+
+    clean = str(code).strip().upper()
+    global INCOME_MASTER_CODES
+    before = len(INCOME_MASTER_CODES)
+    INCOME_MASTER_CODES = [m for m in INCOME_MASTER_CODES if str(m.get('code')).strip().upper() != clean]
+    if len(INCOME_MASTER_CODES) == before:
+        return jsonify({"error": f"Code {code} not found in the catalog."}), 404
+
+    affected_count = 0
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute('DELETE FROM income_code_catalog WHERE UPPER(code) = %s', (clean,))
+        cur.execute('''
+            UPDATE income_entries
+            SET needs_review = TRUE,
+                review_reason = %s
+            WHERE UPPER(gl_code) = %s
+        ''', (f"GL/PL code {clean} was removed from the master catalog - please reclassify", clean))
+        affected_count = cur.rowcount
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print(f"Error deleting income code {code}: {e}")
+        return jsonify({"error": str(e)}), 500
+
+    log_activity(session['user_id'], 'DELETE_GL_CODE', f"Deleted GL/PL code {clean} - {affected_count} existing entries re-flagged for review")
+
+    return jsonify({"success": True, "affected_entries": affected_count})
 
 @app.route('/api/get-income-entries', methods=['GET'])
 @login_required
