@@ -499,8 +499,11 @@
                 </p>
                 <form id="codeForm" class="form-grid" style="margin-bottom: 4px; flex-shrink: 0;">
                     <div class="form-field">
-                        <label for="codeInputCode">GL / PL Code</label>
-                        <input type="text" id="codeInputCode" placeholder="e.g. 3270" autocomplete="off" required>
+                        <label for="codeInputCode">GL / PL Code <span class="field-hint">(type to search existing codes)</span></label>
+                        <div class="autocomplete-wrapper" id="codeInputCodeWrapper">
+                            <input type="text" id="codeInputCode" placeholder="e.g. 3270" autocomplete="off" required>
+                            <ul class="autocomplete-dropdown" id="codeInputCodeDropdown"></ul>
+                        </div>
                     </div>
                     <div class="form-field">
                         <label for="codeInputParticulars">Particulars</label>

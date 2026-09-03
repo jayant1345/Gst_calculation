@@ -47,6 +47,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const codeInputLedgerRole = document.getElementById('codeInputLedgerRole');
     const codeSearchInput = document.getElementById('codeSearchInput');
     const codeSearchCount = document.getElementById('codeSearchCount');
+    const codeInputCodeDropdown = document.getElementById('codeInputCodeDropdown');
     const codeRateHint = document.getElementById('codeRateHint');
     const codeFormMsg = document.getElementById('codeFormMsg');
     const codesTableBody = document.getElementById('codesTableBody');
@@ -793,6 +794,103 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         let allCatalogCodes = [];
+
+        // GL/PL Code autocomplete - type the first couple of digits/letters
+        // and pick from a matching-codes dropdown instead of scrolling the
+        // full list below. Self-contained here (not shared with app.js'
+        // setupAutocomplete) since app.js isn't loaded on this page.
+        (function setupCodeAutocomplete() {
+            let activeIndex = -1;
+            let currentItems = [];
+
+            function render(query) {
+                const q = (query || '').trim().toLowerCase();
+                if (!q) {
+                    codeInputCodeDropdown.style.display = 'none';
+                    return;
+                }
+                currentItems = allCatalogCodes
+                    .filter(c => String(c.code).toLowerCase().includes(q) || String(c.particulars || '').toLowerCase().includes(q))
+                    .slice(0, 12);
+                if (currentItems.length === 0) {
+                    codeInputCodeDropdown.style.display = 'none';
+                    return;
+                }
+                activeIndex = -1;
+                codeInputCodeDropdown.innerHTML = currentItems.map((c, idx) => `
+                    <li class="autocomplete-item" data-index="${idx}">
+                        <div>
+                            <div class="autocomplete-main">${escapeHtml(c.code)}</div>
+                            <div class="autocomplete-sub">${escapeHtml(c.particulars || '')}</div>
+                        </div>
+                        <span class="autocomplete-badge">${c.is_taxable ? c.gst_rate + '%' : 'Exempt'}</span>
+                    </li>
+                `).join('');
+                codeInputCodeDropdown.style.display = 'block';
+            }
+
+            function updateActive(items) {
+                items.forEach((it, idx) => {
+                    it.classList.toggle('active', idx === activeIndex);
+                    if (idx === activeIndex) it.scrollIntoView({ block: 'nearest' });
+                });
+            }
+
+            function selectItem(c) {
+                codeInputCodeDropdown.style.display = 'none';
+                // Load the existing code into the form for editing - same
+                // fields the "Edit" button in the list below fills in.
+                codeInputCode.value = c.code;
+                codeInputParticulars.value = c.particulars || '';
+                codeInputTaxable.value = c.is_taxable ? 'true' : 'false';
+                codeInputRate.value = c.gst_rate || 0;
+                codeInputRate.disabled = !c.is_taxable;
+                codeInputCategory.value = c.category || '';
+                codeInputManualEntry.value = c.manual_entry ? 'true' : 'false';
+                codeInputTaxType.value = c.tax_type || 'CGST_SGST';
+                codeInputLedgerRole.value = c.ledger_role || '';
+                codeInputTaxType.disabled = !!c.ledger_role;
+                codeFormMsg.style.display = 'none';
+                codeInputParticulars.focus();
+            }
+
+            codeInputCode.addEventListener('input', () => render(codeInputCode.value));
+            codeInputCode.addEventListener('focus', () => render(codeInputCode.value));
+
+            codeInputCodeDropdown.addEventListener('mousedown', (e) => {
+                const itemEl = e.target.closest('.autocomplete-item');
+                if (!itemEl) return;
+                const idx = parseInt(itemEl.dataset.index, 10);
+                if (currentItems[idx]) selectItem(currentItems[idx]);
+            });
+
+            codeInputCode.addEventListener('keydown', (e) => {
+                if (codeInputCodeDropdown.style.display !== 'block') return;
+                const items = codeInputCodeDropdown.querySelectorAll('.autocomplete-item');
+                if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    activeIndex = (activeIndex + 1) % items.length;
+                    updateActive(items);
+                } else if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    activeIndex = (activeIndex - 1 + items.length) % items.length;
+                    updateActive(items);
+                } else if (e.key === 'Enter') {
+                    if (activeIndex >= 0 && currentItems[activeIndex]) {
+                        e.preventDefault();
+                        selectItem(currentItems[activeIndex]);
+                    }
+                } else if (e.key === 'Escape') {
+                    codeInputCodeDropdown.style.display = 'none';
+                }
+            });
+
+            document.addEventListener('click', (e) => {
+                if (!codeInputCode.contains(e.target) && !codeInputCodeDropdown.contains(e.target)) {
+                    codeInputCodeDropdown.style.display = 'none';
+                }
+            });
+        })();
 
         function renderCodesTable() {
             const codes = allCatalogCodes;
