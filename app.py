@@ -4411,6 +4411,11 @@ def export_vendor_discrepancies():
 def filing_history():
     return render_template('filing_history.html', is_admin=is_admin_user(), api_key_configured=bool(ANTHROPIC_API_KEY or OPENROUTER_API_KEY), ai_model_name=AI_MODEL_DISPLAY_NAME)
 
+@app.route('/workflow-guide')
+@login_required
+def workflow_guide():
+    return render_template('workflow_guide.html', is_admin=is_admin_user())
+
 @app.route('/api/filing-history', methods=['GET'])
 @login_required
 def get_filing_history():

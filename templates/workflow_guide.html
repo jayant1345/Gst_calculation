@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Workflow Guide - Naimish N. Shah & Co.</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="{{ asset_url('style.css') }}">
+    <style>
+        .guide-wrap { max-width: 900px; }
+        .guide-intro {
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+            color: #fff;
+            border-radius: 16px;
+            padding: 26px 28px;
+            margin-bottom: 28px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+        }
+        .guide-intro h2 { font-size: 19px; font-weight: 800; margin-bottom: 8px; display: flex; align-items: center; gap: 10px; }
+        .guide-intro p { font-size: 13.5px; color: #cbd5e1; line-height: 1.6; }
+        .guide-step {
+            display: flex;
+            gap: 18px;
+            background: #fff;
+            border: 1px solid var(--border-color);
+            border-radius: 14px;
+            padding: 20px 22px;
+            margin-bottom: 16px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.03);
+        }
+        .guide-step-num {
+            flex-shrink: 0;
+            width: 38px; height: 38px;
+            border-radius: 50%;
+            background: var(--accent-blue);
+            color: #fff;
+            display: flex; align-items: center; justify-content: center;
+            font-weight: 800; font-size: 15px;
+        }
+        .guide-step-body h3 { font-size: 15.5px; font-weight: 700; color: #0f172a; margin-bottom: 6px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .guide-step-body p { font-size: 13.5px; color: #475569; line-height: 1.65; margin-bottom: 8px; }
+        .guide-step-body ul { margin: 6px 0 0 18px; padding: 0; }
+        .guide-step-body li { font-size: 13.5px; color: #475569; line-height: 1.7; }
+        .guide-where {
+            display: inline-flex; align-items: center; gap: 6px;
+            background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe;
+            padding: 3px 10px; border-radius: 8px; font-size: 11.5px; font-weight: 700;
+        }
+        .guide-section-title {
+            font-size: 16px; font-weight: 800; color: #0f172a;
+            margin: 34px 0 14px; display: flex; align-items: center; gap: 8px;
+        }
+        .guide-ref-table {
+            width: 100%; border-collapse: collapse; font-size: 13px;
+            background: #fff; border: 1px solid var(--border-color); border-radius: 12px; overflow: hidden;
+        }
+        .guide-ref-table th {
+            background: #f8fafc; text-align: left; padding: 10px 14px;
+            font-size: 11px; text-transform: uppercase; color: #64748b; border-bottom: 2px solid var(--border-color);
+        }
+        .guide-ref-table td { padding: 11px 14px; border-bottom: 1px solid var(--border-color); color: #334155; vertical-align: top; }
+        .guide-ref-table tr:last-child td { border-bottom: none; }
+        .guide-badge { display: inline-block; padding: 2px 8px; border-radius: 8px; font-size: 10.5px; font-weight: 700; }
+        .guide-badge.blue { background: #dbeafe; color: #1e40af; }
+        .guide-badge.purple { background: #ede9fe; color: #5b21b6; }
+        .guide-badge.amber { background: #fef3c7; color: #92400e; }
+        .guide-faq {
+            background: #fff; border: 1px solid var(--border-color); border-radius: 12px;
+            padding: 16px 20px; margin-bottom: 12px;
+        }
+        .guide-faq h4 { font-size: 13.5px; font-weight: 700; color: #0f172a; margin-bottom: 5px; }
+        .guide-faq p { font-size: 13px; color: #64748b; line-height: 1.6; }
+        code.g { background: #f1f5f9; padding: 1px 6px; border-radius: 5px; font-size: 12.5px; color: #0f172a; }
+    </style>
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar Navigation -->
+        <aside class="sidebar">
+            <div class="sidebar-top">
+                <div class="sidebar-brand">
+                    <div class="agency-logo-container">
+                        <img src="/static/nn_shah_logo_3d.png" alt="Naimish N. Shah & Co." class="agency-full-logo" onerror="this.onerror=null; this.src='/static/nn_shah_logo.png';">
+                    </div>
+                </div>
+                <nav class="sidebar-nav">
+                    <a href="/" class="nav-item">
+                        <i class="fa-solid fa-chart-pie"></i>
+                        <span>ITC Dashboard</span>
+                    </a>
+                    <a href="/reconciliation" class="nav-item">
+                        <i class="fa-solid fa-scale-balanced"></i>
+                        <span>Reconciliation</span>
+                    </a>
+                    <a href="/income" class="nav-item">
+                        <i class="fa-solid fa-coins"></i>
+                        <span>Income & Output GST</span>
+                    </a>
+                    <a href="/users" class="nav-item">
+                        <i class="fa-solid fa-users-gear"></i>
+                        <span>User Management</span>
+                    </a>
+                    <a href="/settings" class="nav-item">
+                        <i class="fa-solid fa-sliders"></i>
+                        <span>Portal Settings</span>
+                    </a>
+                    <a href="/filing-history" class="nav-item">
+                        <i class="fa-solid fa-clock-rotate-left"></i>
+                        <span>Filing History</span>
+                    </a>
+                    <a href="/workflow-guide" class="nav-item active">
+                        <i class="fa-solid fa-map-signs"></i>
+                        <span>Workflow Guide</span>
+                    </a>
+                    <a href="/logout" class="nav-item">
+                        <i class="fa-solid fa-arrow-right-from-bracket"></i>
+                        <span>Logout</span>
+                    </a>
+                </nav>
+            </div>
+            <div class="sidebar-footer">
+                <div class="badge-status">
+                    <span class="status-dot"></span>
+                    <span id="api-status">API Connected</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content Area -->
+        <main class="main-content">
+            <header class="top-header">
+                <div class="header-left">
+                    <h1>Workflow Guide</h1>
+                    <p class="subtitle">How the Income &amp; Output GST module works, end to end</p>
+                </div>
+                <div class="header-right">
+                    <div class="user-profile">
+                        <div class="user-info">
+                            <span class="user-name">{{ session['username'] }}</span>
+                            <span class="user-role">N. N. Shah & Co. (Auditor)</span>
+                        </div>
+                        <div class="avatar">
+                            {% if user_avatar %}
+                            <img src="{{ user_avatar }}" alt="{{ session['username'] }}" class="user-avatar-img">
+                            {% else %}
+                            <i class="fa-solid fa-user-tie"></i>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+            </header>
+
+            <div class="guide-wrap">
+                <div class="guide-intro">
+                    <h2><i class="fa-solid fa-compass"></i> What this page is</h2>
+                    <p>
+                        A step-by-step walkthrough of how bank statements turn into the CA's GST working sheet in this app -
+                        so you (or the CA) can follow it without asking anyone. This mirrors the CA's own written workflow
+                        specification (NUTAN INCOME WORKFLOW) exactly.
+                    </p>
+                </div>
+
+                <div class="guide-step">
+                    <div class="guide-step-num">1</div>
+                    <div class="guide-step-body">
+                        <h3>Upload branch statements <span class="guide-where"><i class="fa-solid fa-location-dot"></i> Income &amp; Output GST</span></h3>
+                        <p>Drag and drop PDF/Excel branch statements (or a whole folder). Nothing changes here from how you've always done it - the app reads each account's income as <strong>credit total minus debit total</strong> for the period, rounds to 2 decimals, and auto-computes CGST/SGST at 9% each.</p>
+                    </div>
+                </div>
+
+                <div class="guide-step">
+                    <div class="guide-step-num">2</div>
+                    <div class="guide-step-body">
+                        <h3>Check the "Needs Review" banner <span class="guide-where"><i class="fa-solid fa-location-dot"></i> Income &amp; Output GST</span></h3>
+                        <p>After upload, a yellow banner appears if anything needs a second look - a GL/PL code the app has never seen before, a manual-entry code (see step 3), or a locker/guarantee code with signs of an internal transfer. Click <strong>"Show these entries"</strong> to jump straight to them.</p>
+                    </div>
+                </div>
+
+                <div class="guide-step">
+                    <div class="guide-step-num">3</div>
+                    <div class="guide-step-body">
+                        <h3>Classify GL/PL codes (once per code) <span class="guide-where"><i class="fa-solid fa-location-dot"></i> Manage GL/PL Codes</span></h3>
+                        <p>This is the one-time setup step. Open <strong>Manage GL/PL Codes</strong> (button above the branch table) and tell the app how to treat specific codes - see the reference table below for exactly which ones. Type a code or particulars into the search box to find it fast; the field also suggests matches as you type.</p>
+                        <ul>
+                            <li>New/unrecognized codes default to <strong>18% Taxable</strong> until classified - never silently exempt.</li>
+                            <li>Editing a code here retroactively fixes every already-uploaded entry using it.</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <div class="guide-step">
+                    <div class="guide-step-num">4</div>
+                    <div class="guide-step-body">
+                        <h3>Fix manual-entry and ledger-balance figures <span class="guide-where"><i class="fa-solid fa-location-dot"></i> Income table / Ledger section</span></h3>
+                        <p>Codes marked <strong>Manual</strong> (like PL 3230, PL 3320) show a pencil icon next to their amount in the main table - click it to type the correct figure. GL 1878/1879/1880 and exempt-income codes appear lower on the page under <strong>"GST Payable Ledger &amp; Exempt Income"</strong>, each with its own pencil icon if the closing balance needs correcting.</p>
+                    </div>
+                </div>
+
+                <div class="guide-step">
+                    <div class="guide-step-num">5</div>
+                    <div class="guide-step-body">
+                        <h3>Export the CA Working Sheet <span class="guide-where"><i class="fa-solid fa-location-dot"></i> Income &amp; Output GST</span></h3>
+                        <p>Click <strong>Export CA Working Sheet</strong>. Every branch tab, <code class="g">Sheet1</code>, and <code class="g">SUMMARY SHEET GST</code> are filled from real uploaded data, plus two new tabs:</p>
+                        <ul>
+                            <li><strong>GST Payable Reconciliation</strong> - each branch's computed CGST/SGST/IGST vs. the bank's own ledger figure, with the difference. Any branch tab where the difference exceeds <strong>₹10</strong> turns <strong style="color:#dc2626;">red</strong> automatically.</li>
+                            <li><strong>Exempt Income Working Sheet</strong> - this month vs. last month's closing balance for each classified exempt-income code, and the difference.</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <h2 class="guide-section-title"><i class="fa-solid fa-table-list"></i> Quick reference - what to set for which codes</h2>
+                <div style="overflow-x:auto;">
+                <table class="guide-ref-table">
+                    <thead>
+                        <tr><th>Code(s)</th><th>What it is</th><th>Set in Manage GL/PL Codes</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><code class="g">PL 3230</code>, <code class="g">PL 3320</code></td>
+                            <td>Guarantee commission / locker rent - prone to internal accrual transfers that confuse auto-reading.</td>
+                            <td><span class="guide-badge purple">Entry Method: Manual</span></td>
+                        </tr>
+                        <tr>
+                            <td>Any DEMAT-branch code paid on inter-state exchange dealings</td>
+                            <td>Some DEMAT income is IGST instead of CGST+SGST. Only applies inside the DEMAT branch, never elsewhere.</td>
+                            <td><span class="guide-badge blue">Tax Type: IGST @ 18%</span></td>
+                        </tr>
+                        <tr>
+                            <td><code class="g">GL 1878</code>, <code class="g">1879</code>, <code class="g">1880</code></td>
+                            <td>The bank's own GST-payable ledger accounts - one each for CGST, SGST, IGST. Only your chart of accounts says which is which.</td>
+                            <td><span class="guide-badge amber">Ledger Role: GST Payable (CGST / SGST / IGST)</span></td>
+                        </tr>
+                        <tr>
+                            <td>~14 named codes (dividend, interest exempted, provisions written back, income tax refund, etc.)</td>
+                            <td>The CA's exempt-income list for the separate working sheet.</td>
+                            <td><span class="guide-badge amber">Ledger Role: Exempt Income Item</span></td>
+                        </tr>
+                    </tbody>
+                </table>
+                </div>
+
+                <h2 class="guide-section-title"><i class="fa-solid fa-circle-question"></i> Common questions</h2>
+
+                <div class="guide-faq">
+                    <h4>Why does a code default to 18% Taxable instead of asking me first?</h4>
+                    <p>Because guessing "exempt" on income that's actually taxable is the dangerous direction to be wrong in for GST. The app defaults to the safe-but-flagged option and waits for you to confirm via Manage GL/PL Codes - it never silently exempts something.</p>
+                </div>
+                <div class="guide-faq">
+                    <h4>A branch tab turned red in the export. What does that mean?</h4>
+                    <p>The GST the app computed from that branch's income differs from what the bank's own GL 1878/1879/1880 ledger says by more than ₹10. Check the <strong>GST Payable Reconciliation</strong> sheet for the exact numbers, then verify against the branch's original statement.</p>
+                </div>
+                <div class="guide-faq">
+                    <h4>The Exempt Income sheet shows "—" for last month. Is that a bug?</h4>
+                    <p>No - it means there's no captured closing balance for the previous period yet (either it's the first month this code has been tracked, or the statement for that period wasn't uploaded). It will fill in automatically from the next month onward.</p>
+                </div>
+                <div class="guide-faq">
+                    <h4>I deleted a code by mistake, or classified something wrong. What happens to already-uploaded data?</h4>
+                    <p>Nothing is deleted from your records. Editing or deleting a code re-flags every entry using it as "Needs Review" (or recomputes it, if you're correcting rather than removing) so you can catch and fix it before filing - it never silently changes numbers you can't see.</p>
+                </div>
+            </div>
+        </main>
+    </div>
+</body>
+</html>
