@@ -6216,32 +6216,48 @@ def export_income_working_sheet():
                         norm_code = m_code.group(1)
 
                         item = matched_dict.get(c_str) or matched_dict.get(norm_code)
-                        if item:
-                            inc_amt = float(item.get('income_amount') or 0.0)
-                            sgst_amt = float(item.get('sgst') or 0.0)
-                            cgst_amt = float(item.get('cgst') or 0.0)
-                            igst_amt = float(item.get('igst') or 0.0)
-                            ref_wo = float(item.get('refund_without_gst') or 0.0)
-                            ref_w = float(item.get('refund_with_gst') or 0.0)
-                            if sname.strip().upper() == 'DEMAT' and not igst_amt:
-                                tpl_igst = ws_b.cell(r, 6).value
-                                if tpl_igst is not None and float(tpl_igst or 0.0) > 0:
-                                    igst_amt = float(tpl_igst)
-                                    if ws_b.cell(r, 4).value is not None:
-                                        sgst_amt = float(ws_b.cell(r, 4).value)
-                                    if ws_b.cell(r, 5).value is not None:
-                                        cgst_amt = float(ws_b.cell(r, 5).value)
-                        else:
-                            # No ingested data for this code - write zero rather than
-                            # leaving whatever the template happened to already hold.
-                            inc_amt = sgst_amt = cgst_amt = igst_amt = ref_wo = ref_w = 0.0
+                        def _num(v):
+                            if v is None:
+                                return 0.0
+                            if isinstance(v, (int, float)):
+                                return float(v)
+                            s = str(v).strip().replace(',', '')
+                            if not s or s.startswith('='):
+                                return 0.0
+                            try:
+                                return float(s)
+                            except Exception:
+                                return 0.0
 
-                        _set(ws_b, r, 3, inc_amt)
-                        _set(ws_b, r, 4, sgst_amt)
-                        _set(ws_b, r, 5, cgst_amt)
-                        _set(ws_b, r, 6, igst_amt if igst_amt else None)
-                        _set(ws_b, r, 7, ref_wo if ref_wo else None)
-                        _set(ws_b, r, 8, ref_w if ref_w else None)
+                        if item:
+                            inc_amt = _num(item.get('income_amount'))
+                            sgst_amt = _num(item.get('sgst'))
+                            cgst_amt = _num(item.get('cgst'))
+                            igst_amt = _num(item.get('igst'))
+                            ref_wo = _num(item.get('refund_without_gst'))
+                            ref_w = _num(item.get('refund_with_gst'))
+                            if sname.strip().upper() == 'DEMAT' and not igst_amt:
+                                tpl_igst = _num(ws_b.cell(r, 6).value)
+                                if tpl_igst > 0:
+                                    igst_amt = tpl_igst
+                                    if ws_b.cell(r, 4).value is not None:
+                                        sgst_amt = _num(ws_b.cell(r, 4).value)
+                                    if ws_b.cell(r, 5).value is not None:
+                                        cgst_amt = _num(ws_b.cell(r, 5).value)
+                            _set(ws_b, r, 3, inc_amt)
+                            _set(ws_b, r, 4, sgst_amt)
+                            _set(ws_b, r, 5, cgst_amt)
+                            _set(ws_b, r, 6, igst_amt if igst_amt else None)
+                            _set(ws_b, r, 7, ref_wo if ref_wo else None)
+                            _set(ws_b, r, 8, ref_w if ref_w else None)
+                        else:
+                            # Preserve master template baseline if no statement row ingested
+                            inc_amt = _num(ws_b.cell(r, 3).value)
+                            sgst_amt = _num(ws_b.cell(r, 4).value)
+                            cgst_amt = _num(ws_b.cell(r, 5).value)
+                            igst_amt = _num(ws_b.cell(r, 6).value)
+                            ref_wo = _num(ws_b.cell(r, 7).value)
+                            ref_w = _num(ws_b.cell(r, 8).value)
 
                         b_tot_inc += inc_amt
                         b_tot_ggst += sgst_amt
