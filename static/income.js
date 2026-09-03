@@ -821,7 +821,7 @@ document.addEventListener('DOMContentLoaded', () => {
             codesTableBody.innerHTML = codes.map(c => `
                 <tr style="border-top: 1px solid var(--border-color);">
                     <td style="padding: 7px 10px; font-family: monospace; font-weight: 700;">${escapeHtml(c.code)}</td>
-                    <td style="padding: 7px 10px;">${escapeHtml(c.particulars)}</td>
+                    <td style="padding: 7px 10px; overflow-wrap: break-word;">${escapeHtml(c.particulars)}</td>
                     <td style="padding: 7px 10px;">${c.is_taxable ? (c.gst_rate + '%') : 'Exempt'}</td>
                     <td style="padding: 7px 10px;">${codeFlagBadges(c)}</td>
                     <td style="padding: 7px 10px; text-align: right; white-space: nowrap;">

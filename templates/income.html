@@ -552,15 +552,22 @@
                     <input type="text" id="codeSearchInput" placeholder="Search by code or particulars (e.g. 3270, DEMAT, locker)..." style="flex: 1; padding: 8px 12px; border-radius: 8px; border: 1px solid #cbd5e1; font-size: 12.5px;">
                     <span id="codeSearchCount" style="font-size: 11.5px; color: #94a3b8; white-space: nowrap;"></span>
                 </div>
-                <div style="margin-top: 6px; max-height: 45vh; overflow-y: auto; border: 1px solid var(--border-color); border-radius: 10px;">
-                    <table style="width: 100%; border-collapse: collapse; font-size: 12.5px;">
-                        <thead style="position: sticky; top: 0; background: #f8fafc;">
+                <div style="margin-top: 6px; max-height: 45vh; overflow: auto; border: 1px solid var(--border-color); border-radius: 10px;">
+                    <table style="width: 100%; min-width: 620px; border-collapse: collapse; font-size: 12.5px; table-layout: fixed;">
+                        <colgroup>
+                            <col style="width: 70px;">
+                            <col style="width: auto;">
+                            <col style="width: 60px;">
+                            <col style="width: 150px;">
+                            <col style="width: 110px;">
+                        </colgroup>
+                        <thead style="position: sticky; top: 0; background: #f8fafc; z-index: 1;">
                             <tr style="text-align: left; color: #64748b; text-transform: uppercase; font-size: 11px;">
                                 <th style="padding: 8px 10px;">Code</th>
                                 <th style="padding: 8px 10px;">Particulars</th>
                                 <th style="padding: 8px 10px;">Rate</th>
                                 <th style="padding: 8px 10px;">Flags</th>
-                                <th style="padding: 8px 10px;"></th>
+                                <th style="padding: 8px 10px;">Actions</th>
                             </tr>
                         </thead>
                         <tbody id="codesTableBody"></tbody>
