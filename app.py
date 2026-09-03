@@ -119,6 +119,28 @@ def month_sort_key(month_name):
     except ValueError:
         return len(FY_MONTH_ORDER)
 
+
+def previous_fy_month(month_name, fy):
+    """Returns (prev_month, prev_fy) for the period immediately before
+    (month_name, fy) - crossing the financial-year boundary correctly
+    (April's previous period is March of the prior FY). fy is expected in
+    "YYYY-YY" form (e.g. "2026-27"). Returns (None, None) if month_name or
+    fy isn't in a recognizable shape, so callers can show "N/A" rather than
+    a wrong guess."""
+    try:
+        idx = FY_MONTH_ORDER.index(month_name)
+    except ValueError:
+        return None, None
+    if idx > 0:
+        return FY_MONTH_ORDER[idx - 1], fy
+    # April -> previous period is March of the prior financial year.
+    m = re.match(r'^(\d{4})-(\d{2})$', str(fy).strip())
+    if not m:
+        return 'March', None
+    start_year = int(m.group(1))
+    prev_start = start_year - 1
+    return 'March', f"{prev_start}-{str(prev_start + 1)[-2:]}"
+
 def _dt_to_fy_and_month(dt):
     if dt.month in (1, 2, 3):
         fy = f"{dt.year - 1}-{str(dt.year)[2:]}"
@@ -409,6 +431,32 @@ def init_db():
         ''')
         cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_gst_payable_ledger_branch_code_month ON gst_payable_ledger(client_id, branch, financial_year, month, gl_code);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_gst_payable_ledger_client_fy ON gst_payable_ledger(client_id, financial_year, month);")
+
+        # Phase 2 (CA step 7): closing-balance snapshots for the ~14 named
+        # exempt-income GL codes (interest exempted, dividend, provisions
+        # written back, etc.) - a separate table from gst_payable_ledger
+        # since these are a different concept (exempt income items, not a
+        # GST-payable liability), even though the storage shape is identical.
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS exempt_income_ledger (
+                id SERIAL PRIMARY KEY,
+                client_id VARCHAR(50) NOT NULL DEFAULT 'nutan_nagrik',
+                branch VARCHAR(100) NOT NULL,
+                financial_year VARCHAR(10) NOT NULL,
+                month VARCHAR(20) NOT NULL,
+                gl_code VARCHAR(50) NOT NULL,
+                closing_balance NUMERIC(15,2),
+                balance_source VARCHAR(20) DEFAULT 'parsed',
+                file_name VARCHAR(255),
+                file_data BYTEA,
+                needs_review BOOLEAN DEFAULT FALSE,
+                review_reason VARCHAR(255),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        ''')
+        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_exempt_income_ledger_branch_code_month ON exempt_income_ledger(client_id, branch, financial_year, month, gl_code);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_exempt_income_ledger_client_fy ON exempt_income_ledger(client_id, financial_year, month);")
 
         # Deduplicate any existing duplicate entries in income_entries
         cur.execute('''
@@ -4893,13 +4941,16 @@ RECLASS_PAIR_CODES = {'1836': '3320', '1720': '3230'}
 def finalize_ledger_accounts(raw_accounts, financial_year='2026-27', month='July'):
     """Group raw {branch, gl_code, dr, cr, net} accounts by branch, apply the
     deferred/recognised-income reclassification rule (RECLASS_DEFERRED_TO_INCOME),
-    and return (entries, ledger_entries, warnings).
+    and return (entries, ledger_entries, exempt_entries, warnings).
 
     entries are ready to save to income_entries. ledger_entries are GL codes
-    the catalog marks with a ledger_role (e.g. GL 1878/1879/1880, the bank's
-    own GST-payable liability accounts) - these are NOT income and are routed
-    out to gst_payable_ledger instead, carrying their closing balance rather
-    than a period net movement.
+    the catalog marks with a GST-payable ledger_role (GL 1878/1879/1880-style
+    CGST/SGST/IGST payable control accounts) - these are NOT income and are
+    routed out to gst_payable_ledger instead, carrying their closing balance
+    rather than a period net movement. exempt_entries are GL codes marked
+    ledger_role='EXEMPT_INCOME' (the CA step-7 named exempt-income items,
+    e.g. dividend, interest exempted) - same idea, routed to
+    exempt_income_ledger instead.
 
     warnings is a list of dicts describing anything that could not be handled
     with full confidence - a duplicate GL code seen twice in one upload batch,
@@ -4928,6 +4979,7 @@ def finalize_ledger_accounts(raw_accounts, financial_year='2026-27', month='July
 
     entries = []
     ledger_entries = []
+    exempt_entries = []
     for branch, code_map in by_branch.items():
         finals = {}
         for code, a in code_map.items():
@@ -4952,13 +5004,15 @@ def finalize_ledger_accounts(raw_accounts, financial_year='2026-27', month='July
             meta = get_income_code_meta(code)
 
             # GL codes the catalog marks as a payable-ledger account (GL
-            # 1878/1879/1880-style CGST/SGST/IGST payable control accounts)
-            # are a liability balance, not income - route them out entirely,
-            # carrying their closing balance rather than a period net.
+            # 1878/1879/1880-style CGST/SGST/IGST payable control accounts,
+            # or the CA step-7 exempt-income items) are not income - route
+            # them out entirely, carrying their closing balance rather than
+            # a period net.
             ledger_role = meta.get('ledger_role') if meta else None
             if ledger_role:
                 closing_balance = a.get('closing_balance')
-                ledger_entries.append({
+                bucket = exempt_entries if ledger_role == 'EXEMPT_INCOME' else ledger_entries
+                bucket.append({
                     "branch": branch,
                     "financial_year": financial_year,
                     "month": month,
@@ -5025,7 +5079,7 @@ def finalize_ledger_accounts(raw_accounts, financial_year='2026-27', month='July
                 "needs_review": needs_review,
                 "review_reason": review_reason,
             })
-    return entries, ledger_entries, warnings
+    return entries, ledger_entries, exempt_entries, warnings
 
 
 def parse_full_workbook_excel(file_bytes, filename):
@@ -5123,11 +5177,11 @@ def add_income_code_master():
     ledger_role = data.get('ledger_role') or None
     if ledger_role is not None:
         ledger_role = str(ledger_role).strip().upper()
-        if ledger_role not in ('CGST_PAYABLE', 'SGST_PAYABLE', 'IGST_PAYABLE'):
-            return jsonify({"error": "ledger_role must be CGST_PAYABLE, SGST_PAYABLE, IGST_PAYABLE, or blank."}), 400
-        # A payable-ledger account (GL 1878/1879/1880-style) is never itself
-        # taxable income - force this server-side so it can't drift from a
-        # stale client-side form value.
+        if ledger_role not in ('CGST_PAYABLE', 'SGST_PAYABLE', 'IGST_PAYABLE', 'EXEMPT_INCOME'):
+            return jsonify({"error": "ledger_role must be CGST_PAYABLE, SGST_PAYABLE, IGST_PAYABLE, EXEMPT_INCOME, or blank."}), 400
+        # A payable-ledger account (GL 1878/1879/1880-style) or an exempt-
+        # income item (CA step 7) is never itself taxable income - force
+        # this server-side so it can't drift from a stale client-side value.
         is_taxable = False
     if not is_taxable:
         gst_rate = 0.0
@@ -5267,6 +5321,13 @@ def delete_income_code_master(code):
             WHERE UPPER(gl_code) = %s
         ''', (f"GL/PL code {clean} was removed from the master catalog - please reclassify", clean))
         affected_count += cur.rowcount
+        cur.execute('''
+            UPDATE exempt_income_ledger
+            SET needs_review = TRUE,
+                review_reason = %s
+            WHERE UPPER(gl_code) = %s
+        ''', (f"GL/PL code {clean} was removed from the master catalog - please reclassify", clean))
+        affected_count += cur.rowcount
         conn.commit()
         cur.close()
         conn.close()
@@ -5381,6 +5442,91 @@ def set_income_entry_manual_amount(entry_id):
         print(f"Error setting manual income amount for entry {entry_id}: {e}")
         return jsonify({"error": str(e)}), 500
 
+# GST Payable Ledger (GL 1878/1879/1880-style) and Exempt Income Ledger (CA
+# step 7 codes) share an identical shape and the same manual-balance-entry
+# need, so one pair of GET/POST handlers serves both, parameterized by table.
+_LEDGER_TABLES = {'gst-payable': 'gst_payable_ledger', 'exempt-income': 'exempt_income_ledger'}
+
+@app.route('/api/ledger-entries/<table_key>', methods=['GET'])
+@login_required
+def get_ledger_entries(table_key):
+    table = _LEDGER_TABLES.get(table_key)
+    if not table:
+        return jsonify({"error": "Unknown ledger table."}), 404
+    client_id = get_current_client_id()
+    fy = request.args.get('financial_year', '').strip()
+    month = request.args.get('month', '').strip()
+
+    query = f'''
+        SELECT id, branch, financial_year, month, gl_code,
+               {"ledger_role," if table == 'gst_payable_ledger' else ""}
+               closing_balance::float, balance_source, needs_review, review_reason,
+               CASE WHEN file_data IS NOT NULL THEN true ELSE false END as has_file
+        FROM {table}
+        WHERE client_id = %s
+    '''
+    params = [client_id]
+    if fy and fy != 'ALL':
+        query += " AND financial_year = %s"
+        params.append(fy)
+    if month and month != 'ALL':
+        query += " AND month = %s"
+        params.append(month)
+    query += " ORDER BY branch ASC, gl_code ASC"
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(query, params)
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        for r in rows:
+            meta = get_income_code_meta(r['gl_code'])
+            r['particulars'] = meta.get('particulars') if meta else None
+        return jsonify({"entries": rows})
+    except Exception as e:
+        print(f"Error fetching {table}: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/ledger-entries/<table_key>/<int:entry_id>/manual-balance', methods=['POST'])
+@login_required
+def set_ledger_entry_manual_balance(table_key, entry_id):
+    """Lets the CA type in the correct closing balance for a GST-payable or
+    exempt-income ledger row - needed whenever the parser couldn't locate a
+    closing balance in the source document layout, or got it wrong. Data
+    entry, not catalog governance, so any logged-in user can do this."""
+    table = _LEDGER_TABLES.get(table_key)
+    if not table:
+        return jsonify({"error": "Unknown ledger table."}), 404
+    client_id = get_current_client_id()
+    data = request.json or {}
+    try:
+        amount = float(data.get('closing_balance'))
+    except (TypeError, ValueError):
+        return jsonify({"error": "closing_balance must be a number."}), 400
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(f'''
+            UPDATE {table}
+            SET closing_balance = %s, balance_source = 'manual',
+                needs_review = FALSE, review_reason = NULL, updated_at = CURRENT_TIMESTAMP
+            WHERE id = %s AND client_id = %s
+            RETURNING id
+        ''', (round(amount, 2), entry_id, client_id))
+        updated = cur.fetchone()
+        conn.commit()
+        cur.close()
+        conn.close()
+        if not updated:
+            return jsonify({"error": "Ledger entry not found."}), 404
+        return jsonify({"success": True, "closing_balance": round(amount, 2)})
+    except Exception as e:
+        print(f"Error setting manual balance for {table} entry {entry_id}: {e}")
+        return jsonify({"error": str(e)}), 500
+
 @app.route('/api/upload-income', methods=['POST'])
 @login_required
 def upload_income_api():
@@ -5459,7 +5605,7 @@ def upload_income_api():
             except Exception as ze:
                 print(f"Error reading zip file {fname}: {ze}")
 
-    finalized_from_raw, ledger_entries, ingest_warnings = finalize_ledger_accounts(raw_accounts)
+    finalized_from_raw, ledger_entries, exempt_entries, ingest_warnings = finalize_ledger_accounts(raw_accounts)
     file_data_by_key = {}
     for a in raw_accounts:
         file_data_by_key.setdefault((a.get('branch'), a.get('gl_code')), a.get('file_data'))
@@ -5467,6 +5613,8 @@ def upload_income_api():
         e['file_data'] = file_data_by_key.get((e['branch'], e['gl_code']))
     for le in ledger_entries:
         le['file_data'] = file_data_by_key.get((le['branch'], le['gl_code']))
+    for ee in exempt_entries:
+        ee['file_data'] = file_data_by_key.get((ee['branch'], ee['gl_code']))
     parsed_entries.extend(finalized_from_raw)
 
     saved_count = 0
@@ -5575,6 +5723,40 @@ def upload_income_api():
             ))
             ledger_saved_count += 1
 
+        exempt_saved_count = 0
+        for ee in exempt_entries:
+            cur.execute('''
+                INSERT INTO exempt_income_ledger (client_id, branch, financial_year, month, gl_code, closing_balance, balance_source, file_name, file_data, needs_review, review_reason)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (client_id, branch, financial_year, month, gl_code)
+                DO UPDATE SET
+                    -- Same non-clobbering rule as gst_payable_ledger: a
+                    -- manually-entered balance survives a routine re-upload.
+                    closing_balance = CASE WHEN exempt_income_ledger.balance_source = 'manual'
+                                           THEN exempt_income_ledger.closing_balance ELSE EXCLUDED.closing_balance END,
+                    balance_source = CASE WHEN exempt_income_ledger.balance_source = 'manual'
+                                          THEN 'manual' ELSE EXCLUDED.balance_source END,
+                    file_name = EXCLUDED.file_name,
+                    needs_review = CASE WHEN exempt_income_ledger.balance_source = 'manual'
+                                        THEN FALSE ELSE EXCLUDED.needs_review END,
+                    review_reason = CASE WHEN exempt_income_ledger.balance_source = 'manual'
+                                         THEN NULL ELSE EXCLUDED.review_reason END,
+                    updated_at = CURRENT_TIMESTAMP
+            ''', (
+                client_id,
+                ee.get('branch', 'Unassigned'),
+                ee.get('financial_year', '2026-27'),
+                ee.get('month', 'July'),
+                ee.get('gl_code', 'N/A'),
+                ee.get('closing_balance'),
+                ee.get('balance_source', 'parsed'),
+                ee.get('filename', 'upload'),
+                psycopg2.Binary(ee['file_data']) if ee.get('file_data') else None,
+                ee.get('needs_review', True),
+                ee.get('review_reason'),
+            ))
+            exempt_saved_count += 1
+
         conn.commit()
         cur.close()
         conn.close()
@@ -5586,6 +5768,7 @@ def upload_income_api():
             "unrecognized_branch_files": sorted(unrecognized_branch_files),
             "duplicate_warnings": [w for w in ingest_warnings if w['type'] == 'duplicate_code_in_batch'],
             "ledger_saved_count": ledger_saved_count,
+            "exempt_saved_count": exempt_saved_count,
         })
     except Exception as e:
         print(f"Error saving uploaded income records: {e}")
@@ -5876,8 +6059,41 @@ def export_income_working_sheet():
             WHERE client_id = %s AND financial_year = %s AND month = %s
         ''', (client_id, fy, month))
         ledger_rows = cur.fetchall()
+
+        cur.execute('''
+            SELECT gl_code, closing_balance::float
+            FROM exempt_income_ledger
+            WHERE client_id = %s AND financial_year = %s AND month = %s
+        ''', (client_id, fy, month))
+        exempt_rows_current = cur.fetchall()
+
+        prev_month, prev_fy = previous_fy_month(month, fy)
+        exempt_rows_previous = []
+        if prev_month and prev_fy:
+            cur.execute('''
+                SELECT gl_code, closing_balance::float
+                FROM exempt_income_ledger
+                WHERE client_id = %s AND financial_year = %s AND month = %s
+            ''', (client_id, prev_fy, prev_month))
+            exempt_rows_previous = cur.fetchall()
+
         cur.close()
         conn.close()
+
+        # gl_code -> summed closing balance across whatever branches reported
+        # it (most of these are HO/bank-wide items with just one branch, but
+        # summing is correct either way).
+        def _sum_by_code(rows):
+            out = collections.defaultdict(float)
+            has_value = collections.defaultdict(bool)
+            for r in rows:
+                if r['closing_balance'] is not None:
+                    out[r['gl_code']] += r['closing_balance']
+                    has_value[r['gl_code']] = True
+            return out, has_value
+
+        exempt_current_sum, exempt_current_has = _sum_by_code(exempt_rows_current)
+        exempt_previous_sum, exempt_previous_has = _sum_by_code(exempt_rows_previous)
 
         # branch (normalized) -> {'CGST_PAYABLE'/'SGST_PAYABLE'/'IGST_PAYABLE': closing_balance or None}
         ledger_by_branch = collections.defaultdict(dict)
@@ -6190,6 +6406,72 @@ def export_income_working_sheet():
 
                 for col_i in range(1, len(recon_headers) + 1):
                     ws_recon.column_dimensions[get_column_letter(col_i)].width = 16
+
+                # New sheet (CA step 7): exempt-income items, current vs
+                # previous month closing balance and the difference. Rows are
+                # driven by whichever GL/PL codes the CA has classified as
+                # ledger_role='EXEMPT_INCOME' in the catalog - not a
+                # hardcoded list, since only the CA knows the exact codes for
+                # several of the named items (see Manage GL/PL Codes).
+                if 'Exempt Income Working Sheet' in wb.sheetnames:
+                    wb.remove(wb['Exempt Income Working Sheet'])
+                ws_exempt = wb.create_sheet('Exempt Income Working Sheet')
+                exempt_header_fill = PatternFill(start_color="1E3A8A", end_color="1E3A8A", fill_type="solid")
+                exempt_header_font = Font(name="Calibri", size=10, bold=True, color="FFFFFF")
+                exempt_headers = [
+                    "Particulars",
+                    f"Income as on {month} {fy} Closing Balance",
+                    f"Income as on {prev_month or 'Previous Month'} {prev_fy or ''} Closing Balance".strip(),
+                    "Diff. (Income of Current Month)",
+                ]
+                for col_i, h_text in enumerate(exempt_headers, start=1):
+                    c = ws_exempt.cell(row=1, column=col_i, value=h_text)
+                    c.fill = exempt_header_fill
+                    c.font = exempt_header_font
+                    c.alignment = Alignment(horizontal="center", wrap_text=True)
+
+                exempt_codes = sorted(
+                    [m for m in INCOME_MASTER_CODES if m.get('ledger_role') == 'EXEMPT_INCOME'],
+                    key=lambda m: str(m.get('particulars') or '')
+                )
+                r_ptr = 2
+                total_current = total_previous = 0.0
+                any_previous_missing = False
+                for m_item in exempt_codes:
+                    code = m_item['code']
+                    cur_val = exempt_current_sum.get(code, 0.0) if exempt_current_has.get(code) else None
+                    prev_val = exempt_previous_sum.get(code, 0.0) if exempt_previous_has.get(code) else None
+                    # First month after this feature ships (or any month with
+                    # no prior data captured) has no real previous balance to
+                    # diff against - show blank/N/A rather than assuming 0,
+                    # which would silently misstate this month's exempt
+                    # income by the entire historical balance.
+                    diff_val = round((cur_val or 0.0) - prev_val, 2) if (cur_val is not None and prev_val is not None) else None
+                    if prev_val is None:
+                        any_previous_missing = True
+
+                    ws_exempt.cell(row=r_ptr, column=1, value=m_item.get('particulars') or code)
+                    ws_exempt.cell(row=r_ptr, column=2, value=round(cur_val, 2) if cur_val is not None else "—")
+                    ws_exempt.cell(row=r_ptr, column=3, value=round(prev_val, 2) if prev_val is not None else "—")
+                    ws_exempt.cell(row=r_ptr, column=4, value=diff_val if diff_val is not None else "—")
+                    total_current += cur_val or 0.0
+                    total_previous += prev_val or 0.0
+                    r_ptr += 1
+
+                if exempt_codes:
+                    ws_exempt.cell(row=r_ptr, column=1, value="TOTAL").font = Font(bold=True)
+                    ws_exempt.cell(row=r_ptr, column=2, value=round(total_current, 2)).font = Font(bold=True)
+                    if any_previous_missing:
+                        ws_exempt.cell(row=r_ptr, column=3, value="—")
+                        ws_exempt.cell(row=r_ptr, column=4, value="—")
+                    else:
+                        ws_exempt.cell(row=r_ptr, column=3, value=round(total_previous, 2)).font = Font(bold=True)
+                        ws_exempt.cell(row=r_ptr, column=4, value=round(total_current - total_previous, 2)).font = Font(bold=True)
+                else:
+                    ws_exempt.cell(row=2, column=1, value="No exempt-income GL/PL codes classified yet - add them via Manage GL/PL Codes (Ledger Role: Exempt Income Item).")
+
+                for col_i in range(1, len(exempt_headers) + 1):
+                    ws_exempt.column_dimensions[get_column_letter(col_i)].width = 32 if col_i == 1 else 24
 
                 buf = io.BytesIO()
                 wb.save(buf)

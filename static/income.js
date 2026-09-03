@@ -188,8 +188,92 @@ document.addEventListener('DOMContentLoaded', () => {
                 renderBranchPills(entriesData.branches);
             }
             renderTableRows();
+            loadLedgerTables();
         } catch (e) {
             console.error('Error loading income data:', e);
+        }
+    }
+
+    // GST Payable Ledger & Exempt Income tables (CA steps 3, 4, 7)
+    function ledgerStatusBadge(row) {
+        if (row.needs_review) {
+            return `<span style="display:inline-block; padding:3px 9px; border-radius:10px; font-size:10.5px; font-weight:700; background:#fef3c7; color:#92400e;" title="${(row.review_reason || 'Needs review').replace(/"/g, '&quot;')}"><i class="fa-solid fa-triangle-exclamation"></i> Needs Review</span>`;
+        }
+        return `<span style="display:inline-block; padding:3px 9px; border-radius:10px; font-size:10.5px; font-weight:700; background:#dcfce7; color:#15803d;">${row.balance_source === 'manual' ? 'Manual' : 'OK'}</span>`;
+    }
+
+    async function editLedgerBalance(tableKey, id, currentValue) {
+        const typed = prompt('Enter the correct closing balance:', currentValue != null ? currentValue : '');
+        if (typed === null) return;
+        const amount = parseFloat(typed);
+        if (isNaN(amount)) {
+            alert('Please enter a valid number.');
+            return;
+        }
+        try {
+            const res = await fetch(`/api/ledger-entries/${tableKey}/${id}/manual-balance`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ closing_balance: amount })
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || 'Save failed');
+            loadLedgerTables();
+        } catch (err) {
+            alert('Could not save the balance: ' + err.message);
+        }
+    }
+    window.editLedgerBalance = editLedgerBalance;
+
+    async function loadLedgerTables() {
+        try {
+            const [gstRes, exemptRes] = await Promise.all([
+                fetch(`/api/ledger-entries/gst-payable?client_id=${currentClientId}`),
+                fetch(`/api/ledger-entries/exempt-income?client_id=${currentClientId}`)
+            ]);
+            const gstData = await gstRes.json();
+            const exemptData = await exemptRes.json();
+
+            const gstBody = document.getElementById('gstPayableLedgerBody');
+            const gstRows = gstData.entries || [];
+            if (gstRows.length === 0) {
+                gstBody.innerHTML = `<tr><td colspan="6" style="text-align: center; padding: 24px; color: #94a3b8;">No GST payable ledger entries for this period yet.</td></tr>`;
+            } else {
+                gstBody.innerHTML = gstRows.map(r => `
+                    <tr style="border-bottom: 1px solid var(--border-color); font-size: 13px;">
+                        <td style="padding: 10px 14px; font-weight: 600;">${r.branch}</td>
+                        <td style="padding: 10px 14px; font-family: monospace;">${r.gl_code}</td>
+                        <td style="padding: 10px 14px; color: #64748b;">${r.particulars || '(unclassified)'}</td>
+                        <td style="padding: 10px 14px;">${(r.ledger_role || '').replace('_PAYABLE', '')}</td>
+                        <td style="padding: 10px 14px; text-align: right; font-weight: 700;">
+                            ${r.closing_balance != null ? formatINR(r.closing_balance) : '—'}
+                            <button type="button" onclick="editLedgerBalance('gst-payable', ${r.id}, ${r.closing_balance != null ? r.closing_balance : 'null'})" style="background:none; border:none; color:#7c3aed; cursor:pointer; margin-left:6px;" title="Enter/correct closing balance"><i class="fa-solid fa-pen"></i></button>
+                        </td>
+                        <td style="padding: 10px 14px; text-align: center;">${ledgerStatusBadge(r)}</td>
+                    </tr>
+                `).join('');
+            }
+
+            const exemptBody = document.getElementById('exemptIncomeLedgerBody');
+            const exemptRows = exemptData.entries || [];
+            if (exemptRows.length === 0) {
+                exemptBody.innerHTML = `<tr><td colspan="5" style="text-align: center; padding: 24px; color: #94a3b8;">No exempt-income ledger entries for this period yet.</td></tr>`;
+            } else {
+                exemptBody.innerHTML = exemptRows.map(r => `
+                    <tr style="border-bottom: 1px solid var(--border-color); font-size: 13px;">
+                        <td style="padding: 10px 14px; font-weight: 600;">${r.branch}</td>
+                        <td style="padding: 10px 14px; font-family: monospace;">${r.gl_code}</td>
+                        <td style="padding: 10px 14px; color: #64748b;">${r.particulars || '(unclassified)'}</td>
+                        <td style="padding: 10px 14px; text-align: right; font-weight: 700;">
+                            ${r.closing_balance != null ? formatINR(r.closing_balance) : '—'}
+                            <button type="button" onclick="editLedgerBalance('exempt-income', ${r.id}, ${r.closing_balance != null ? r.closing_balance : 'null'})" style="background:none; border:none; color:#7c3aed; cursor:pointer; margin-left:6px;" title="Enter/correct closing balance"><i class="fa-solid fa-pen"></i></button>
+                        </td>
+                        <td style="padding: 10px 14px; text-align: center;">${ledgerStatusBadge(r)}</td>
+                    </tr>
+                `).join('');
+            }
+        } catch (e) {
+            console.error('Error loading ledger tables:', e);
         }
     }
 
@@ -699,7 +783,10 @@ document.addEventListener('DOMContentLoaded', () => {
             const chips = [];
             if (c.manual_entry) chips.push('<span style="display:inline-block; padding:2px 7px; border-radius:8px; font-size:10px; font-weight:700; background:#ede9fe; color:#5b21b6; margin-right:4px;">Manual</span>');
             if (c.tax_type === 'IGST') chips.push('<span style="display:inline-block; padding:2px 7px; border-radius:8px; font-size:10px; font-weight:700; background:#dbeafe; color:#1e40af; margin-right:4px;">IGST</span>');
-            if (c.ledger_role) chips.push(`<span style="display:inline-block; padding:2px 7px; border-radius:8px; font-size:10px; font-weight:700; background:#fef3c7; color:#92400e;">Ledger: ${escapeHtml(c.ledger_role.replace('_PAYABLE',''))}</span>`);
+            if (c.ledger_role) {
+                const roleLabel = c.ledger_role === 'EXEMPT_INCOME' ? 'Exempt Income' : c.ledger_role.replace('_PAYABLE', ' Payable');
+                chips.push(`<span style="display:inline-block; padding:2px 7px; border-radius:8px; font-size:10px; font-weight:700; background:#fef3c7; color:#92400e;">${escapeHtml(roleLabel)}</span>`);
+            }
             return chips.join('') || '<span style="color:#cbd5e1;">—</span>';
         }
 
