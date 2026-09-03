@@ -493,11 +493,11 @@
                     <i class="fa-solid fa-xmark"></i>
                 </button>
             </div>
-            <div class="modal-body" style="overflow-y: auto; flex: 1; min-height: 0;">
-                <p style="font-size: 12.5px; color: #64748b; margin: -4px 0 4px;">
+            <div class="modal-body" style="display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden;">
+                <p style="font-size: 12.5px; color: #64748b; margin: -4px 0 4px; flex-shrink: 0;">
                     New or unrecognized bank GL/PL codes are auto-flagged "Needs Review" and taxed at 18% by default until classified here. Adding or editing a code here also fixes every already-uploaded entry using that code.
                 </p>
-                <form id="codeForm" class="form-grid" style="margin-bottom: 4px;">
+                <form id="codeForm" class="form-grid" style="margin-bottom: 4px; flex-shrink: 0;">
                     <div class="form-field">
                         <label for="codeInputCode">GL / PL Code</label>
                         <input type="text" id="codeInputCode" placeholder="e.g. 3270" autocomplete="off" required>
@@ -546,13 +546,17 @@
                         </select>
                     </div>
                 </form>
-                <div id="codeFormMsg" style="display:none; font-size: 12.5px; padding: 8px 12px; border-radius: 8px;"></div>
+                <div id="codeFormMsg" style="display:none; font-size: 12.5px; padding: 8px 12px; border-radius: 8px; flex-shrink: 0;"></div>
 
-                <div style="margin-top: 10px; display: flex; align-items: center; gap: 8px;">
+                <div style="margin-top: 10px; display: flex; align-items: center; gap: 8px; flex-shrink: 0;">
                     <input type="text" id="codeSearchInput" placeholder="Search by code or particulars (e.g. 3270, DEMAT, locker)..." style="flex: 1; padding: 8px 12px; border-radius: 8px; border: 1px solid #cbd5e1; font-size: 12.5px;">
                     <span id="codeSearchCount" style="font-size: 11.5px; color: #94a3b8; white-space: nowrap;"></span>
                 </div>
-                <div style="margin-top: 6px; max-height: 45vh; overflow: auto; border: 1px solid var(--border-color); border-radius: 10px;">
+                <!-- This is the ONE scrolling region in the modal - everything
+                     above (form, search) stays fully visible and only this
+                     codes list scrolls, so Edit/Delete are always reachable
+                     without a confusing nested-scroll area. -->
+                <div style="margin-top: 6px; flex: 1; min-height: 150px; overflow: auto; border: 1px solid var(--border-color); border-radius: 10px;">
                     <table style="width: 100%; min-width: 620px; border-collapse: collapse; font-size: 12.5px; table-layout: fixed;">
                         <colgroup>
                             <col style="width: 70px;">
