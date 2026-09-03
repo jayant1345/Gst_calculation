@@ -4569,13 +4569,40 @@ if os.path.exists(INCOME_CATALOG_PATH):
 def load_income_code_overrides():
     """Merge admin-added/edited GL/PL codes from income_code_catalog (durable
     across redeploys) on top of the bundled JSON catalog. DB entries win on
-    conflict since they're the more recent, human-verified classification."""
+    conflict since they're the more recent, human-verified classification.
+    Also auto-seeds any missing standard codes from JSON into DB on startup."""
     global INCOME_MASTER_CODES
     try:
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute('SELECT code, particulars, gst_rate::float, is_taxable, category, manual_entry, tax_type, ledger_role FROM income_code_catalog')
         overrides = cur.fetchall()
+
+        # If DB catalog is missing seeds, auto-populate from bundled JSON
+        db_codes = {str(r['code']).strip().upper() for r in overrides}
+        missing_seeds = [mc for mc in INCOME_MASTER_CODES if str(mc.get('code', '')).strip().upper() not in db_codes]
+        if missing_seeds:
+            for mc in missing_seeds:
+                c_clean = str(mc.get('code', '')).strip().upper()
+                if c_clean:
+                    cur.execute('''
+                        INSERT INTO income_code_catalog (code, particulars, gst_rate, is_taxable, category, manual_entry, tax_type, ledger_role)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (code) DO NOTHING;
+                    ''', (
+                        c_clean,
+                        mc.get('particulars') or 'Bank Service Income',
+                        float(mc.get('gst_rate') or 18.0),
+                        bool(mc.get('is_taxable', True)),
+                        mc.get('category') or 'Commission',
+                        bool(mc.get('manual_entry', False)),
+                        mc.get('tax_type') or 'CGST_SGST',
+                        mc.get('ledger_role')
+                    ))
+            conn.commit()
+            cur.execute('SELECT code, particulars, gst_rate::float, is_taxable, category, manual_entry, tax_type, ledger_role FROM income_code_catalog')
+            overrides = cur.fetchall()
+
         cur.close()
         conn.close()
     except Exception as e:
@@ -5045,7 +5072,12 @@ def finalize_ledger_accounts(raw_accounts, financial_year='2026-27', month='July
             # CGST+SGST - guarded on the branch name itself (not just the
             # catalog flag) so an admin mis-tagging tax_type on some other
             # branch's code can't silently shift its tax jurisdiction.
-            if branch.strip().upper() == 'DEMAT' and tax_type == 'IGST' and is_taxable:
+            # Check if explicit tax breakdown was provided (e.g. from workbook or split statement)
+            if a.get('igst') is not None and (a.get('cgst') is not None or a.get('sgst') is not None):
+                igst = round(float(a.get('igst') or 0.0), 2)
+                cgst = round(float(a.get('cgst') or 0.0), 2)
+                sgst = round(float(a.get('sgst') or 0.0), 2)
+            elif branch.strip().upper() == 'DEMAT' and tax_type == 'IGST' and is_taxable:
                 igst = round(amount * (rate / 100.0), 2)
                 cgst = sgst = 0.0
             else:
@@ -6121,9 +6153,16 @@ def export_income_working_sheet():
                 wb = openpyxl.load_workbook(template_path)
                 wb.calculation.fullCalcOnLoad = True
 
-                # Remove duplicate trailing tabs (ODHAV1, SURAT1, etc.)
+                # Canonical 28 sheets in Nutan Bank master workbook
+                CANONICAL_MASTER_SHEETS = {
+                    'ODHAV ', 'RAKHIAL', 'NEW SHARDA', 'CHANGODAR', 'ISANPUR', 'MANINAGAR',
+                    'SHANTI COMM', 'MASKATI', 'VEJALPUR', 'JODHPUR-SATELLITE', 'PANJRAPOLE',
+                    'ASHRAM ROAD', 'NARAYANNAGAR', 'NARANPURA', 'DRIVE IN', 'VASANA ', 'SURAT',
+                    'LAW GARDEN', 'NEW CLOTH', 'BAPUNAGAR', 'BOPAL', 'THALTEJ', 'CHANDKHEDA',
+                    'VASTRAL', 'Sheet1', 'HO', 'DEMAT', 'SUMMARY SHEET GST'
+                }
                 for sname in list(wb.sheetnames):
-                    if sname.endswith('1') and sname not in ['Sheet1'] and sname[:-1].strip().upper() in INCOME_MASTER_BRANCHES:
+                    if sname not in CANONICAL_MASTER_SHEETS:
                         try:
                             wb.remove(wb[sname])
                         except Exception:
@@ -6313,34 +6352,37 @@ def export_income_working_sheet():
                     _set(ws_s1, 75, 4, s1_grand['sgst'] + ref_gst_s1)
                     _set(ws_s1, 75, 5, s1_grand['cgst'] + ref_gst_s1)
 
-                # SUMMARY SHEET GST - computed from real ingested data, not hardcoded.
+                # SUMMARY SHEET GST - Section (1) Exempt Income, Section (2) Taxable Income & Section (8) GSTR-1 Working
                 if 'SUMMARY SHEET GST' in wb.sheetnames:
                     ws_sum = wb['SUMMARY SHEET GST']
 
-                    # The master template's SUMMARY SHEET GST cells were previously
-                    # pre-filled with the CA's golden figures as literal numbers, not
-                    # computed. Clear all of them first so nothing stale survives
-                    # under the genuinely-computed values written below.
-                    for rr in range(7, 33):
-                        for cc in range(3, 10):
-                            _set(ws_sum, rr, cc, None)
+                    # Step 7: Update Section (1) Non-Taxable / Exempt Income (Rows 7 to 20)
+                    # Mapping of standard GL/PL codes to their designated rows in SUMMARY SHEET GST
+                    EXEMPT_ROW_MAP = {
+                        '3300': 7,   # INTEREST INCOME (EXEMPTED)
+                        '3275': 8,   # INCOME FROM NON JUDICIAL FRANKING STAMP(3275)
+                        '3314': 9,   # INVESTMENT FLUCTU FUND BROUGHT
+                        '3312': 10,  # PROFIT ON SALE OF INVESTMENT(S)(GROSS AMT)
+                        '3354': 11,  # PL 3354 PROVISION FOR OD INTEREST WRITTEN BACK
+                        '3304': 12,  # 3304 BUILD FUND PROV BROGHT BAK
+                        '3316': 13,  # DEP AMT BK MMCB OF SHREYAS
+                        '3307': 14,  # 3307 WRITTEN OF AMT RECOVERED
+                        '3402': 15,  # PL 3402 BDDR BROUGHT BACK
+                        '3353': 16,  # 3353-EXCESS PROV.FOR I.T WRTN BACK
+                        '3306': 17,  # 3306-INT. ON INCOME TAX REFUND A/C
+                        '3348': 18,  # 3348-INVESTMENT DEP. WRITTEN BACK
+                        '3331': 19,  # 3331- DIVIDEND
+                        '3327': 20,  # 3327 INCOME TAX REFUND
+                    }
+                    for ex_code, ex_row in EXEMPT_ROW_MAP.items():
+                        if ex_code in exempt_current_has:
+                            _set(ws_sum, ex_row, 4, round(exempt_current_sum[ex_code], 2))
+                        if ex_code in exempt_previous_has:
+                            _set(ws_sum, ex_row, 5, round(exempt_previous_sum[ex_code], 2))
+                        if ex_code in exempt_current_has and ex_code in exempt_previous_has:
+                            _set(ws_sum, ex_row, 6, round(exempt_current_sum[ex_code] - exempt_previous_sum[ex_code], 2))
 
-                    # Section 1: Non-Taxable / Exempt Income (rows 7-21, "as on"
-                    # columns D/E/F). These are bank-wide ledger/trial-balance items
-                    # (interest income exempted, dividend, profit on sale of
-                    # investments, provisions written back, etc.) - this app has no
-                    # source document for them (they aren't branch commission GL
-                    # codes), so only the total (row 21) is summed from any
-                    # income_entries explicitly marked is_taxable=False, rather than
-                    # left as stale copied figures. Reads 0 until such entries exist.
-                    exempt_total = 0.0
-                    for e in entries:
-                        if not e.get('is_taxable'):
-                            exempt_total += float(e.get('income_amount') or 0.0)
-                    _set(ws_sum, 21, 4, exempt_total)
-
-                    # Section 2: Taxable income, rolled up from the branch totals
-                    # actually computed above - not copied from the golden file.
+                    # Section 2: Taxable income, rolled up from branch totals
                     _set(ws_sum, 27, 3, grand_income)
                     _set(ws_sum, 27, 4, grand_ggst)
                     _set(ws_sum, 27, 5, grand_cgst)
@@ -6361,6 +6403,19 @@ def export_income_working_sheet():
                     _set(ws_sum, 30, 5, tot_cgst)
                     _set(ws_sum, 30, 6, grand_igst)
                     _set(ws_sum, 30, 7, tot_ggst + tot_cgst + grand_igst)
+
+                    # Step 3 & 4: Payable as per Ledger (Row 31) & Difference (Row 32)
+                    tot_ledger_cgst = sum(r['closing_balance'] for r in ledger_rows if r.get('ledger_role') == 'CGST_PAYABLE' and r.get('closing_balance') is not None)
+                    tot_ledger_sgst = sum(r['closing_balance'] for r in ledger_rows if r.get('ledger_role') == 'SGST_PAYABLE' and r.get('closing_balance') is not None)
+                    tot_ledger_igst = sum(r['closing_balance'] for r in ledger_rows if r.get('ledger_role') == 'IGST_PAYABLE' and r.get('closing_balance') is not None)
+
+                    if tot_ledger_cgst or tot_ledger_sgst or tot_ledger_igst:
+                        _set(ws_sum, 31, 4, round(tot_ledger_sgst, 2))
+                        _set(ws_sum, 31, 5, round(tot_ledger_cgst, 2))
+                        _set(ws_sum, 31, 6, round(tot_ledger_igst, 2))
+                        _set(ws_sum, 32, 4, round(tot_ggst - tot_ledger_sgst, 2))
+                        _set(ws_sum, 32, 5, round(tot_cgst - tot_ledger_cgst, 2))
+                        _set(ws_sum, 32, 6, round(grand_igst - tot_ledger_igst, 2))
 
                 # New sheet (CA steps 3-4-6): per-branch computed-from-income
                 # GST payable vs the bank's own ledger closing balance (GL

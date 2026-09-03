@@ -74,7 +74,8 @@
       "particulars": "COMMISION ON GUARANTEE",
       "gst_rate": 18.0,
       "is_taxable": true,
-      "category": "Taxable Banking Services"
+      "category": "Taxable Banking Services",
+      "manual_entry": true
     },
     {
       "row_index": 15,
@@ -223,10 +224,13 @@
     {
       "row_index": 33,
       "code": "3300",
-      "particulars": "INCIDENTAL CHARGES",
-      "gst_rate": 18.0,
-      "is_taxable": true,
-      "category": "Taxable Banking Services"
+      "particulars": "INTEREST INCOME (EXEMPTED)",
+      "gst_rate": 0.0,
+      "is_taxable": false,
+      "category": "Exempt",
+      "tax_type": "CGST_SGST",
+      "ledger_role": "EXEMPT_INCOME",
+      "manual_entry": false
     },
     {
       "row_index": 34,
@@ -279,10 +283,13 @@
     {
       "row_index": 40,
       "code": "3312",
-      "particulars": "O/W CHQ. RET. CHARGES",
-      "gst_rate": 18.0,
-      "is_taxable": true,
-      "category": "Taxable Banking Services"
+      "particulars": "PROFIT ON SALE OF INVESTMENT(S)(GROSS AMT)",
+      "gst_rate": 0.0,
+      "is_taxable": false,
+      "category": "Exempt",
+      "tax_type": "CGST_SGST",
+      "ledger_role": "EXEMPT_INCOME",
+      "manual_entry": false
     },
     {
       "row_index": 41,
@@ -295,10 +302,13 @@
     {
       "row_index": 42,
       "code": "3314",
-      "particulars": "CHQ. BOOK ISSUE CHARGES",
-      "gst_rate": 18.0,
-      "is_taxable": true,
-      "category": "Taxable Banking Services"
+      "particulars": "INVESTMENT FLUCTU FUND BROUGHT",
+      "gst_rate": 0.0,
+      "is_taxable": false,
+      "category": "Exempt",
+      "tax_type": "CGST_SGST",
+      "ledger_role": "EXEMPT_INCOME",
+      "manual_entry": false
     },
     {
       "row_index": 43,
@@ -311,10 +321,13 @@
     {
       "row_index": 44,
       "code": "3316",
-      "particulars": "CASH CHARGES",
-      "gst_rate": 18.0,
-      "is_taxable": true,
-      "category": "Taxable Banking Services"
+      "particulars": "DEP AMT BK MMCB OF SHREYAS",
+      "gst_rate": 0.0,
+      "is_taxable": false,
+      "category": "Exempt",
+      "tax_type": "CGST_SGST",
+      "ledger_role": "EXEMPT_INCOME",
+      "manual_entry": false
     },
     {
       "row_index": 45,
@@ -338,7 +351,8 @@
       "particulars": "RENT ON LOCKER",
       "gst_rate": 18.0,
       "is_taxable": true,
-      "category": "Taxable Banking Services"
+      "category": "Taxable Banking Services",
+      "manual_entry": true
     },
     {
       "row_index": 48,
@@ -691,6 +705,136 @@
       "gst_rate": 18.0,
       "is_taxable": true,
       "category": "Taxable Banking Services"
+    },
+    {
+      "code": "1878",
+      "particulars": "CGST PAYABLE",
+      "category": "Liability Control",
+      "gst_rate": 0.0,
+      "is_taxable": false,
+      "tax_type": "CGST_SGST",
+      "ledger_role": "CGST_PAYABLE",
+      "manual_entry": false
+    },
+    {
+      "code": "1879",
+      "particulars": "SGST PAYABLE",
+      "category": "Liability Control",
+      "gst_rate": 0.0,
+      "is_taxable": false,
+      "tax_type": "CGST_SGST",
+      "ledger_role": "SGST_PAYABLE",
+      "manual_entry": false
+    },
+    {
+      "code": "1880",
+      "particulars": "IGST PAYABLE",
+      "category": "Liability Control",
+      "gst_rate": 0.0,
+      "is_taxable": false,
+      "tax_type": "IGST",
+      "ledger_role": "IGST_PAYABLE",
+      "manual_entry": false
+    },
+    {
+      "code": "3275",
+      "particulars": "INCOME FROM NON JUDICIAL FRANKING STAMP",
+      "category": "Exempt",
+      "gst_rate": 0.0,
+      "is_taxable": false,
+      "tax_type": "CGST_SGST",
+      "ledger_role": "EXEMPT_INCOME",
+      "manual_entry": false
+    },
+    {
+      "code": "3354",
+      "particulars": "PL 3354 PROVISION FOR OD INTEREST WRITTEN BACK",
+      "category": "Exempt",
+      "gst_rate": 0.0,
+      "is_taxable": false,
+      "tax_type": "CGST_SGST",
+      "ledger_role": "EXEMPT_INCOME",
+      "manual_entry": false
+    },
+    {
+      "code": "3304",
+      "particulars": "3304 BUILD FUND PROV BROGHT BAK",
+      "category": "Exempt",
+      "gst_rate": 0.0,
+      "is_taxable": false,
+      "tax_type": "CGST_SGST",
+      "ledger_role": "EXEMPT_INCOME",
+      "manual_entry": false
+    },
+    {
+      "code": "3307",
+      "particulars": "3307 WRITTEN OF AMT RECOVERED",
+      "category": "Exempt",
+      "gst_rate": 0.0,
+      "is_taxable": false,
+      "tax_type": "CGST_SGST",
+      "ledger_role": "EXEMPT_INCOME",
+      "manual_entry": false
+    },
+    {
+      "code": "3402",
+      "particulars": "PL 3402 BDDR BROUGHT BACK",
+      "category": "Exempt",
+      "gst_rate": 0.0,
+      "is_taxable": false,
+      "tax_type": "CGST_SGST",
+      "ledger_role": "EXEMPT_INCOME",
+      "manual_entry": false
+    },
+    {
+      "code": "3353",
+      "particulars": "3353-EXCESS PROV.FOR I.T WRTN BACK",
+      "category": "Exempt",
+      "gst_rate": 0.0,
+      "is_taxable": false,
+      "tax_type": "CGST_SGST",
+      "ledger_role": "EXEMPT_INCOME",
+      "manual_entry": false
+    },
+    {
+      "code": "3306",
+      "particulars": "3306-INT. ON INCOME TAX REFUND A/C",
+      "category": "Exempt",
+      "gst_rate": 0.0,
+      "is_taxable": false,
+      "tax_type": "CGST_SGST",
+      "ledger_role": "EXEMPT_INCOME",
+      "manual_entry": false
+    },
+    {
+      "code": "3348",
+      "particulars": "3348-INVESTMENT DEP. WRITTEN BACK",
+      "category": "Exempt",
+      "gst_rate": 0.0,
+      "is_taxable": false,
+      "tax_type": "CGST_SGST",
+      "ledger_role": "EXEMPT_INCOME",
+      "manual_entry": false
+    },
+    {
+      "code": "3331",
+      "particulars": "3331- DIVIDEND",
+      "category": "Exempt",
+      "gst_rate": 0.0,
+      "is_taxable": false,
+      "tax_type": "CGST_SGST",
+      "ledger_role": "EXEMPT_INCOME",
+      "manual_entry": false
+    },
+    {
+      "code": "3327",
+      "particulars": "3327 INCOME TAX REFUND",
+      "category": "Exempt",
+      "gst_rate": 0.0,
+      "is_taxable": false,
+      "tax_type": "CGST_SGST",
+      "ledger_role": "EXEMPT_INCOME",
+      "manual_entry": false
     }
   ]
 }
