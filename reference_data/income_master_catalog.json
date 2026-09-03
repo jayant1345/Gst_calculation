@@ -691,46 +691,6 @@
       "gst_rate": 18.0,
       "is_taxable": true,
       "category": "Taxable Banking Services"
-    },
-    {
-      "row_index": 92,
-      "code": "1",
-      "particulars": "GL 1878 GGST PAYABLE A/C. DR\u2026.",
-      "gst_rate": 18.0,
-      "is_taxable": true,
-      "category": "Taxable Banking Services"
-    },
-    {
-      "row_index": 93,
-      "code": "2",
-      "particulars": "HO DR\u2026\u2026.",
-      "gst_rate": 18.0,
-      "is_taxable": true,
-      "category": "Taxable Banking Services"
-    },
-    {
-      "row_index": 94,
-      "code": "3",
-      "particulars": "GL 8546 GGST RECEIVABLE A/C..",
-      "gst_rate": 18.0,
-      "is_taxable": true,
-      "category": "Taxable Banking Services"
-    },
-    {
-      "row_index": 95,
-      "code": "4",
-      "particulars": "HO DR\u2026\u2026.",
-      "gst_rate": 18.0,
-      "is_taxable": true,
-      "category": "Taxable Banking Services"
-    },
-    {
-      "row_index": 96,
-      "code": "5",
-      "particulars": "PL 4197 SERVICE TAX/GST EXPENSES A/C. DR\u2026",
-      "gst_rate": 18.0,
-      "is_taxable": true,
-      "category": "Taxable Banking Services"
     }
   ]
 }

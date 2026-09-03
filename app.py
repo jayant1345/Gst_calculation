@@ -376,6 +376,40 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         ''')
+        cur.execute("ALTER TABLE income_code_catalog ADD COLUMN IF NOT EXISTS manual_entry BOOLEAN DEFAULT FALSE;")
+        cur.execute("ALTER TABLE income_code_catalog ADD COLUMN IF NOT EXISTS tax_type VARCHAR(20) DEFAULT 'CGST_SGST';")
+        cur.execute("ALTER TABLE income_code_catalog ADD COLUMN IF NOT EXISTS ledger_role VARCHAR(20);")
+
+        cur.execute("ALTER TABLE income_entries ADD COLUMN IF NOT EXISTS auto_income_amount NUMERIC(15,2);")
+        cur.execute("ALTER TABLE income_entries ADD COLUMN IF NOT EXISTS manual_income_amount NUMERIC(15,2);")
+
+        # GST payable as recorded in the bank's own liability ledger (GL codes
+        # like 1878/1879/1880 - CGST/SGST/IGST payable control accounts), kept
+        # separate from income_entries since a closing-balance liability figure
+        # is a fundamentally different thing from a period's income - reusing
+        # income_entries' income-shaped columns for it would be misleading.
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS gst_payable_ledger (
+                id SERIAL PRIMARY KEY,
+                client_id VARCHAR(50) NOT NULL DEFAULT 'nutan_nagrik',
+                branch VARCHAR(100) NOT NULL,
+                financial_year VARCHAR(10) NOT NULL,
+                month VARCHAR(20) NOT NULL,
+                gl_code VARCHAR(50) NOT NULL,
+                ledger_role VARCHAR(20),
+                closing_balance NUMERIC(15,2),
+                balance_source VARCHAR(20) DEFAULT 'parsed',
+                file_name VARCHAR(255),
+                file_data BYTEA,
+                needs_review BOOLEAN DEFAULT FALSE,
+                review_reason VARCHAR(255),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        ''')
+        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_gst_payable_ledger_branch_code_month ON gst_payable_ledger(client_id, branch, financial_year, month, gl_code);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_gst_payable_ledger_client_fy ON gst_payable_ledger(client_id, financial_year, month);")
+
         # Deduplicate any existing duplicate entries in income_entries
         cur.execute('''
             DELETE FROM income_entries a USING income_entries b
@@ -4487,7 +4521,7 @@ def load_income_code_overrides():
     try:
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute('SELECT code, particulars, gst_rate::float, is_taxable, category FROM income_code_catalog')
+        cur.execute('SELECT code, particulars, gst_rate::float, is_taxable, category, manual_entry, tax_type, ledger_role FROM income_code_catalog')
         overrides = cur.fetchall()
         cur.close()
         conn.close()
@@ -4568,6 +4602,30 @@ def _ledger_num(tok):
         return None
 
 
+def _capture_closing_balance_value(lines, start_idx, max_lookahead=15):
+    """Best-effort scan for a genuine closing-balance figure (a number
+    immediately followed by a Dr/Cr suffix token), starting just after the
+    period Dr/Cr totals on a "Closing Balance"-anchored line. Only consulted
+    for GL codes the catalog marks as a payable-ledger account (see
+    finalize_ledger_accounts) - the exact token layout hasn't been verified
+    against a real GL 1878/1879/1880 statement yet, so callers must treat
+    any value this returns as needing human confirmation rather than trusted
+    outright. Returns None (not a guess) if no confident Dr/Cr-suffixed
+    number is found within the lookahead window."""
+    n = len(lines)
+    end = min(n, start_idx + max_lookahead)
+    idx = start_idx
+    while idx < end - 1:
+        val = lines[idx].strip()
+        suffix = lines[idx + 1].strip().rstrip('.').lower()
+        if _LEDGER_NUM_RE.match(val) and suffix in ('dr', 'cr'):
+            amount = _ledger_num(val)
+            if amount is not None:
+                return -amount if suffix == 'dr' else amount
+        idx += 1
+    return None
+
+
 def _extract_ledger_code(cand):
     cand = cand.strip()
     m2 = re.match(r'^(\d{3,6})\s*-\s*(.+)$', cand)
@@ -4628,6 +4686,7 @@ def _scan_ledger_lines(lines, account_labels, total_labels):
 
             k = look
             total_dr = total_cr = None
+            closing_balance = None
             while k < n:
                 lk = lines[k].strip()
                 if lk.lower() in account_labels:
@@ -4648,6 +4707,12 @@ def _scan_ledger_lines(lines, account_labels, total_labels):
                     nums = nums[skip:]
                     if len(nums) >= 2:
                         total_dr, total_cr = nums[0], nums[1]
+                    # Only the "Closing Balance"-anchored format (format 3)
+                    # ever prints a genuine running balance near this line -
+                    # the "Total"/"Total :" anchors (formats 1/2) never do,
+                    # so closing_balance correctly stays None for those.
+                    if lk.lower() == 'closing balance':
+                        closing_balance = _capture_closing_balance_value(lines, kk)
                     k = kk
                     continue
                 k += 1
@@ -4656,6 +4721,7 @@ def _scan_ledger_lines(lines, account_labels, total_labels):
                 accounts.append({
                     'gl_code': code, 'name': name, 'dr': total_dr, 'cr': total_cr,
                     'net': round(total_cr - total_dr, 2),
+                    'closing_balance': closing_balance,
                 })
             i = k
         else:
@@ -4827,7 +4893,13 @@ RECLASS_PAIR_CODES = {'1836': '3320', '1720': '3230'}
 def finalize_ledger_accounts(raw_accounts, financial_year='2026-27', month='July'):
     """Group raw {branch, gl_code, dr, cr, net} accounts by branch, apply the
     deferred/recognised-income reclassification rule (RECLASS_DEFERRED_TO_INCOME),
-    and return (entries, warnings) ready to save to income_entries.
+    and return (entries, ledger_entries, warnings).
+
+    entries are ready to save to income_entries. ledger_entries are GL codes
+    the catalog marks with a ledger_role (e.g. GL 1878/1879/1880, the bank's
+    own GST-payable liability accounts) - these are NOT income and are routed
+    out to gst_payable_ledger instead, carrying their closing balance rather
+    than a period net movement.
 
     warnings is a list of dicts describing anything that could not be handled
     with full confidence - a duplicate GL code seen twice in one upload batch,
@@ -4855,6 +4927,7 @@ def finalize_ledger_accounts(raw_accounts, financial_year='2026-27', month='July
             })
 
     entries = []
+    ledger_entries = []
     for branch, code_map in by_branch.items():
         finals = {}
         for code, a in code_map.items():
@@ -4877,14 +4950,56 @@ def finalize_ledger_accounts(raw_accounts, financial_year='2026-27', month='July
         for code, amount in finals.items():
             a = code_map[code]
             meta = get_income_code_meta(code)
+
+            # GL codes the catalog marks as a payable-ledger account (GL
+            # 1878/1879/1880-style CGST/SGST/IGST payable control accounts)
+            # are a liability balance, not income - route them out entirely,
+            # carrying their closing balance rather than a period net.
+            ledger_role = meta.get('ledger_role') if meta else None
+            if ledger_role:
+                closing_balance = a.get('closing_balance')
+                ledger_entries.append({
+                    "branch": branch,
+                    "financial_year": financial_year,
+                    "month": month,
+                    "gl_code": code,
+                    "ledger_role": ledger_role,
+                    "closing_balance": closing_balance,
+                    "balance_source": "parsed",
+                    "needs_review": True,  # always - see _capture_closing_balance_value's caveat
+                    "review_reason": (
+                        "Closing balance parsed from statement - please verify against the original ledger before relying on it"
+                        if closing_balance is not None else
+                        "Closing balance could not be located in this document layout - please verify/enter manually"
+                    ),
+                    "filename": a.get('filename', 'upload'),
+                })
+                continue
+
             particulars = meta.get('particulars') if meta else (a.get('name') or 'Bank Service Income')
             is_taxable = meta.get('is_taxable', True) if meta else True
             rate = meta.get('gst_rate', 18.0) if meta else 18.0
-            cgst = round(amount * (rate / 200.0), 2) if is_taxable else 0.0
+            manual_entry = bool(meta.get('manual_entry')) if meta else False
+            tax_type = meta.get('tax_type', 'CGST_SGST') if meta else 'CGST_SGST'
+
+            # DEMAT is the only branch where a code can be IGST instead of
+            # CGST+SGST - guarded on the branch name itself (not just the
+            # catalog flag) so an admin mis-tagging tax_type on some other
+            # branch's code can't silently shift its tax jurisdiction.
+            if branch.strip().upper() == 'DEMAT' and tax_type == 'IGST' and is_taxable:
+                igst = round(amount * (rate / 100.0), 2)
+                cgst = sgst = 0.0
+            else:
+                cgst = round(amount * (rate / 200.0), 2) if is_taxable else 0.0
+                sgst = cgst
+                igst = 0.0
 
             needs_review = False
             review_reason = None
-            if meta is None:
+            if manual_entry:
+                needs_review = True
+                review_reason = f"GL/PL code {code} is a manual-entry code - please confirm or enter the correct income figure"
+            elif meta is None:
                 needs_review = True
                 review_reason = f"GL/PL code {code} not found in master catalog - taxability defaulted to 18% Taxable, please verify"
                 warnings.append({"type": "unmapped_code", "branch": branch, "gl_code": code})
@@ -4899,17 +5014,18 @@ def finalize_ledger_accounts(raw_accounts, financial_year='2026-27', month='July
                 "gl_code": code,
                 "particulars": particulars,
                 "income_amount": round(amount, 2),
+                "auto_income_amount": round(amount, 2),
                 "is_taxable": is_taxable,
                 "cgst": cgst,
-                "sgst": cgst,
-                "igst": 0.0,
+                "sgst": sgst,
+                "igst": igst,
                 "refund_without_gst": 0.0,
                 "refund_with_gst": 0.0,
                 "filename": a.get('filename', 'upload'),
                 "needs_review": needs_review,
                 "review_reason": review_reason,
             })
-    return entries, warnings
+    return entries, ledger_entries, warnings
 
 
 def parse_full_workbook_excel(file_bytes, filename):
@@ -5000,12 +5116,28 @@ def add_income_code_master():
     except (TypeError, ValueError):
         return jsonify({"error": "GST rate must be a number."}), 400
     is_taxable = bool(data.get('is_taxable', True))
+    manual_entry = bool(data.get('manual_entry', False))
+    tax_type = str(data.get('tax_type') or 'CGST_SGST').strip().upper()
+    if tax_type not in ('CGST_SGST', 'IGST'):
+        return jsonify({"error": "tax_type must be CGST_SGST or IGST."}), 400
+    ledger_role = data.get('ledger_role') or None
+    if ledger_role is not None:
+        ledger_role = str(ledger_role).strip().upper()
+        if ledger_role not in ('CGST_PAYABLE', 'SGST_PAYABLE', 'IGST_PAYABLE'):
+            return jsonify({"error": "ledger_role must be CGST_PAYABLE, SGST_PAYABLE, IGST_PAYABLE, or blank."}), 400
+        # A payable-ledger account (GL 1878/1879/1880-style) is never itself
+        # taxable income - force this server-side so it can't drift from a
+        # stale client-side form value.
+        is_taxable = False
     if not is_taxable:
         gst_rate = 0.0
     category = str(data.get('category') or ('Taxable Income' if is_taxable else 'Exempt Income')).strip()
 
     global INCOME_MASTER_CODES
-    entry = {"code": code, "particulars": particulars, "gst_rate": gst_rate, "is_taxable": is_taxable, "category": category}
+    entry = {
+        "code": code, "particulars": particulars, "gst_rate": gst_rate, "is_taxable": is_taxable,
+        "category": category, "manual_entry": manual_entry, "tax_type": tax_type, "ledger_role": ledger_role,
+    }
     existing = next((m for m in INCOME_MASTER_CODES if str(m.get('code')).strip().upper() == code), None)
     if existing:
         existing.update(entry)
@@ -5027,42 +5159,58 @@ def add_income_code_master():
         print(f"Note: could not write income_master_catalog.json (expected on Railway, non-fatal): {e}")
 
     fixed_count = 0
+    migrated_count = 0
     try:
         conn = get_db_connection()
         cur = conn.cursor()
         cur.execute('''
-            INSERT INTO income_code_catalog (code, particulars, gst_rate, is_taxable, category)
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO income_code_catalog (code, particulars, gst_rate, is_taxable, category, manual_entry, tax_type, ledger_role)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (code) DO UPDATE SET
                 particulars = EXCLUDED.particulars,
                 gst_rate = EXCLUDED.gst_rate,
                 is_taxable = EXCLUDED.is_taxable,
-                category = EXCLUDED.category
-        ''', (code, particulars, gst_rate, is_taxable, category))
-        cur.execute('''
-            SELECT id, income_amount::float, review_reason FROM income_entries
-            WHERE UPPER(gl_code) = %s
-        ''', (code,))
-        rows = cur.fetchall()
-        for rid, amount, review_reason in rows:
-            cgst = round((amount or 0.0) * (gst_rate / 200.0), 2) if is_taxable else 0.0
-            was_unmapped = review_reason is None or 'not found in master catalog' in review_reason
-            if was_unmapped:
-                cur.execute('''
-                    UPDATE income_entries
-                    SET is_taxable = %s, cgst = %s, sgst = %s, needs_review = FALSE, review_reason = NULL
-                    WHERE id = %s
-                ''', (is_taxable, cgst, cgst, rid))
-            else:
-                # Flagged for something else (e.g. a possible locker/guarantee
-                # reclass transfer) - fix the tax figures but leave that
-                # unrelated review flag standing; it still needs its own check.
-                cur.execute('''
-                    UPDATE income_entries
-                    SET is_taxable = %s, cgst = %s, sgst = %s
-                    WHERE id = %s
-                ''', (is_taxable, cgst, cgst, rid))
-            fixed_count += 1
+                category = EXCLUDED.category,
+                manual_entry = EXCLUDED.manual_entry,
+                tax_type = EXCLUDED.tax_type,
+                ledger_role = EXCLUDED.ledger_role
+        ''', (code, particulars, gst_rate, is_taxable, category, manual_entry, tax_type, ledger_role))
+
+        if ledger_role:
+            # This code is now a payable-ledger account, not income - any
+            # income_entries rows already sitting under it (e.g. from before
+            # this code existed in the catalog, when it fell through as
+            # "unmapped" and got wrongly taxed as ordinary income) no longer
+            # belong there. Remove them rather than leave stale, incorrectly
+            # classified rows around; the CA re-uploads the source statement
+            # to populate gst_payable_ledger correctly instead.
+            cur.execute('DELETE FROM income_entries WHERE UPPER(gl_code) = %s', (code,))
+            migrated_count = cur.rowcount
+        else:
+            cur.execute('''
+                SELECT id, income_amount::float, review_reason FROM income_entries
+                WHERE UPPER(gl_code) = %s
+            ''', (code,))
+            rows = cur.fetchall()
+            for rid, amount, review_reason in rows:
+                cgst = round((amount or 0.0) * (gst_rate / 200.0), 2) if is_taxable else 0.0
+                was_unmapped = review_reason is None or 'not found in master catalog' in review_reason
+                if was_unmapped:
+                    cur.execute('''
+                        UPDATE income_entries
+                        SET is_taxable = %s, cgst = %s, sgst = %s, needs_review = FALSE, review_reason = NULL
+                        WHERE id = %s
+                    ''', (is_taxable, cgst, cgst, rid))
+                else:
+                    # Flagged for something else (e.g. a possible locker/guarantee
+                    # reclass transfer) - fix the tax figures but leave that
+                    # unrelated review flag standing; it still needs its own check.
+                    cur.execute('''
+                        UPDATE income_entries
+                        SET is_taxable = %s, cgst = %s, sgst = %s
+                        WHERE id = %s
+                    ''', (is_taxable, cgst, cgst, rid))
+                fixed_count += 1
         conn.commit()
         cur.close()
         conn.close()
@@ -5070,9 +5218,17 @@ def add_income_code_master():
         print(f"Error retroactively fixing income_entries for code {code}: {e}")
 
     log_activity(session['user_id'], 'EDIT_GL_CODE' if existing else 'ADD_GL_CODE',
-                 f"{'Edited' if existing else 'Added'} GL/PL code {code} ({particulars}) - {'Taxable ' + str(gst_rate) + '%' if is_taxable else 'Exempt'}, {fixed_count} existing entries updated")
+                 f"{'Edited' if existing else 'Added'} GL/PL code {code} ({particulars}) - "
+                 f"{'Taxable ' + str(gst_rate) + '%' if is_taxable else 'Exempt'}"
+                 f"{', ledger_role=' + ledger_role if ledger_role else ''}"
+                 f"{', manual entry' if manual_entry else ''}, "
+                 f"{fixed_count} existing entries updated"
+                 f"{f', {migrated_count} removed as no longer income' if migrated_count else ''}")
 
-    return jsonify({"success": True, "code": entry, "updated_existing": existing is not None, "entries_fixed": fixed_count})
+    return jsonify({
+        "success": True, "code": entry, "updated_existing": existing is not None,
+        "entries_fixed": fixed_count, "entries_migrated": migrated_count,
+    })
 
 @app.route('/api/income-codes-master/<code>', methods=['DELETE'])
 @login_required
@@ -5104,6 +5260,13 @@ def delete_income_code_master(code):
             WHERE UPPER(gl_code) = %s
         ''', (f"GL/PL code {clean} was removed from the master catalog - please reclassify", clean))
         affected_count = cur.rowcount
+        cur.execute('''
+            UPDATE gst_payable_ledger
+            SET needs_review = TRUE,
+                review_reason = %s
+            WHERE UPPER(gl_code) = %s
+        ''', (f"GL/PL code {clean} was removed from the master catalog - please reclassify", clean))
+        affected_count += cur.rowcount
         conn.commit()
         cur.close()
         conn.close()
@@ -5135,6 +5298,7 @@ def get_income_entries():
                    refund_without_gst::float, refund_with_gst::float, file_name,
                    CASE WHEN file_data IS NOT NULL THEN true ELSE false END as has_file,
                    needs_review, review_reason,
+                   auto_income_amount::float, manual_income_amount::float,
                    created_at
             FROM income_entries
             WHERE client_id = %s
@@ -5158,9 +5322,63 @@ def get_income_entries():
         rows = cur.fetchall()
         cur.close()
         conn.close()
+        for r in rows:
+            meta = get_income_code_meta(r['gl_code'])
+            r['manual_entry'] = bool(meta.get('manual_entry')) if meta else False
         return jsonify({"entries": rows, "client_id": client_id, "branches": INCOME_MASTER_BRANCHES})
     except Exception as e:
         print(f"Error fetching income entries: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/income-entries/<int:entry_id>/manual-amount', methods=['POST'])
+@login_required
+def set_income_entry_manual_amount(entry_id):
+    """Lets the CA type in the correct figure for a manual-entry GL/PL code
+    (e.g. PL 3230/3320 - see RECLASS_PAIR_CODES) instead of trusting the
+    auto-parsed ledger net for it. Data entry, not catalog governance, so
+    any logged-in user can do this (same level as routine income review)."""
+    client_id = get_current_client_id()
+    data = request.json or {}
+    try:
+        amount = float(data.get('amount'))
+    except (TypeError, ValueError):
+        return jsonify({"error": "amount must be a number."}), 400
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute('SELECT gl_code, review_reason FROM income_entries WHERE id = %s AND client_id = %s', (entry_id, client_id))
+        row = cur.fetchone()
+        if not row:
+            cur.close()
+            conn.close()
+            return jsonify({"error": "Income entry not found."}), 404
+
+        meta = get_income_code_meta(row['gl_code'])
+        is_taxable = meta.get('is_taxable', True) if meta else True
+        rate = meta.get('gst_rate', 18.0) if meta else 18.0
+        cgst = round(amount * (rate / 200.0), 2) if is_taxable else 0.0
+
+        was_manual_entry_flag = row['review_reason'] and 'manual-entry code' in row['review_reason']
+        cur.execute('''
+            UPDATE income_entries
+            SET manual_income_amount = %s,
+                income_amount = %s,
+                cgst = %s, sgst = %s,
+                needs_review = CASE WHEN %s THEN FALSE ELSE needs_review END,
+                review_reason = CASE WHEN %s THEN NULL ELSE review_reason END
+            WHERE id = %s AND client_id = %s
+            RETURNING id
+        ''', (amount, round(amount, 2), cgst, cgst, was_manual_entry_flag, was_manual_entry_flag, entry_id, client_id))
+        updated = cur.fetchone()
+        conn.commit()
+        cur.close()
+        conn.close()
+        if not updated:
+            return jsonify({"error": "Income entry not found."}), 404
+        return jsonify({"success": True, "income_amount": round(amount, 2), "cgst": cgst, "sgst": cgst})
+    except Exception as e:
+        print(f"Error setting manual income amount for entry {entry_id}: {e}")
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/upload-income', methods=['POST'])
@@ -5241,12 +5459,14 @@ def upload_income_api():
             except Exception as ze:
                 print(f"Error reading zip file {fname}: {ze}")
 
-    finalized_from_raw, ingest_warnings = finalize_ledger_accounts(raw_accounts)
+    finalized_from_raw, ledger_entries, ingest_warnings = finalize_ledger_accounts(raw_accounts)
     file_data_by_key = {}
     for a in raw_accounts:
         file_data_by_key.setdefault((a.get('branch'), a.get('gl_code')), a.get('file_data'))
     for e in finalized_from_raw:
         e['file_data'] = file_data_by_key.get((e['branch'], e['gl_code']))
+    for le in ledger_entries:
+        le['file_data'] = file_data_by_key.get((le['branch'], le['gl_code']))
     parsed_entries.extend(finalized_from_raw)
 
     saved_count = 0
@@ -5262,24 +5482,35 @@ def upload_income_api():
         review_count = 0
         for e in unique_entries.values():
             cur.execute('''
-                INSERT INTO income_entries (user_id, client_id, branch, state, financial_year, month, gl_code, particulars, is_taxable, income_amount, cgst, sgst, igst, refund_without_gst, refund_with_gst, file_name, file_data, needs_review, review_reason)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO income_entries (user_id, client_id, branch, state, financial_year, month, gl_code, particulars, is_taxable, income_amount, auto_income_amount, cgst, sgst, igst, refund_without_gst, refund_with_gst, file_name, file_data, needs_review, review_reason)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (client_id, branch, financial_year, month, gl_code)
                 DO UPDATE SET
                     user_id = EXCLUDED.user_id,
                     particulars = EXCLUDED.particulars,
                     is_taxable = EXCLUDED.is_taxable,
-                    income_amount = EXCLUDED.income_amount,
-                    cgst = EXCLUDED.cgst,
-                    sgst = EXCLUDED.sgst,
-                    igst = EXCLUDED.igst,
+                    auto_income_amount = EXCLUDED.auto_income_amount,
+                    -- A re-upload must never silently wipe out a manual
+                    -- correction the CA already typed in for this code - if
+                    -- one exists, the effective figure and its tax stay put;
+                    -- only the freshly-parsed auto_income_amount refreshes.
+                    income_amount = CASE WHEN income_entries.manual_income_amount IS NOT NULL
+                                         THEN income_entries.income_amount ELSE EXCLUDED.income_amount END,
+                    cgst = CASE WHEN income_entries.manual_income_amount IS NOT NULL
+                                THEN income_entries.cgst ELSE EXCLUDED.cgst END,
+                    sgst = CASE WHEN income_entries.manual_income_amount IS NOT NULL
+                                THEN income_entries.sgst ELSE EXCLUDED.sgst END,
+                    igst = CASE WHEN income_entries.manual_income_amount IS NOT NULL
+                                THEN income_entries.igst ELSE EXCLUDED.igst END,
                     refund_without_gst = EXCLUDED.refund_without_gst,
                     refund_with_gst = EXCLUDED.refund_with_gst,
                     file_name = EXCLUDED.file_name,
-                    needs_review = EXCLUDED.needs_review,
-                    review_reason = EXCLUDED.review_reason,
+                    needs_review = CASE WHEN income_entries.manual_income_amount IS NOT NULL
+                                        THEN FALSE ELSE EXCLUDED.needs_review END,
+                    review_reason = CASE WHEN income_entries.manual_income_amount IS NOT NULL
+                                         THEN NULL ELSE EXCLUDED.review_reason END,
                     created_at = CURRENT_TIMESTAMP
-                RETURNING id;
+                RETURNING id, manual_income_amount;
             ''', (
                 user_id, client_id,
                 e.get('branch', 'Unassigned'),
@@ -5290,6 +5521,7 @@ def upload_income_api():
                 e.get('particulars', 'Income'),
                 e.get('is_taxable', True),
                 e.get('income_amount', 0.0),
+                e.get('auto_income_amount', e.get('income_amount', 0.0)),
                 e.get('cgst', 0.0),
                 e.get('sgst', 0.0),
                 e.get('igst', 0.0),
@@ -5300,9 +5532,49 @@ def upload_income_api():
                 e.get('needs_review', False),
                 e.get('review_reason'),
             ))
+            row = cur.fetchone()
             saved_count += 1
-            if e.get('needs_review'):
+            still_needs_review = e.get('needs_review', False) and (row is None or row[1] is None)
+            if still_needs_review:
                 review_count += 1
+
+        ledger_saved_count = 0
+        for le in ledger_entries:
+            cur.execute('''
+                INSERT INTO gst_payable_ledger (client_id, branch, financial_year, month, gl_code, ledger_role, closing_balance, balance_source, file_name, file_data, needs_review, review_reason)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (client_id, branch, financial_year, month, gl_code)
+                DO UPDATE SET
+                    ledger_role = EXCLUDED.ledger_role,
+                    -- A manually-entered closing balance (balance_source='manual')
+                    -- is a human correction and must not be silently overwritten
+                    -- by a routine re-upload's parsed figure.
+                    closing_balance = CASE WHEN gst_payable_ledger.balance_source = 'manual'
+                                           THEN gst_payable_ledger.closing_balance ELSE EXCLUDED.closing_balance END,
+                    balance_source = CASE WHEN gst_payable_ledger.balance_source = 'manual'
+                                          THEN 'manual' ELSE EXCLUDED.balance_source END,
+                    file_name = EXCLUDED.file_name,
+                    needs_review = CASE WHEN gst_payable_ledger.balance_source = 'manual'
+                                        THEN FALSE ELSE EXCLUDED.needs_review END,
+                    review_reason = CASE WHEN gst_payable_ledger.balance_source = 'manual'
+                                         THEN NULL ELSE EXCLUDED.review_reason END,
+                    updated_at = CURRENT_TIMESTAMP
+            ''', (
+                client_id,
+                le.get('branch', 'Unassigned'),
+                le.get('financial_year', '2026-27'),
+                le.get('month', 'July'),
+                le.get('gl_code', 'N/A'),
+                le.get('ledger_role'),
+                le.get('closing_balance'),
+                le.get('balance_source', 'parsed'),
+                le.get('filename', 'upload'),
+                psycopg2.Binary(le['file_data']) if le.get('file_data') else None,
+                le.get('needs_review', True),
+                le.get('review_reason'),
+            ))
+            ledger_saved_count += 1
+
         conn.commit()
         cur.close()
         conn.close()
@@ -5313,6 +5585,7 @@ def upload_income_api():
             "review_count": review_count,
             "unrecognized_branch_files": sorted(unrecognized_branch_files),
             "duplicate_warnings": [w for w in ingest_warnings if w['type'] == 'duplicate_code_in_batch'],
+            "ledger_saved_count": ledger_saved_count,
         })
     except Exception as e:
         print(f"Error saving uploaded income records: {e}")
@@ -5568,6 +5841,8 @@ def delete_income_batch():
 def export_income_working_sheet():
     import collections, openpyxl, io, re
     from openpyxl.cell.cell import MergedCell
+    from openpyxl.styles import Font, PatternFill, Alignment
+    from openpyxl.utils import get_column_letter
 
     def _set(ws, r, c, value):
         """Write a cell, silently skipping merged-range member cells (only
@@ -5590,12 +5865,27 @@ def export_income_working_sheet():
                    income_amount::float, cgst::float, sgst::float, igst::float,
                    refund_without_gst::float, refund_with_gst::float
             FROM income_entries
-            WHERE client_id = %s
+            WHERE client_id = %s AND financial_year = %s AND month = %s
             ORDER BY branch ASC, gl_code ASC
-        ''', (client_id,))
+        ''', (client_id, fy, month))
         entries = cur.fetchall()
+
+        cur.execute('''
+            SELECT branch, gl_code, ledger_role, closing_balance::float, needs_review
+            FROM gst_payable_ledger
+            WHERE client_id = %s AND financial_year = %s AND month = %s
+        ''', (client_id, fy, month))
+        ledger_rows = cur.fetchall()
         cur.close()
         conn.close()
+
+        # branch (normalized) -> {'CGST_PAYABLE'/'SGST_PAYABLE'/'IGST_PAYABLE': closing_balance or None}
+        ledger_by_branch = collections.defaultdict(dict)
+        for lr in ledger_rows:
+            if not lr.get('ledger_role'):
+                continue
+            b_name = re.sub(r'[^A-Z0-9]', '', lr['branch'].upper().strip())
+            ledger_by_branch[b_name][lr['ledger_role']] = lr['closing_balance']
 
         # Group entries by normalized branch and GL code
         branch_map = collections.defaultdict(dict)
@@ -5631,6 +5921,7 @@ def export_income_working_sheet():
                     'inc': 0.0, 'sgst': 0.0, 'cgst': 0.0, 'igst': 0.0, 'refwo': 0.0, 'refw': 0.0,
                 })
                 s1_grand = {'inc': 0.0, 'sgst': 0.0, 'cgst': 0.0, 'igst': 0.0, 'refwo': 0.0}
+                branch_computed = {}
 
                 for sname in wb.sheetnames:
                     if sname in ['SUMMARY SHEET GST', 'Notes', 'GSTN CANCELLTED', 'Sheet1'] or sname.endswith('1'):
@@ -5721,6 +6012,26 @@ def export_income_working_sheet():
                     grand_igst += b_tot_igst
                     grand_ref_wo += b_tot_ref_wo
                     grand_ref_w += b_tot_ref_w
+
+                    branch_computed[sname] = {
+                        'inc': b_tot_inc, 'cgst': b_tot_cgst, 'sgst': b_tot_ggst, 'igst': b_tot_igst,
+                    }
+
+                    # Step 5: highlight this branch's tab when computed payable
+                    # differs from the ledger's own closing balance by > Rs 10.
+                    # A missing ledger figure means "not compared yet", not "zero
+                    # difference" - it's simply excluded from the max(), and if no
+                    # ledger figure exists at all for this branch the tab is left
+                    # its normal color (nothing to flag against).
+                    ledger_vals = ledger_by_branch.get(b_norm, {})
+                    diffs = []
+                    if ledger_vals.get('CGST_PAYABLE') is not None:
+                        diffs.append(abs(round(b_tot_cgst - ledger_vals['CGST_PAYABLE'], 2)))
+                    if ledger_vals.get('SGST_PAYABLE') is not None:
+                        diffs.append(abs(round(b_tot_ggst - ledger_vals['SGST_PAYABLE'], 2)))
+                    if ledger_vals.get('IGST_PAYABLE') is not None:
+                        diffs.append(abs(round(b_tot_igst - ledger_vals['IGST_PAYABLE'], 2)))
+                    ws_b.sheet_properties.tabColor = "FF0000" if diffs and max(diffs) > 10 else None
 
                     if sname.strip().upper() not in ('HO', 'DEMAT'):
                         s1_grand['inc'] += b_tot_inc
@@ -5830,6 +6141,56 @@ def export_income_working_sheet():
                     _set(ws_sum, 30, 6, grand_igst)
                     _set(ws_sum, 30, 7, tot_ggst + tot_cgst + grand_igst)
 
+                # New sheet (CA steps 3-4-6): per-branch computed-from-income
+                # GST payable vs the bank's own ledger closing balance (GL
+                # 1878/1879/1880), plus each branch's total income - this is
+                # also the cumulative branch-wise income + GST payable sheet
+                # step 6 asks for. Appended fresh each export so it can't go
+                # stale from a prior run.
+                if 'GST Payable Reconciliation' in wb.sheetnames:
+                    wb.remove(wb['GST Payable Reconciliation'])
+                ws_recon = wb.create_sheet('GST Payable Reconciliation')
+                recon_header_fill = PatternFill(start_color="1E3A8A", end_color="1E3A8A", fill_type="solid")
+                recon_header_font = Font(name="Calibri", size=10, bold=True, color="FFFFFF")
+                recon_headers = [
+                    "Branch", "Total Income", "Computed CGST", "Computed SGST", "Computed IGST",
+                    "Ledger CGST", "Ledger SGST", "Ledger IGST", "Diff CGST", "Diff SGST", "Diff IGST",
+                ]
+                for col_i, h_text in enumerate(recon_headers, start=1):
+                    c = ws_recon.cell(row=1, column=col_i, value=h_text)
+                    c.fill = recon_header_fill
+                    c.font = recon_header_font
+                    c.alignment = Alignment(horizontal="center")
+
+                branch_computed_by_norm = {
+                    re.sub(r'[^A-Z0-9]', '', sname.upper().strip()): vals
+                    for sname, vals in branch_computed.items()
+                }
+                r_ptr = 2
+                for b_name in INCOME_MASTER_BRANCHES:
+                    b_norm = re.sub(r'[^A-Z0-9]', '', b_name.upper().strip())
+                    bc = branch_computed_by_norm.get(b_norm, {'inc': 0.0, 'cgst': 0.0, 'sgst': 0.0, 'igst': 0.0})
+                    lv = ledger_by_branch.get(b_norm, {})
+                    l_cgst = lv.get('CGST_PAYABLE')
+                    l_sgst = lv.get('SGST_PAYABLE')
+                    l_igst = lv.get('IGST_PAYABLE')
+
+                    ws_recon.cell(row=r_ptr, column=1, value=b_name)
+                    ws_recon.cell(row=r_ptr, column=2, value=round(bc['inc'], 2))
+                    ws_recon.cell(row=r_ptr, column=3, value=round(bc['cgst'], 2))
+                    ws_recon.cell(row=r_ptr, column=4, value=round(bc['sgst'], 2))
+                    ws_recon.cell(row=r_ptr, column=5, value=round(bc['igst'], 2))
+                    ws_recon.cell(row=r_ptr, column=6, value=round(l_cgst, 2) if l_cgst is not None else "—")
+                    ws_recon.cell(row=r_ptr, column=7, value=round(l_sgst, 2) if l_sgst is not None else "—")
+                    ws_recon.cell(row=r_ptr, column=8, value=round(l_igst, 2) if l_igst is not None else "—")
+                    ws_recon.cell(row=r_ptr, column=9, value=round(bc['cgst'] - l_cgst, 2) if l_cgst is not None else "—")
+                    ws_recon.cell(row=r_ptr, column=10, value=round(bc['sgst'] - l_sgst, 2) if l_sgst is not None else "—")
+                    ws_recon.cell(row=r_ptr, column=11, value=round(bc['igst'] - l_igst, 2) if l_igst is not None else "—")
+                    r_ptr += 1
+
+                for col_i in range(1, len(recon_headers) + 1):
+                    ws_recon.column_dimensions[get_column_letter(col_i)].width = 16
+
                 buf = io.BytesIO()
                 wb.save(buf)
                 buf.seek(0)
@@ -5843,7 +6204,13 @@ def export_income_working_sheet():
             except Exception as te:
                 print(f"Master template loading error, falling back to dynamic builder: {te}")
 
-        # 2. Dynamic High-Fidelity 27-Tab Builder (Fallback)
+        # 2. Dynamic High-Fidelity 27-Tab Builder (Fallback - only used if the
+        # golden template file above is missing/corrupt)
+        client_cfg = get_client_config(client_id)
+        branch_entries_list = collections.defaultdict(list)
+        for e in entries:
+            branch_entries_list[e['branch'].strip().upper()].append(e)
+
         wb = openpyxl.Workbook()
         ws_summary = wb.active
         ws_summary.title = "SUMMARY SHEET GST"

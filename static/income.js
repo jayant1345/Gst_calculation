@@ -42,6 +42,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const codeInputTaxable = document.getElementById('codeInputTaxable');
     const codeInputRate = document.getElementById('codeInputRate');
     const codeInputCategory = document.getElementById('codeInputCategory');
+    const codeInputManualEntry = document.getElementById('codeInputManualEntry');
+    const codeInputTaxType = document.getElementById('codeInputTaxType');
+    const codeInputLedgerRole = document.getElementById('codeInputLedgerRole');
     const codeRateHint = document.getElementById('codeRateHint');
     const codeFormMsg = document.getElementById('codeFormMsg');
     const codesTableBody = document.getElementById('codesTableBody');
@@ -241,7 +244,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 <td style="padding: 12px 14px; font-weight: 700; color: #1e3a8a;">${e.branch}</td>
                 <td style="padding: 12px 14px; font-weight: 600; font-family: monospace; color: #0f172a;">${e.gl_code}</td>
                 <td style="padding: 12px 14px; color: #334155;">${e.particulars || 'Bank Revenue'}</td>
-                <td style="padding: 12px 14px; text-align: right; font-weight: 700; color: #0f172a;">${formatINR(e.income_amount)}</td>
+                <td style="padding: 12px 14px; text-align: right; font-weight: 700; color: #0f172a;">
+                    ${formatINR(e.income_amount)}
+                    ${e.manual_entry ? `<button type="button" class="btn-manual-amount" data-id="${e.id}" data-branch="${e.branch}" data-code="${e.gl_code}" data-amount="${e.income_amount}" title="Manual-entry code — click to enter the correct figure" style="display:inline-flex; align-items:center; margin-left:6px; background:none; border:none; color:#7c3aed; cursor:pointer; font-size:12px; vertical-align:middle;"><i class="fa-solid fa-pen"></i></button>` : ''}
+                </td>
                 <td style="padding: 12px 14px; text-align: right; color: #64748b;">${formatINR(e.sgst)}</td>
                 <td style="padding: 12px 14px; text-align: right; color: #64748b;">${formatINR(e.cgst)}</td>
                 <td style="padding: 12px 14px; text-align: right; color: #64748b;">${formatINR(e.igst)}</td>
@@ -287,6 +293,38 @@ document.addEventListener('DOMContentLoaded', () => {
                     window.openCodesModal(code);
                 } else {
                     alert(btn.getAttribute('title') || 'This entry needs manual review.');
+                }
+            });
+        });
+
+        // Attach Manual-Amount Listeners - manual-entry codes (e.g. PL 3230/3320)
+        // let the CA type in the correct figure instead of trusting the
+        // auto-parsed ledger net.
+        document.querySelectorAll('.btn-manual-amount').forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                const id = btn.getAttribute('data-id');
+                const branch = btn.getAttribute('data-branch');
+                const code = btn.getAttribute('data-code');
+                const current = btn.getAttribute('data-amount');
+                const typed = prompt(`Enter the correct income amount for ${branch} / ${code}:`, current);
+                if (typed === null) return;
+                const amount = parseFloat(typed);
+                if (isNaN(amount)) {
+                    alert('Please enter a valid number.');
+                    return;
+                }
+                try {
+                    const res = await fetch(`/api/income-entries/${id}/manual-amount`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ amount })
+                    });
+                    const data = await res.json();
+                    if (!res.ok) throw new Error(data.error || 'Save failed');
+                    loadIncomeData();
+                } catch (err) {
+                    alert('Could not save the amount: ' + err.message);
                 }
             });
         });
@@ -650,17 +688,29 @@ document.addEventListener('DOMContentLoaded', () => {
             codeInputRate.value = '18';
             codeInputRate.disabled = false;
             codeInputCategory.value = '';
+            codeInputManualEntry.value = 'false';
+            codeInputTaxType.value = 'CGST_SGST';
+            codeInputTaxType.disabled = false;
+            codeInputLedgerRole.value = '';
             codeFormMsg.style.display = 'none';
         }
 
+        function codeFlagBadges(c) {
+            const chips = [];
+            if (c.manual_entry) chips.push('<span style="display:inline-block; padding:2px 7px; border-radius:8px; font-size:10px; font-weight:700; background:#ede9fe; color:#5b21b6; margin-right:4px;">Manual</span>');
+            if (c.tax_type === 'IGST') chips.push('<span style="display:inline-block; padding:2px 7px; border-radius:8px; font-size:10px; font-weight:700; background:#dbeafe; color:#1e40af; margin-right:4px;">IGST</span>');
+            if (c.ledger_role) chips.push(`<span style="display:inline-block; padding:2px 7px; border-radius:8px; font-size:10px; font-weight:700; background:#fef3c7; color:#92400e;">Ledger: ${escapeHtml(c.ledger_role.replace('_PAYABLE',''))}</span>`);
+            return chips.join('') || '<span style="color:#cbd5e1;">—</span>';
+        }
+
         async function loadCodesTable() {
-            codesTableBody.innerHTML = `<tr><td colspan="4" style="padding:14px; text-align:center; color:#94a3b8;">Loading...</td></tr>`;
+            codesTableBody.innerHTML = `<tr><td colspan="5" style="padding:14px; text-align:center; color:#94a3b8;">Loading...</td></tr>`;
             try {
                 const res = await fetch('/api/income-codes-master');
                 const data = await res.json();
                 const codes = (data.codes || []).slice().sort((a, b) => String(a.code).localeCompare(String(b.code)));
                 if (codes.length === 0) {
-                    codesTableBody.innerHTML = `<tr><td colspan="4" style="padding:14px; text-align:center; color:#94a3b8;">No codes in the catalog yet.</td></tr>`;
+                    codesTableBody.innerHTML = `<tr><td colspan="5" style="padding:14px; text-align:center; color:#94a3b8;">No codes in the catalog yet.</td></tr>`;
                     return;
                 }
                 codesTableBody.innerHTML = codes.map(c => `
@@ -668,6 +718,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         <td style="padding: 7px 10px; font-family: monospace; font-weight: 700;">${escapeHtml(c.code)}</td>
                         <td style="padding: 7px 10px;">${escapeHtml(c.particulars)}</td>
                         <td style="padding: 7px 10px;">${c.is_taxable ? (c.gst_rate + '%') : 'Exempt'}</td>
+                        <td style="padding: 7px 10px;">${codeFlagBadges(c)}</td>
                         <td style="padding: 7px 10px; text-align: right; white-space: nowrap;">
                             <button type="button" class="btn-edit-code" data-code="${escapeHtml(c.code)}" style="background:none; border:none; color:#2563eb; cursor:pointer; font-size:12px;">Edit</button>
                             <button type="button" class="btn-delete-code" data-code="${escapeHtml(c.code)}" style="background:none; border:none; color:#ef4444; cursor:pointer; font-size:12px; margin-left: 10px;">Delete</button>
@@ -684,6 +735,10 @@ document.addEventListener('DOMContentLoaded', () => {
                         codeInputRate.value = c.gst_rate || 0;
                         codeInputRate.disabled = !c.is_taxable;
                         codeInputCategory.value = c.category || '';
+                        codeInputManualEntry.value = c.manual_entry ? 'true' : 'false';
+                        codeInputTaxType.value = c.tax_type || 'CGST_SGST';
+                        codeInputLedgerRole.value = c.ledger_role || '';
+                        codeInputTaxType.disabled = !!c.ledger_role;
                         codeFormMsg.style.display = 'none';
                         codeInputParticulars.focus();
                     });
@@ -707,7 +762,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     });
                 });
             } catch (e) {
-                codesTableBody.innerHTML = `<tr><td colspan="4" style="padding:14px; text-align:center; color:#ef4444;">Failed to load codes.</td></tr>`;
+                codesTableBody.innerHTML = `<tr><td colspan="5" style="padding:14px; text-align:center; color:#ef4444;">Failed to load codes.</td></tr>`;
             }
         }
 
@@ -742,6 +797,19 @@ document.addEventListener('DOMContentLoaded', () => {
             else if (codeInputRate.value === '0') codeInputRate.value = '18';
         });
 
+        codeInputLedgerRole.addEventListener('change', () => {
+            const isLedger = !!codeInputLedgerRole.value;
+            if (isLedger) {
+                // A payable-ledger account (GL 1878/1879/1880-style) is a
+                // liability balance, never taxable income itself, and has no
+                // DEMAT tax-type concept of its own.
+                codeInputTaxable.value = 'false';
+                codeInputTaxable.dispatchEvent(new Event('change'));
+                codeInputTaxType.value = 'CGST_SGST';
+            }
+            codeInputTaxType.disabled = isLedger;
+        });
+
         btnSaveCode.addEventListener('click', async () => {
             const code = codeInputCode.value.trim();
             const particulars = codeInputParticulars.value.trim();
@@ -752,6 +820,9 @@ document.addEventListener('DOMContentLoaded', () => {
             const is_taxable = codeInputTaxable.value === 'true';
             const gst_rate = parseFloat(codeInputRate.value) || 0;
             const category = codeInputCategory.value.trim();
+            const manual_entry = codeInputManualEntry.value === 'true';
+            const tax_type = codeInputTaxType.value;
+            const ledger_role = codeInputLedgerRole.value || null;
 
             btnSaveCode.disabled = true;
             btnSaveCode.textContent = 'Saving…';
@@ -759,13 +830,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 const res = await fetch('/api/income-codes-master', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ code, particulars, is_taxable, gst_rate, category })
+                    body: JSON.stringify({ code, particulars, is_taxable, gst_rate, category, manual_entry, tax_type, ledger_role })
                 });
                 const data = await res.json();
                 if (!res.ok) throw new Error(data.error || 'Save failed');
                 let msg = `Saved code ${code}.`;
                 if (data.entries_fixed > 0) {
                     msg += ` ${data.entries_fixed} already-uploaded entr${data.entries_fixed === 1 ? 'y' : 'ies'} using this code ${data.entries_fixed === 1 ? 'was' : 'were'} corrected.`;
+                }
+                if (data.entries_migrated > 0) {
+                    msg += ` ${data.entries_migrated} old entr${data.entries_migrated === 1 ? 'y was' : 'ies were'} removed from income (no longer classified as income now that it's a payable-ledger account).`;
                 }
                 showCodeFormMsg(msg, false);
                 loadCodesTable();

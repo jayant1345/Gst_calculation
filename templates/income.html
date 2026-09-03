@@ -470,9 +470,32 @@
                         <label for="codeInputRate">GST Rate (%)<span class="field-hint" id="codeRateHint"></span></label>
                         <input type="number" id="codeInputRate" value="18" min="0" max="28" step="0.1">
                     </div>
-                    <div class="form-field" style="grid-column: 1 / -1;">
+                    <div class="form-field">
                         <label for="codeInputCategory">Category <span class="field-hint">(optional)</span></label>
                         <input type="text" id="codeInputCategory" placeholder="e.g. Taxable Income / Exempt Income" autocomplete="off">
+                    </div>
+                    <div class="form-field">
+                        <label for="codeInputManualEntry">Entry Method</label>
+                        <select id="codeInputManualEntry">
+                            <option value="false">Auto (from ledger statement)</option>
+                            <option value="true">Manual (CA enters amount each month)</option>
+                        </select>
+                    </div>
+                    <div class="form-field">
+                        <label for="codeInputTaxType">Tax Type <span class="field-hint">(DEMAT branch only)</span></label>
+                        <select id="codeInputTaxType">
+                            <option value="CGST_SGST">CGST + SGST @ 9% each</option>
+                            <option value="IGST">IGST @ 18%</option>
+                        </select>
+                    </div>
+                    <div class="form-field" style="grid-column: 1 / -1;">
+                        <label for="codeInputLedgerRole">GST Payable Ledger Role <span class="field-hint">(only for GL 1878/1879/1880-type accounts)</span></label>
+                        <select id="codeInputLedgerRole">
+                            <option value="">— Not a payable ledger account (normal income code) —</option>
+                            <option value="CGST_PAYABLE">CGST Payable</option>
+                            <option value="SGST_PAYABLE">SGST Payable</option>
+                            <option value="IGST_PAYABLE">IGST Payable</option>
+                        </select>
                     </div>
                 </form>
                 <div id="codeFormMsg" style="display:none; font-size: 12.5px; padding: 8px 12px; border-radius: 8px;"></div>
@@ -484,6 +507,7 @@
                                 <th style="padding: 8px 10px;">Code</th>
                                 <th style="padding: 8px 10px;">Particulars</th>
                                 <th style="padding: 8px 10px;">Rate</th>
+                                <th style="padding: 8px 10px;">Flags</th>
                                 <th style="padding: 8px 10px;"></th>
                             </tr>
                         </thead>
