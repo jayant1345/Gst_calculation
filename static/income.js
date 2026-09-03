@@ -45,6 +45,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const codeInputManualEntry = document.getElementById('codeInputManualEntry');
     const codeInputTaxType = document.getElementById('codeInputTaxType');
     const codeInputLedgerRole = document.getElementById('codeInputLedgerRole');
+    const codeSearchInput = document.getElementById('codeSearchInput');
+    const codeSearchCount = document.getElementById('codeSearchCount');
     const codeRateHint = document.getElementById('codeRateHint');
     const codeFormMsg = document.getElementById('codeFormMsg');
     const codesTableBody = document.getElementById('codesTableBody');
@@ -790,73 +792,108 @@ document.addEventListener('DOMContentLoaded', () => {
             return chips.join('') || '<span style="color:#cbd5e1;">—</span>';
         }
 
-        async function loadCodesTable() {
+        let allCatalogCodes = [];
+
+        function renderCodesTable() {
+            const codes = allCatalogCodes;
+            const query = (codeSearchInput.value || '').trim().toLowerCase();
+            const filtered = query
+                ? codes.filter(c =>
+                    String(c.code).toLowerCase().includes(query) ||
+                    String(c.particulars || '').toLowerCase().includes(query) ||
+                    String(c.category || '').toLowerCase().includes(query))
+                : codes;
+
+            codeSearchCount.textContent = query ? `${filtered.length} of ${codes.length} codes` : `${codes.length} codes`;
+
+            if (codes.length === 0) {
+                codesTableBody.innerHTML = `<tr><td colspan="5" style="padding:14px; text-align:center; color:#94a3b8;">No codes in the catalog yet.</td></tr>`;
+                return;
+            }
+            if (filtered.length === 0) {
+                codesTableBody.innerHTML = `<tr><td colspan="5" style="padding:14px; text-align:center; color:#94a3b8;">No codes match "${escapeHtml(codeSearchInput.value)}".</td></tr>`;
+                return;
+            }
+            renderCodesRows(filtered);
+        }
+
+        function renderCodesRows(codes) {
+            codesTableBody.innerHTML = codes.map(c => `
+                <tr style="border-top: 1px solid var(--border-color);">
+                    <td style="padding: 7px 10px; font-family: monospace; font-weight: 700;">${escapeHtml(c.code)}</td>
+                    <td style="padding: 7px 10px;">${escapeHtml(c.particulars)}</td>
+                    <td style="padding: 7px 10px;">${c.is_taxable ? (c.gst_rate + '%') : 'Exempt'}</td>
+                    <td style="padding: 7px 10px;">${codeFlagBadges(c)}</td>
+                    <td style="padding: 7px 10px; text-align: right; white-space: nowrap;">
+                        <button type="button" class="btn-edit-code" data-code="${escapeHtml(c.code)}" style="background:none; border:none; color:#2563eb; cursor:pointer; font-size:12px;">Edit</button>
+                        <button type="button" class="btn-delete-code" data-code="${escapeHtml(c.code)}" style="background:none; border:none; color:#ef4444; cursor:pointer; font-size:12px; margin-left: 10px;">Delete</button>
+                    </td>
+                </tr>
+            `).join('');
+            document.querySelectorAll('.btn-edit-code').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    // Always look up against the full list (not just the
+                    // currently-filtered rows) so edit works correctly
+                    // regardless of what's typed in the search box.
+                    const c = allCatalogCodes.find(x => String(x.code) === btn.getAttribute('data-code'));
+                    if (!c) return;
+                    codeInputCode.value = c.code;
+                    codeInputParticulars.value = c.particulars || '';
+                    codeInputTaxable.value = c.is_taxable ? 'true' : 'false';
+                    codeInputRate.value = c.gst_rate || 0;
+                    codeInputRate.disabled = !c.is_taxable;
+                    codeInputCategory.value = c.category || '';
+                    codeInputManualEntry.value = c.manual_entry ? 'true' : 'false';
+                    codeInputTaxType.value = c.tax_type || 'CGST_SGST';
+                    codeInputLedgerRole.value = c.ledger_role || '';
+                    codeInputTaxType.disabled = !!c.ledger_role;
+                    codeFormMsg.style.display = 'none';
+                    codeInputParticulars.focus();
+                });
+            });
+            document.querySelectorAll('.btn-delete-code').forEach(btn => {
+                btn.addEventListener('click', async () => {
+                    const delCode = btn.getAttribute('data-code');
+                    if (!confirm(`Delete GL/PL code ${delCode} from the catalog?\n\nAny already-uploaded entries using this code will keep their current figures but be re-flagged "Needs Review" since their classification no longer exists.`)) {
+                        return;
+                    }
+                    try {
+                        const res = await fetch(`/api/income-codes-master/${encodeURIComponent(delCode)}`, { method: 'DELETE' });
+                        const data = await res.json();
+                        if (!res.ok) throw new Error(data.error || 'Delete failed');
+                        showCodeFormMsg(`Deleted code ${delCode}. ${data.affected_entries} existing entr${data.affected_entries === 1 ? 'y was' : 'ies were'} re-flagged for review.`, false);
+                        fetchAndRenderCodes();
+                        loadIncomeData();
+                    } catch (e) {
+                        showCodeFormMsg('Could not delete: ' + e.message, true);
+                    }
+                });
+            });
+        }
+
+        async function fetchAndRenderCodes() {
             codesTableBody.innerHTML = `<tr><td colspan="5" style="padding:14px; text-align:center; color:#94a3b8;">Loading...</td></tr>`;
             try {
                 const res = await fetch('/api/income-codes-master');
                 const data = await res.json();
-                const codes = (data.codes || []).slice().sort((a, b) => String(a.code).localeCompare(String(b.code)));
-                if (codes.length === 0) {
-                    codesTableBody.innerHTML = `<tr><td colspan="5" style="padding:14px; text-align:center; color:#94a3b8;">No codes in the catalog yet.</td></tr>`;
-                    return;
-                }
-                codesTableBody.innerHTML = codes.map(c => `
-                    <tr style="border-top: 1px solid var(--border-color);">
-                        <td style="padding: 7px 10px; font-family: monospace; font-weight: 700;">${escapeHtml(c.code)}</td>
-                        <td style="padding: 7px 10px;">${escapeHtml(c.particulars)}</td>
-                        <td style="padding: 7px 10px;">${c.is_taxable ? (c.gst_rate + '%') : 'Exempt'}</td>
-                        <td style="padding: 7px 10px;">${codeFlagBadges(c)}</td>
-                        <td style="padding: 7px 10px; text-align: right; white-space: nowrap;">
-                            <button type="button" class="btn-edit-code" data-code="${escapeHtml(c.code)}" style="background:none; border:none; color:#2563eb; cursor:pointer; font-size:12px;">Edit</button>
-                            <button type="button" class="btn-delete-code" data-code="${escapeHtml(c.code)}" style="background:none; border:none; color:#ef4444; cursor:pointer; font-size:12px; margin-left: 10px;">Delete</button>
-                        </td>
-                    </tr>
-                `).join('');
-                document.querySelectorAll('.btn-edit-code').forEach(btn => {
-                    btn.addEventListener('click', () => {
-                        const c = codes.find(x => String(x.code) === btn.getAttribute('data-code'));
-                        if (!c) return;
-                        codeInputCode.value = c.code;
-                        codeInputParticulars.value = c.particulars || '';
-                        codeInputTaxable.value = c.is_taxable ? 'true' : 'false';
-                        codeInputRate.value = c.gst_rate || 0;
-                        codeInputRate.disabled = !c.is_taxable;
-                        codeInputCategory.value = c.category || '';
-                        codeInputManualEntry.value = c.manual_entry ? 'true' : 'false';
-                        codeInputTaxType.value = c.tax_type || 'CGST_SGST';
-                        codeInputLedgerRole.value = c.ledger_role || '';
-                        codeInputTaxType.disabled = !!c.ledger_role;
-                        codeFormMsg.style.display = 'none';
-                        codeInputParticulars.focus();
-                    });
-                });
-                document.querySelectorAll('.btn-delete-code').forEach(btn => {
-                    btn.addEventListener('click', async () => {
-                        const delCode = btn.getAttribute('data-code');
-                        if (!confirm(`Delete GL/PL code ${delCode} from the catalog?\n\nAny already-uploaded entries using this code will keep their current figures but be re-flagged "Needs Review" since their classification no longer exists.`)) {
-                            return;
-                        }
-                        try {
-                            const res = await fetch(`/api/income-codes-master/${encodeURIComponent(delCode)}`, { method: 'DELETE' });
-                            const data = await res.json();
-                            if (!res.ok) throw new Error(data.error || 'Delete failed');
-                            showCodeFormMsg(`Deleted code ${delCode}. ${data.affected_entries} existing entr${data.affected_entries === 1 ? 'y was' : 'ies were'} re-flagged for review.`, false);
-                            loadCodesTable();
-                            loadIncomeData();
-                        } catch (e) {
-                            showCodeFormMsg('Could not delete: ' + e.message, true);
-                        }
-                    });
-                });
+                allCatalogCodes = (data.codes || []).slice().sort((a, b) => String(a.code).localeCompare(String(b.code)));
+                renderCodesTable();
             } catch (e) {
                 codesTableBody.innerHTML = `<tr><td colspan="5" style="padding:14px; text-align:center; color:#ef4444;">Failed to load codes.</td></tr>`;
             }
         }
 
+        let codeSearchDebounce = null;
+        codeSearchInput.addEventListener('input', () => {
+            clearTimeout(codeSearchDebounce);
+            codeSearchDebounce = setTimeout(renderCodesTable, 150);
+        });
+
         function openCodesModal(prefillCode) {
             resetCodeForm(prefillCode);
+            codeSearchInput.value = '';
             codesModalOverlay.style.display = 'flex';
-            loadCodesTable();
+            fetchAndRenderCodes();
             if (prefillCode) {
                 codeInputParticulars.focus();
             } else {
@@ -929,7 +966,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     msg += ` ${data.entries_migrated} old entr${data.entries_migrated === 1 ? 'y was' : 'ies were'} removed from income (no longer classified as income now that it's a payable-ledger account).`;
                 }
                 showCodeFormMsg(msg, false);
-                loadCodesTable();
+                fetchAndRenderCodes();
                 loadIncomeData();
             } catch (e) {
                 showCodeFormMsg('Could not save: ' + e.message, true);

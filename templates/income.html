@@ -486,14 +486,14 @@
     {% if is_admin %}
     <!-- Manage GL/PL Codes Modal (admin-only) -->
     <div class="modal-overlay" id="codesModalOverlay" style="display: none;">
-        <div class="modal-card">
+        <div class="modal-card" style="max-width: 760px; width: 92vw; max-height: 88vh; display: flex; flex-direction: column;">
             <div class="modal-header">
                 <h3><i class="fa-solid fa-list-check"></i> Manage GL/PL Codes</h3>
                 <button type="button" class="modal-close" id="codesModalClose" aria-label="Close">
                     <i class="fa-solid fa-xmark"></i>
                 </button>
             </div>
-            <div class="modal-body">
+            <div class="modal-body" style="overflow-y: auto; flex: 1; min-height: 0;">
                 <p style="font-size: 12.5px; color: #64748b; margin: -4px 0 4px;">
                     New or unrecognized bank GL/PL codes are auto-flagged "Needs Review" and taxed at 18% by default until classified here. Adding or editing a code here also fixes every already-uploaded entry using that code.
                 </p>
@@ -548,7 +548,11 @@
                 </form>
                 <div id="codeFormMsg" style="display:none; font-size: 12.5px; padding: 8px 12px; border-radius: 8px;"></div>
 
-                <div style="margin-top: 6px; max-height: 260px; overflow-y: auto; border: 1px solid var(--border-color); border-radius: 10px;">
+                <div style="margin-top: 10px; display: flex; align-items: center; gap: 8px;">
+                    <input type="text" id="codeSearchInput" placeholder="Search by code or particulars (e.g. 3270, DEMAT, locker)..." style="flex: 1; padding: 8px 12px; border-radius: 8px; border: 1px solid #cbd5e1; font-size: 12.5px;">
+                    <span id="codeSearchCount" style="font-size: 11.5px; color: #94a3b8; white-space: nowrap;"></span>
+                </div>
+                <div style="margin-top: 6px; max-height: 45vh; overflow-y: auto; border: 1px solid var(--border-color); border-radius: 10px;">
                     <table style="width: 100%; border-collapse: collapse; font-size: 12.5px;">
                         <thead style="position: sticky; top: 0; background: #f8fafc;">
                             <tr style="text-align: left; color: #64748b; text-transform: uppercase; font-size: 11px;">
