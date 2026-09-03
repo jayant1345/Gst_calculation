@@ -6223,6 +6223,14 @@ def export_income_working_sheet():
                             igst_amt = float(item.get('igst') or 0.0)
                             ref_wo = float(item.get('refund_without_gst') or 0.0)
                             ref_w = float(item.get('refund_with_gst') or 0.0)
+                            if sname.strip().upper() == 'DEMAT' and not igst_amt:
+                                tpl_igst = ws_b.cell(r, 6).value
+                                if tpl_igst is not None and float(tpl_igst or 0.0) > 0:
+                                    igst_amt = float(tpl_igst)
+                                    if ws_b.cell(r, 4).value is not None:
+                                        sgst_amt = float(ws_b.cell(r, 4).value)
+                                    if ws_b.cell(r, 5).value is not None:
+                                        cgst_amt = float(ws_b.cell(r, 5).value)
                         else:
                             # No ingested data for this code - write zero rather than
                             # leaving whatever the template happened to already hold.
