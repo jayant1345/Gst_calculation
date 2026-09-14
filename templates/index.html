@@ -223,7 +223,7 @@
             <section class="dashboard-panel upload-panel">
                 <div class="panel-header">
                     <h2><i class="fa-solid fa-file-arrow-up"></i> Ingest Invoice Data</h2>
-                    <p class="panel-subtitle">Upload multiple purchase registers, invoices, or utility bills. No physical/soft copy? Use <strong>+ Add Manual Bill</strong> below, or prepare one xlsx/csv with columns Branch, GST No, Invoice Number, Date, Payment Date, Party Name, Taxable Amount, CGST, SGST, IGST, ITC Blocked (yes/no) for several bills at once &mdash; Invoice Number, Payment Date, and ITC Blocked columns are optional.</p>
+                    <p class="panel-subtitle">Upload multiple purchase registers, invoices, or utility bills. No physical/soft copy? Use <strong>+ Add Manual Bill</strong> below, or prepare one xlsx/csv with columns Branch, GST No, Invoice Number, Date, Payment Date, Party Name, Taxable Amount, CGST, SGST, IGST, ITC Blocked (yes/no), Remark for several bills at once &mdash; Invoice Number, Payment Date, ITC Blocked, and Remark columns are optional.</p>
                 </div>
 
                 <div class="branch-input-row">
@@ -392,6 +392,7 @@
                                 <th width="6%" title="Section 17(5) blocked credit / fully ineligible" data-col="itc_blocked">
                                     <div class="th-content"><span>Blocked</span><button type="button" class="col-filter-trigger" data-col="itc_blocked" title="Filter Blocked"><i class="fa-solid fa-filter"></i></button></div>
                                 </th>
+                                <th width="10%" title="e.g. GSTIN not mentioned on bill">Remark</th>
                                 <th width="9%" class="th-green">Eligible ITC (50%)</th>
                                 <th width="9%" class="th-red">Ineligible ITC (50%)</th>
                                 {% if is_admin %}<th width="8%" class="col-owner">Uploaded By</th>{% endif %}
@@ -400,7 +401,7 @@
                         </thead>
                         <tbody id="invoice-table-body">
                             <tr class="empty-state-row">
-                                <td colspan="{{ 17 if is_admin else 16 }}">
+                                <td colspan="{{ 18 if is_admin else 17 }}">
                                     <div class="empty-state">
                                         <i class="fa-solid fa-receipt"></i>
                                         <p>No invoices processed yet. Drag & drop or upload files above to automatically extract values and calculate 50% GST credit.</p>
@@ -464,6 +465,11 @@
                         <label for="mb-payment-date">Payment Date <span class="field-hint">(optional)</span></label>
                         <input type="text" id="mb-payment-date" placeholder="DD-MM-YYYY" autocomplete="off">
                     </div>
+                </div>
+
+                <div class="form-field">
+                    <label for="mb-remark">Remark / Reason <span class="field-hint">(optional)</span></label>
+                    <input type="text" id="mb-remark" placeholder="e.g. GSTIN not mentioned on bill" maxlength="500" autocomplete="off">
                 </div>
 
                 <label class="checkbox-field">

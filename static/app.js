@@ -1451,7 +1451,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function renderTable() {
         calculateAuditCounts();
         const filteredInvoices = getFilteredInvoices();
-        const colCount = window.IS_ADMIN ? 17 : 16;
+        const colCount = window.IS_ADMIN ? 18 : 17;
         const query = searchInput ? searchInput.value.toLowerCase().trim() : '';
         const fyValue = fyFilter ? fyFilter.value.trim() : '';
         const monthValue = monthFilter ? monthFilter.value.trim().toLowerCase() : '';
@@ -1519,6 +1519,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 <td class="numeric"><input type="number" step="0.01" class="field-sgst" value="${(inv.sgst || 0).toFixed(2)}"></td>
                 <td class="numeric"><input type="number" step="0.01" class="field-igst" value="${(inv.igst || 0).toFixed(2)}"></td>
                 <td class="checkbox-cell"><input type="checkbox" class="field-itc-blocked" title="Section 17(5) blocked credit / fully ineligible" ${inv.itc_blocked ? 'checked' : ''}></td>
+                <td><input type="text" class="field-remark" placeholder="e.g. GSTIN not on bill" maxlength="500" value="${(inv.remark || '').replace(/"/g, '&quot;')}"></td>
                 <td class="numeric eligible-column font-bold" id="row-eligible-${inv.id}">₹${(inv.eligible_itc || 0).toFixed(2)}</td>
                 <td class="numeric ineligible-column" id="row-ineligible-${inv.id}">₹${(inv.ineligible_itc || 0).toFixed(2)}</td>
                 ${window.IS_ADMIN ? `<td class="col-owner">${inv.username || window.CURRENT_USERNAME || ''}</td>` : ''}
@@ -1639,6 +1640,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const sgst = parseFloat(rowEl.querySelector('.field-sgst').value) || 0;
         const igst = parseFloat(rowEl.querySelector('.field-igst').value) || 0;
         const itcBlocked = rowEl.querySelector('.field-itc-blocked').checked;
+        const remark = rowEl.querySelector('.field-remark').value.trim();
 
         const totalGst = cgst + sgst + igst;
         const eligible = itcBlocked ? 0 : totalGst * 0.5;
@@ -1667,6 +1669,7 @@ document.addEventListener('DOMContentLoaded', () => {
             sgst: sgst,
             igst: igst,
             itc_blocked: itcBlocked,
+            remark: remark,
             eligible_itc: eligible,
             ineligible_itc: ineligible
         };
@@ -2197,6 +2200,7 @@ document.addEventListener('DOMContentLoaded', () => {
             sgst: sgst,
             igst: igst,
             itc_blocked: itcBlocked,
+            remark: document.getElementById('mb-remark').value.trim(),
             eligible_itc: itcBlocked ? 0 : totalGst * 0.5,
             ineligible_itc: itcBlocked ? totalGst : totalGst * 0.5
         };

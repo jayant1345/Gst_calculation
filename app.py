@@ -316,6 +316,10 @@ def init_db():
         cur.execute('ALTER TABLE invoices ADD COLUMN IF NOT EXISTS itc_blocked BOOLEAN NOT NULL DEFAULT FALSE;')
         cur.execute('ALTER TABLE invoices ADD COLUMN IF NOT EXISTS payment_date VARCHAR(20);')
 
+        # Migrate existing installs that predate the free-text remark/reason field
+        # (e.g. "GSTIN not mentioned on bill") entered by the user on a bill
+        cur.execute('ALTER TABLE invoices ADD COLUMN IF NOT EXISTS remark VARCHAR(500);')
+
         # Create GSTR-2B table
         cur.execute('''
             CREATE TABLE IF NOT EXISTS gstr2b_entries (
@@ -1064,6 +1068,7 @@ def parse_excel_register(file_bytes):
     state_cols = ["state", "section", "gstregistration", "registrationstate"]
     payment_date_cols = ["paymentdate", "paiddate", "datepaid", "paymentdt"]
     itc_blocked_cols = ["itcblocked", "gstblocked", "blocked", "noitc", "itcineligible"]
+    remark_cols = ["remark", "remarks", "reason", "reasons", "note", "notes", "comment", "comments"]
 
     col_num = find_column(inv_num_cols)
     col_date = find_column(inv_date_cols)
@@ -1077,6 +1082,7 @@ def parse_excel_register(file_bytes):
     col_state = find_column(state_cols)
     col_payment_date = find_column(payment_date_cols)
     col_itc_blocked = find_column(itc_blocked_cols)
+    col_remark = find_column(remark_cols)
 
     # Positional fallback only makes sense for legacy 3-column registers (vendor, invoice no,
     # date with no headers). It's intentionally NOT applied to invoice number, since manual-bill
@@ -1096,6 +1102,7 @@ def parse_excel_register(file_bytes):
             branch = str(row[col_branch]).strip() if col_branch and pd.notna(row[col_branch]) else None
             state = str(row[col_state]).strip() if col_state and pd.notna(row[col_state]) else None
             itc_blocked = str(row[col_itc_blocked]).strip().lower() in ('yes', 'true', '1', 'y') if col_itc_blocked and pd.notna(row[col_itc_blocked]) else False
+            remark = str(row[col_remark]).strip() if col_remark and pd.notna(row[col_remark]) else ''
 
             taxable = float(row[col_taxable]) if col_taxable and pd.notna(row[col_taxable]) else 0.0
             cgst = float(row[col_cgst]) if col_cgst and pd.notna(row[col_cgst]) else 0.0
@@ -1111,6 +1118,7 @@ def parse_excel_register(file_bytes):
                 "branch": branch,
                 "state": state,
                 "itc_blocked": itc_blocked,
+                "remark": remark,
                 "taxable_value": taxable,
                 "cgst": cgst,
                 "sgst": sgst,
@@ -1497,7 +1505,7 @@ def get_invoices():
         if is_admin:
             cur.execute('''
                 SELECT invoices.id, invoice_number, invoice_date, payment_date, vendor_name, gstin, branch, state,
-                       taxable_value::float, cgst::float, sgst::float, igst::float, itc_blocked,
+                       taxable_value::float, cgst::float, sgst::float, igst::float, itc_blocked, remark,
                        eligible_itc::float, ineligible_itc::float, users.username,
                        financial_year, month, client_id,
                        (file_data IS NOT NULL) AS has_file
@@ -1509,7 +1517,7 @@ def get_invoices():
         else:
             cur.execute('''
                 SELECT id, invoice_number, invoice_date, payment_date, vendor_name, gstin, branch, state,
-                       taxable_value::float, cgst::float, sgst::float, igst::float, itc_blocked,
+                       taxable_value::float, cgst::float, sgst::float, igst::float, itc_blocked, remark,
                        eligible_itc::float, ineligible_itc::float,
                        financial_year, month, client_id,
                        (file_data IS NOT NULL) AS has_file
@@ -1615,6 +1623,7 @@ def save_invoice():
     sgst = float(inv.get('sgst', 0.0))
     igst = float(inv.get('igst', 0.0))
     itc_blocked = bool(inv.get('itc_blocked', False))
+    remark = (inv.get('remark') or '').strip()[:500]
 
     client_id = inv.get('client_id') or get_current_client_id()
     cfg = get_client_config(client_id)
@@ -1650,18 +1659,18 @@ def save_invoice():
                 cur.execute('''
                     UPDATE invoices
                     SET invoice_number = %s, invoice_date = %s, payment_date = %s, vendor_name = %s, gstin = %s, branch = %s, state = %s,
-                        taxable_value = %s, cgst = %s, sgst = %s, igst = %s, itc_blocked = %s,
+                        taxable_value = %s, cgst = %s, sgst = %s, igst = %s, itc_blocked = %s, remark = %s,
                         eligible_itc = %s, ineligible_itc = %s, financial_year = %s, month = %s
                     WHERE id = %s
-                ''', (inv_num, inv_date, payment_date, vendor, gstin, branch, state, taxable, cgst, sgst, igst, itc_blocked, eligible, ineligible, fy, m, db_id))
+                ''', (inv_num, inv_date, payment_date, vendor, gstin, branch, state, taxable, cgst, sgst, igst, itc_blocked, remark, eligible, ineligible, fy, m, db_id))
             else:
                 cur.execute('''
                     UPDATE invoices
                     SET invoice_number = %s, invoice_date = %s, payment_date = %s, vendor_name = %s, gstin = %s, branch = %s, state = %s,
-                        taxable_value = %s, cgst = %s, sgst = %s, igst = %s, itc_blocked = %s,
+                        taxable_value = %s, cgst = %s, sgst = %s, igst = %s, itc_blocked = %s, remark = %s,
                         eligible_itc = %s, ineligible_itc = %s, financial_year = %s, month = %s
                     WHERE id = %s AND user_id = %s
-                ''', (inv_num, inv_date, payment_date, vendor, gstin, branch, state, taxable, cgst, sgst, igst, itc_blocked, eligible, ineligible, fy, m, db_id, user_id))
+                ''', (inv_num, inv_date, payment_date, vendor, gstin, branch, state, taxable, cgst, sgst, igst, itc_blocked, remark, eligible, ineligible, fy, m, db_id, user_id))
             ret_id = db_id
         else:
             # Check if new invoice duplicates an existing record
@@ -1673,9 +1682,9 @@ def save_invoice():
 
             # Insert new invoice
             cur.execute('''
-                INSERT INTO invoices (user_id, invoice_number, invoice_date, payment_date, vendor_name, gstin, branch, state, taxable_value, cgst, sgst, igst, itc_blocked, eligible_itc, ineligible_itc, financial_year, month)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
-            ''', (user_id, inv_num, inv_date, payment_date, vendor, gstin, branch, state, taxable, cgst, sgst, igst, itc_blocked, eligible, ineligible, fy, m))
+                INSERT INTO invoices (user_id, invoice_number, invoice_date, payment_date, vendor_name, gstin, branch, state, taxable_value, cgst, sgst, igst, itc_blocked, remark, eligible_itc, ineligible_itc, financial_year, month)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
+            ''', (user_id, inv_num, inv_date, payment_date, vendor, gstin, branch, state, taxable, cgst, sgst, igst, itc_blocked, remark, eligible, ineligible, fy, m))
             ret_id = cur.fetchone()[0]
 
         conn.commit()
@@ -2614,6 +2623,7 @@ def process_invoices():
                     "sgst": 0.0,
                     "igst": 0.0,
                     "itc_blocked": False,
+                    "remark": "",
                     "has_file": False,
                     "eligible_itc": 0.0,
                     "ineligible_itc": 0.0,
@@ -2646,6 +2656,7 @@ def process_invoices():
                 if (inv["state"] == 'Unassigned' or not inv["state"]) and inv["branch"] != 'Unassigned':
                     inv["state"] = get_branch_state(inv["branch"])
                 inv["itc_blocked"] = bool(inv.get("itc_blocked", False))
+                inv["remark"] = str(inv.get("remark") or "").strip()[:500]
                 for field in ("taxable_value", "cgst", "sgst", "igst"):
                     try:
                         inv[field] = float(inv.get(field) or 0.0)
@@ -2702,6 +2713,7 @@ def process_invoices():
                         "sgst": inv["sgst"],
                         "igst": inv["igst"],
                         "itc_blocked": inv["itc_blocked"],
+                        "remark": inv["remark"],
                         "has_file": False,
                         "eligible_itc": eligible,
                         "ineligible_itc": ineligible,
@@ -2716,10 +2728,10 @@ def process_invoices():
                 try:
                     cur.execute("SAVEPOINT sp_inv")
                     cur.execute('''
-                        INSERT INTO invoices (user_id, client_id, invoice_number, invoice_date, payment_date, vendor_name, gstin, branch, state, taxable_value, cgst, sgst, igst, itc_blocked, eligible_itc, ineligible_itc, file_data, file_mime_type, file_name, financial_year, month)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
+                        INSERT INTO invoices (user_id, client_id, invoice_number, invoice_date, payment_date, vendor_name, gstin, branch, state, taxable_value, cgst, sgst, igst, itc_blocked, remark, eligible_itc, ineligible_itc, file_data, file_mime_type, file_name, financial_year, month)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
                     ''', (user_id, client_id, inv["invoice_number"], inv["invoice_date"], inv["payment_date"], inv["vendor_name"], inv["gstin"], inv["branch"], inv["state"],
-                          inv["taxable_value"], inv["cgst"], inv["sgst"], inv["igst"], inv["itc_blocked"],
+                          inv["taxable_value"], inv["cgst"], inv["sgst"], inv["igst"], inv["itc_blocked"], inv["remark"],
                           eligible, ineligible,
                           psycopg2.Binary(inv_store_bytes) if inv_store_bytes else None,
                           inv_store_mime, inv_store_name, fy, m))
@@ -2741,6 +2753,7 @@ def process_invoices():
                         "sgst": inv["sgst"],
                         "igst": inv["igst"],
                         "itc_blocked": inv["itc_blocked"],
+                        "remark": inv["remark"],
                         "has_file": inv_store_bytes is not None,
                         "eligible_itc": eligible,
                         "ineligible_itc": ineligible,
@@ -2768,6 +2781,7 @@ def process_invoices():
                         "sgst": 0.0,
                         "igst": 0.0,
                         "itc_blocked": False,
+                        "remark": inv.get("remark", ""),
                         "has_file": False,
                         "eligible_itc": 0.0,
                         "ineligible_itc": 0.0,
