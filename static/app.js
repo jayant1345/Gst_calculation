@@ -1512,7 +1512,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 <td><input type="text" class="field-gstin ${isGstinInvalid ? 'field-needs-rectification' : ''}" title="${isGstinInvalid ? 'Missing / Incomplete GSTIN - Click to edit' : ''}" value="${inv.gstin || ''}"></td>
                 <td><input type="text" class="field-number ${isInvBlank ? 'field-needs-rectification' : ''}" title="${isInvBlank ? 'Missing Invoice # - Click to edit' : ''}" value="${inv.invoice_number || ''}"></td>
                 <td><input type="text" class="field-date ${isDateBlank ? 'field-needs-rectification' : ''}" title="${isDateBlank ? 'Missing Date - Click to edit' : ''}" value="${inv.invoice_date || ''}"></td>
-                <td><input type="text" class="field-payment-date ${isPayDateBlank ? 'field-needs-rectification' : ''}" placeholder="DD-MM-YYYY" title="${isPayDateBlank ? 'Missing Payment Date - Click to edit' : ''}" value="${inv.payment_date || ''}"></td>
+                <td><input type="text" class="field-payment-date ${isPayDateBlank ? 'field-needs-rectification' : ''}" placeholder="DD/MM/YYYY" title="${isPayDateBlank ? 'Missing Payment Date - Click to edit' : ''}" value="${inv.payment_date || ''}"></td>
                 <td><input type="text" class="field-vendor" list="vendor-suggestions" value="${inv.vendor_name || ''}"></td>
                 <td class="numeric"><input type="number" step="0.01" class="field-taxable" value="${(inv.taxable_value || 0).toFixed(2)}"></td>
                 <td class="numeric"><input type="number" step="0.01" class="field-cgst" value="${(inv.cgst || 0).toFixed(2)}"></td>
@@ -1695,10 +1695,19 @@ document.addEventListener('DOMContentLoaded', () => {
                 invoices[index].ineligible_itc = data.ineligible_itc;
                 invoices[index].financial_year = data.financial_year;
                 invoices[index].month = data.month;
+                invoices[index].invoice_date = data.invoice_date;
+                invoices[index].payment_date = data.payment_date;
 
                 // Update table values
                 document.getElementById(`row-eligible-${index}`).textContent = `₹${data.eligible_itc.toFixed(2)}`;
                 document.getElementById(`row-ineligible-${index}`).textContent = `₹${data.ineligible_itc.toFixed(2)}`;
+
+                // Snap the date fields to the canonical DD/MM/YYYY format the
+                // server normalized them to, whichever separator was typed
+                const dateInput = rowEl.querySelector('.field-date');
+                const paymentDateInput = rowEl.querySelector('.field-payment-date');
+                if (dateInput) dateInput.value = data.invoice_date || '';
+                if (paymentDateInput) paymentDateInput.value = data.payment_date || '';
 
                 populateFilters();
                 updateMetrics();
@@ -2225,6 +2234,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 newInvoice.ineligible_itc = data.ineligible_itc;
                 newInvoice.financial_year = data.financial_year;
                 newInvoice.month = data.month;
+                newInvoice.invoice_date = data.invoice_date;
+                newInvoice.payment_date = data.payment_date;
                 invoices = [newInvoice, ...invoices];
                 populateFilters();
                 renderTable();

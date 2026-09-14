@@ -148,27 +148,30 @@ def _dt_to_fy_and_month(dt):
         fy = f"{dt.year}-{str(dt.year + 1)[2:]}"
     return fy, dt.strftime('%B')
 
-def parse_date_to_fy_and_month(date_str):
+def _parse_date_flexible(date_str):
     """
     Parses date strings in a range of formats commonly seen in scanned
     invoices, AI-extracted text, and GSTR-2B exports (e.g. '2026-08-20',
-    '20-08-2026', '20 Aug 2026', '2026-08-20T00:00:00Z').
-    Returns (financial_year_str, month_str) or (None, None) if invalid.
-    Financial Year runs from April 1 to March 31.
+    '20-08-2026', '20/08/2026', '20 Aug 2026', '2026-08-20T00:00:00Z').
+    Returns a datetime.datetime, or None if the string can't be recognized
+    as a date at all - never raises, so callers can fall back safely.
     """
     if not date_str or date_str in ('N/A', '-', 'None'):
-        return None, None
+        return None
 
-    raw = date_str.strip()
+    raw = str(date_str).strip()
+    if not raw:
+        return None
     # Strip a trailing time-of-day component, whether space- or T-separated
     date_only = raw.split(' ')[0].split('T')[0]
 
+    # Day-first is assumed throughout (India convention) - '/' and '-' (and
+    # '.') are treated as interchangeable separators the user might type.
     numeric_formats = ('%Y-%m-%d', '%d-%m-%Y', '%Y/%m/%d', '%d/%m/%Y', '%d.%m.%Y',
                         '%d-%m-%y', '%d/%m/%y', '%d.%m.%y')
     for fmt in numeric_formats:
         try:
-            dt = datetime.datetime.strptime(date_only, fmt)
-            return _dt_to_fy_and_month(dt)
+            return datetime.datetime.strptime(date_only, fmt)
         except ValueError:
             continue
 
@@ -179,12 +182,36 @@ def parse_date_to_fy_and_month(date_str):
                         '%d %b %y', '%d %B %y', '%d-%b-%y', '%d-%B-%y')
     for fmt in textual_formats:
         try:
-            dt = datetime.datetime.strptime(raw, fmt)
-            return _dt_to_fy_and_month(dt)
+            return datetime.datetime.strptime(raw, fmt)
         except ValueError:
             continue
 
-    return None, None
+    return None
+
+
+def parse_date_to_fy_and_month(date_str):
+    """Returns (financial_year_str, month_str) for date_str, or (None, None)
+    if it can't be parsed. Financial Year runs from April 1 to March 31."""
+    dt = _parse_date_flexible(date_str)
+    if not dt:
+        return None, None
+    return _dt_to_fy_and_month(dt)
+
+
+def normalize_date_ddmmyyyy(date_str):
+    """Normalizes a Purchase Bill date typed/extracted with '/', '-', or '.'
+    separators (or a textual month) into the canonical DD/MM/YYYY display
+    format. Returns the input unchanged if it can't be confidently parsed,
+    rather than corrupting a value the user or AI actually provided."""
+    if date_str is None:
+        return date_str
+    raw = str(date_str).strip()
+    if not raw or raw in ('N/A', '-', 'None'):
+        return raw
+    dt = _parse_date_flexible(raw)
+    if not dt:
+        return raw
+    return dt.strftime('%d/%m/%Y')
 
 
 CLIENTS_CONFIG = {
@@ -771,10 +798,10 @@ def extract_from_pdf_binary_rescan(file_bytes, page_index=0):
     user_prompt = (
         "Perform a meticulous high-accuracy extraction of invoice details, reading BOTH PRINTED and HANDWRITTEN entries:\n"
         "- invoice_number: The bill, invoice, cash memo, or challan number.\n"
-        "- invoice_date: Date of invoice issue (standardize to DD-MM-YYYY format).\n"
+        "- invoice_date: Date of invoice issue (standardize to DD/MM/YYYY format).\n"
         "- payment_date: The date the bill was actually PAID / passed. Search diligently for rubber stamps ("
         "'PAID', 'SANCTIONED', 'PASSED FOR PAYMENT', 'CHEQUE NO', 'RTGS/NEFT', 'DEBITED ON'), "
-        "handwritten pen notes, cashier signatures with dates, or voucher stamp blocks. Standardize to DD-MM-YYYY. "
+        "handwritten pen notes, cashier signatures with dates, or voucher stamp blocks. Standardize to DD/MM/YYYY. "
         "If truly absent, leave empty string \"\".\n"
         "- vendor_name: Full seller / supplier / service provider entity name.\n"
         "- gstin: The 15-character GSTIN of the SELLER/SUPPLIER (not buyer/bank). Must follow strict Indian GSTIN format: "
@@ -812,10 +839,10 @@ def extract_from_image_rescan(file_bytes, ext):
     user_prompt = (
         "Perform a meticulous high-accuracy extraction of invoice details, reading BOTH PRINTED and HANDWRITTEN entries:\n"
         "- invoice_number: The bill, invoice, cash memo, or challan number.\n"
-        "- invoice_date: Date of invoice issue (standardize to DD-MM-YYYY format).\n"
+        "- invoice_date: Date of invoice issue (standardize to DD/MM/YYYY format).\n"
         "- payment_date: The date the bill was actually PAID / passed. Search diligently for rubber stamps ("
         "'PAID', 'SANCTIONED', 'PASSED FOR PAYMENT', 'CHEQUE NO', 'RTGS/NEFT', 'DEBITED ON'), "
-        "handwritten pen notes, cashier signatures with dates, or voucher stamp blocks. Standardize to DD-MM-YYYY. "
+        "handwritten pen notes, cashier signatures with dates, or voucher stamp blocks. Standardize to DD/MM/YYYY. "
         "If truly absent, leave empty string \"\".\n"
         "- vendor_name: Full seller / supplier / service provider entity name.\n"
         "- gstin: The 15-character GSTIN of the SELLER/SUPPLIER (not buyer/bank). Must follow strict Indian GSTIN format: "
@@ -1096,8 +1123,8 @@ def parse_excel_register(file_bytes):
         try:
             vendor = str(row[col_vendor]) if col_vendor and pd.notna(row[col_vendor]) else "Unknown Vendor"
             inv_no = str(row[col_num]) if col_num and pd.notna(row[col_num]) else "N/A"
-            inv_date = str(row[col_date]).split(" ")[0] if col_date and pd.notna(row[col_date]) else "N/A"
-            payment_date = str(row[col_payment_date]).split(" ")[0].strip() if col_payment_date and pd.notna(row[col_payment_date]) else None
+            inv_date = normalize_date_ddmmyyyy(str(row[col_date]).split(" ")[0]) if col_date and pd.notna(row[col_date]) else "N/A"
+            payment_date = normalize_date_ddmmyyyy(str(row[col_payment_date]).split(" ")[0].strip()) if col_payment_date and pd.notna(row[col_payment_date]) else None
             gstin = str(row[col_gstin]) if col_gstin and pd.notna(row[col_gstin]) else "N/A"
             branch = str(row[col_branch]).strip() if col_branch and pd.notna(row[col_branch]) else None
             state = str(row[col_state]).strip() if col_state and pd.notna(row[col_state]) else None
@@ -1610,8 +1637,8 @@ def save_invoice():
     
     db_id = inv.get('id')
     inv_num = inv.get('invoice_number', '')
-    inv_date = inv.get('invoice_date', '')
-    payment_date = inv.get('payment_date') or None
+    inv_date = normalize_date_ddmmyyyy(inv.get('invoice_date', ''))
+    payment_date = normalize_date_ddmmyyyy(inv.get('payment_date')) if inv.get('payment_date') else None
     vendor = inv.get('vendor_name', '')
     gstin = normalize_gstin(inv.get('gstin', '') or 'N/A', vendor)
     branch = inv.get('branch', '') or 'Unassigned'
@@ -1702,7 +1729,9 @@ def save_invoice():
             "eligible_itc": eligible,
             "ineligible_itc": ineligible,
             "financial_year": fy,
-            "month": m
+            "month": m,
+            "invoice_date": inv_date,
+            "payment_date": payment_date
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -2206,10 +2235,12 @@ def apply_rescan_results():
             vendor = (item.get('vendor_name') or '').strip()
             gstin = normalize_gstin((item.get('gstin') or '').strip(), vendor)
             inv_num = (item.get('invoice_number') or '').strip()
-            inv_date = (item.get('invoice_date') or '').strip()
+            inv_date = normalize_date_ddmmyyyy((item.get('invoice_date') or '').strip())
             payment_date = item.get('payment_date') or None
             if payment_date == '':
                 payment_date = None
+            elif payment_date:
+                payment_date = normalize_date_ddmmyyyy(payment_date)
                 
             taxable = float(item.get('taxable_value', 0.0) or 0.0)
             cgst = float(item.get('cgst', 0.0) or 0.0)
@@ -2634,8 +2665,8 @@ def process_invoices():
 
             for inv in parsed_res["parsed_list"]:
                 inv["invoice_number"] = str(inv.get("invoice_number") or "N/A")[:100]
-                inv["invoice_date"] = str(inv.get("invoice_date") or "N/A")[:50]
-                inv["payment_date"] = str(inv["payment_date"])[:50] if inv.get("payment_date") else None
+                inv["invoice_date"] = normalize_date_ddmmyyyy(str(inv.get("invoice_date") or "N/A"))[:50]
+                inv["payment_date"] = normalize_date_ddmmyyyy(str(inv["payment_date"]))[:50] if inv.get("payment_date") else None
                 inv["vendor_name"] = str(inv.get("vendor_name") or "Unknown Vendor")[:255]
                 inv["gstin"] = normalize_gstin(str(inv.get("gstin") or "N/A")[:50], inv["vendor_name"])
                 inv["branch"] = str(inv.get("branch") or batch_branch or "Unassigned")[:100]
