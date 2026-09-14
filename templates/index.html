@@ -477,18 +477,45 @@
                     <span>ITC Blocked (Sec 17(5) / fully ineligible) &mdash; skip the 50% eligible split, mark 100% ineligible</span>
                 </label>
 
+                <!-- GST Rate + Supply Type: shared by both entry modes below, drives automatic CGST/SGST/IGST calculation -->
+                <div class="form-grid">
+                    <div class="form-field">
+                        <label for="mb-rate">GST Rate</label>
+                        <select id="mb-rate">
+                            <option value="" selected>-- Manual entry (no auto-calc) --</option>
+                            <option value="0">0% (Nil-rated)</option>
+                            <option value="5">5%</option>
+                            <option value="12">12%</option>
+                            <option value="18">18%</option>
+                            <option value="28">28%</option>
+                            <option value="custom">Custom</option>
+                        </select>
+                    </div>
+                    <div class="form-field" id="mb-custom-rate-field" style="display: none;">
+                        <label for="mb-custom-rate">Custom Rate (%)</label>
+                        <input type="number" step="0.01" id="mb-custom-rate" value="0.00">
+                    </div>
+                    <div class="form-field">
+                        <label for="mb-supply-type">Supply Type</label>
+                        <select id="mb-supply-type">
+                            <option value="intra">Intra-state (CGST + SGST)</option>
+                            <option value="inter">Inter-state (IGST)</option>
+                        </select>
+                    </div>
+                </div>
+
                 <div class="entry-mode-toggle">
                     <label class="radio-pill">
                         <input type="radio" name="mb-mode" value="direct" checked>
-                        <span>Enter Taxable + GST amounts</span>
+                        <span>Enter Taxable Value (auto-calculates GST from Rate above)</span>
                     </label>
                     <label class="radio-pill">
                         <input type="radio" name="mb-mode" value="auto">
-                        <span>Enter Total Amount (auto-split GST)</span>
+                        <span>Enter Total Amount (auto-splits into Taxable + GST)</span>
                     </label>
                 </div>
 
-                <!-- Direct entry -->
+                <!-- Direct entry: type Taxable Value, CGST/SGST/IGST auto-fill from the GST Rate selected above -->
                 <div class="form-grid" id="mb-direct-fields">
                     <div class="form-field">
                         <label for="mb-taxable">Taxable Value (₹)</label>
@@ -508,32 +535,11 @@
                     </div>
                 </div>
 
-                <!-- Auto-split entry -->
+                <!-- Auto-split entry: type the tax-inclusive Total, back-calculate Taxable + CGST/SGST/IGST -->
                 <div class="form-grid" id="mb-auto-fields" style="display: none;">
                     <div class="form-field">
                         <label for="mb-total">Total Bill Amount (₹)</label>
                         <input type="number" step="0.01" id="mb-total" value="0.00">
-                    </div>
-                    <div class="form-field">
-                        <label for="mb-rate">GST Rate</label>
-                        <select id="mb-rate">
-                            <option value="5">5%</option>
-                            <option value="12">12%</option>
-                            <option value="18" selected>18%</option>
-                            <option value="28">28%</option>
-                            <option value="custom">Custom</option>
-                        </select>
-                    </div>
-                    <div class="form-field" id="mb-custom-rate-field" style="display: none;">
-                        <label for="mb-custom-rate">Custom Rate (%)</label>
-                        <input type="number" step="0.01" id="mb-custom-rate" value="0.00">
-                    </div>
-                    <div class="form-field">
-                        <label for="mb-supply-type">Supply Type</label>
-                        <select id="mb-supply-type">
-                            <option value="intra">Intra-state (CGST + SGST)</option>
-                            <option value="inter">Inter-state (IGST)</option>
-                        </select>
                     </div>
                 </div>
 

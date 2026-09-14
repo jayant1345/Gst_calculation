@@ -2085,34 +2085,95 @@ document.addEventListener('DOMContentLoaded', () => {
         if (e.target === manualBillOverlay) closeManualBillModal();
     });
 
-    // Toggle between "enter tax amounts directly" and "enter total, auto-split GST"
+    // Toggle between "enter taxable value, auto-calculate GST from Rate" and
+    // "enter total, auto-split into taxable + GST" - the GST Rate / Supply Type
+    // controls above are shared by both modes.
     manualBillForm.querySelectorAll('input[name="mb-mode"]').forEach(radio => {
         radio.addEventListener('change', () => {
             const isAuto = manualBillForm.querySelector('input[name="mb-mode"]:checked').value === 'auto';
             mbDirectFields.style.display = isAuto ? 'none' : 'grid';
             mbAutoFields.style.display = isAuto ? 'grid' : 'none';
             mbPreview.style.display = isAuto ? 'block' : 'none';
-            if (isAuto) updateAutoSplitPreview();
+            if (isAuto) {
+                updateAutoSplitPreview();
+            } else {
+                applyDirectModeAutoCalc();
+            }
         });
     });
 
+    // Resolves the GST Rate dropdown to a numeric percentage, or null when
+    // "Manual entry" is selected (meaning: don't auto-calculate anything,
+    // leave CGST/SGST/IGST exactly as the user typed them).
+    function getSelectedGstRate() {
+        const rateSelection = mbRate.value;
+        if (rateSelection === '') return null;
+        if (rateSelection === 'custom') return parseFloat(document.getElementById('mb-custom-rate').value) || 0;
+        return parseFloat(rateSelection);
+    }
+
+    // Recalculates whichever mode is currently active whenever Rate/Supply Type change
+    function onRateOrSupplyTypeChanged() {
+        const isAuto = manualBillForm.querySelector('input[name="mb-mode"]:checked').value === 'auto';
+        if (isAuto) {
+            updateAutoSplitPreview();
+        } else {
+            applyDirectModeAutoCalc();
+        }
+    }
+
     mbRate.addEventListener('change', () => {
         mbCustomRateField.style.display = mbRate.value === 'custom' ? 'block' : 'none';
-        updateAutoSplitPreview();
+        onRateOrSupplyTypeChanged();
     });
 
-    ['mb-total', 'mb-custom-rate', 'mb-supply-type'].forEach(id => {
+    ['mb-custom-rate', 'mb-supply-type'].forEach(id => {
+        document.getElementById(id).addEventListener('input', onRateOrSupplyTypeChanged);
+        document.getElementById(id).addEventListener('change', onRateOrSupplyTypeChanged);
+    });
+
+    ['mb-total'].forEach(id => {
         document.getElementById(id).addEventListener('input', updateAutoSplitPreview);
         document.getElementById(id).addEventListener('change', updateAutoSplitPreview);
     });
 
+    document.getElementById('mb-taxable').addEventListener('input', applyDirectModeAutoCalc);
+
+    // Forward-calculates CGST/SGST/IGST from a (tax-exclusive) taxable value + GST rate
+    function computeForwardGstSplit(taxable, rate, supplyType) {
+        const taxAmount = taxable * (rate / 100);
+        let cgst = 0, sgst = 0, igst = 0;
+        if (supplyType === 'intra') {
+            cgst = taxAmount / 2;
+            sgst = taxAmount / 2;
+        } else {
+            igst = taxAmount;
+        }
+        return {
+            cgst: Math.round(cgst * 100) / 100,
+            sgst: Math.round(sgst * 100) / 100,
+            igst: Math.round(igst * 100) / 100
+        };
+    }
+
+    // Fills CGST/SGST/IGST from Taxable Value x GST Rate. No-op when "Manual
+    // entry" is selected, so a CA who wants full manual control can still
+    // type the tax amounts themselves without the form overwriting them.
+    function applyDirectModeAutoCalc() {
+        const rate = getSelectedGstRate();
+        if (rate === null) return;
+        const taxable = parseFloat(document.getElementById('mb-taxable').value) || 0;
+        const supplyType = document.getElementById('mb-supply-type').value;
+        const split = computeForwardGstSplit(taxable, rate, supplyType);
+        document.getElementById('mb-cgst').value = split.cgst.toFixed(2);
+        document.getElementById('mb-sgst').value = split.sgst.toFixed(2);
+        document.getElementById('mb-igst').value = split.igst.toFixed(2);
+    }
+
     // Back-calculates taxable value + CGST/SGST/IGST from a tax-inclusive total amount
     function computeGstSplit() {
         const total = parseFloat(document.getElementById('mb-total').value) || 0;
-        const rateSelection = mbRate.value;
-        const rate = rateSelection === 'custom'
-            ? (parseFloat(document.getElementById('mb-custom-rate').value) || 0)
-            : parseFloat(rateSelection);
+        const rate = getSelectedGstRate() || 0;
         const supplyType = document.getElementById('mb-supply-type').value;
 
         const taxable = rate > 0 ? total / (1 + rate / 100) : total;
