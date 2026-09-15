@@ -1888,6 +1888,75 @@ body {
     text-transform: none;
 }
 
+.link-btn {
+    background: none;
+    border: none;
+    padding: 0;
+    margin-left: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--accent-blue);
+    cursor: pointer;
+    text-decoration: underline;
+}
+
+.link-btn:hover {
+    color: #1d4ed8;
+}
+
+/* GL Voucher Reconciliation panel */
+.gl-voucher-entry-tabs {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 18px;
+    flex-wrap: wrap;
+}
+
+.gl-tab-btn {
+    padding: 9px 18px;
+    border: 1px solid var(--border-color);
+    background: #f8fafc;
+    border-radius: 30px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.gl-tab-btn:hover {
+    border-color: var(--accent-blue);
+    color: var(--accent-blue);
+}
+
+.gl-tab-btn.active {
+    background: var(--accent-blue);
+    border-color: var(--accent-blue);
+    color: #ffffff;
+}
+
+.gl-tab-panel .panel-subtitle {
+    margin-bottom: 14px;
+}
+
+.gl-status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 10px;
+    border-radius: 20px;
+    font-size: 11.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    white-space: nowrap;
+}
+
+.gl-status-matched { background: rgba(16, 185, 129, 0.12); color: var(--accent-green); }
+.gl-status-mismatch { background: rgba(217, 119, 6, 0.12); color: var(--accent-amber); }
+.gl-status-missing-bills { background: rgba(239, 68, 68, 0.12); color: var(--accent-red); }
+.gl-status-missing-voucher { background: rgba(59, 130, 246, 0.12); color: #2563eb; }
+
 .checkbox-field {
     display: flex;
     align-items: flex-start;

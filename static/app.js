@@ -161,6 +161,38 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     loadMasterData();
 
+    // Expense GL Code catalog (Section 1's branch GL voucher tally) - shared
+    // with gl_voucher.js, which also reads/writes window.expenseCodes.
+    window.expenseCodes = [];
+    function loadExpenseCodes() {
+        return fetch('/api/expense-codes-master')
+            .then(res => res.json())
+            .then(data => {
+                window.expenseCodes = data.codes || [];
+                populateGlCodeDropdowns();
+            })
+            .catch(err => console.error("Error loading expense GL codes:", err));
+    }
+    loadExpenseCodes();
+
+    function populateGlCodeDropdowns() {
+        const optionsHtml = '<option value="">-- No GL code --</option>' +
+            window.expenseCodes.slice().sort((a, b) => a.code.localeCompare(b.code))
+                .map(c => `<option value="${c.code}">${c.code} - ${c.particulars}</option>`).join('');
+        const mbGlCode = document.getElementById('mb-gl-code');
+        if (mbGlCode) {
+            const current = mbGlCode.value;
+            mbGlCode.innerHTML = optionsHtml;
+            mbGlCode.value = current;
+        }
+        document.querySelectorAll('.field-gl-code').forEach(sel => {
+            const current = sel.value;
+            sel.innerHTML = optionsHtml;
+            sel.value = current;
+        });
+        if (window.populateGlVoucherCodeDropdown) window.populateGlVoucherCodeDropdown();
+    }
+
     function getAllBranches() {
         const branchMap = new Map();
         masterBranches.forEach(b => {
@@ -1520,6 +1552,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 <td class="numeric"><input type="number" step="0.01" class="field-igst" value="${(inv.igst || 0).toFixed(2)}"></td>
                 <td class="checkbox-cell"><input type="checkbox" class="field-itc-blocked" title="Section 17(5) blocked credit / fully ineligible" ${inv.itc_blocked ? 'checked' : ''}></td>
                 <td><input type="text" class="field-remark" placeholder="e.g. GSTIN not on bill" maxlength="500" value="${(inv.remark || '').replace(/"/g, '&quot;')}"></td>
+                <td><select class="field-gl-code"><option value="">-- No GL code --</option></select></td>
                 <td class="numeric eligible-column font-bold" id="row-eligible-${inv.id}">₹${(inv.eligible_itc || 0).toFixed(2)}</td>
                 <td class="numeric ineligible-column" id="row-ineligible-${inv.id}">₹${(inv.ineligible_itc || 0).toFixed(2)}</td>
                 ${window.IS_ADMIN ? `<td class="col-owner">${inv.username || window.CURRENT_USERNAME || ''}</td>` : ''}
@@ -1536,6 +1569,15 @@ document.addEventListener('DOMContentLoaded', () => {
                     </button>
                 </td>
             `;
+
+            // Populate this row's GL code dropdown from the shared expense catalog
+            const glCodeSelect = tr.querySelector('.field-gl-code');
+            if (glCodeSelect) {
+                glCodeSelect.innerHTML = '<option value="">-- No GL code --</option>' +
+                    (window.expenseCodes || []).slice().sort((a, b) => a.code.localeCompare(b.code))
+                        .map(c => `<option value="${c.code}">${c.code} - ${c.particulars}</option>`).join('');
+                glCodeSelect.value = inv.gl_code || '';
+            }
 
             // Row selection listener
             const rowCheckbox = tr.querySelector('.row-select-checkbox');
@@ -1641,6 +1683,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const igst = parseFloat(rowEl.querySelector('.field-igst').value) || 0;
         const itcBlocked = rowEl.querySelector('.field-itc-blocked').checked;
         const remark = rowEl.querySelector('.field-remark').value.trim();
+        const glCode = rowEl.querySelector('.field-gl-code').value;
 
         const totalGst = cgst + sgst + igst;
         const eligible = itcBlocked ? 0 : totalGst * 0.5;
@@ -1670,6 +1713,7 @@ document.addEventListener('DOMContentLoaded', () => {
             igst: igst,
             itc_blocked: itcBlocked,
             remark: remark,
+            gl_code: glCode,
             eligible_itc: eligible,
             ineligible_itc: ineligible
         };
@@ -2272,6 +2316,7 @@ document.addEventListener('DOMContentLoaded', () => {
             igst: igst,
             itc_blocked: itcBlocked,
             remark: document.getElementById('mb-remark').value.trim(),
+            gl_code: document.getElementById('mb-gl-code').value,
             eligible_itc: itcBlocked ? 0 : totalGst * 0.5,
             ineligible_itc: itcBlocked ? totalGst : totalGst * 0.5
         };

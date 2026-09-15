@@ -347,6 +347,50 @@ def init_db():
         # (e.g. "GSTIN not mentioned on bill") entered by the user on a bill
         cur.execute('ALTER TABLE invoices ADD COLUMN IF NOT EXISTS remark VARCHAR(500);')
 
+        # Migrate existing installs that predate branch GL-voucher tallying:
+        # which expense head (from expense_code_catalog) this bill belongs to
+        cur.execute('ALTER TABLE invoices ADD COLUMN IF NOT EXISTS gl_code VARCHAR(50);')
+
+        # Expense/purchase-side GL code catalog - separate from income_code_catalog
+        # (Section 3 is income/Output GST; this is expense/Input ITC). Admin-managed,
+        # same durability reasoning as income_code_catalog: kept in the DB so it
+        # survives a Railway redeploy rather than living only in a bundled file.
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS expense_code_catalog (
+                code VARCHAR(50) PRIMARY KEY,
+                particulars VARCHAR(255) NOT NULL,
+                category VARCHAR(100),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        ''')
+
+        # Branch GL voucher entries - one row per (branch, GL code, month): the
+        # branch's own ledger total for that expense head, to be tallied against
+        # the sum of Purchase Bills tagged with the same GL code/branch/month.
+        # Mirrors income_entries' shape but far simpler (no GST fields - this is
+        # not an income/Output-GST record).
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS purchase_gl_vouchers (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                client_id VARCHAR(50) NOT NULL DEFAULT 'nutan_nagrik',
+                branch VARCHAR(100) NOT NULL,
+                state VARCHAR(50) DEFAULT 'Gujarat',
+                financial_year VARCHAR(10) NOT NULL,
+                month VARCHAR(20) NOT NULL,
+                gl_code VARCHAR(50) NOT NULL,
+                particulars VARCHAR(255),
+                voucher_amount NUMERIC(15,2) DEFAULT 0.0,
+                source VARCHAR(20) DEFAULT 'ledger_upload',
+                file_name VARCHAR(255),
+                file_data BYTEA,
+                needs_review BOOLEAN DEFAULT FALSE,
+                review_reason VARCHAR(255),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (client_id, branch, financial_year, month, gl_code)
+            );
+        ''')
+
         # Create GSTR-2B table
         cur.execute('''
             CREATE TABLE IF NOT EXISTS gstr2b_entries (
@@ -1532,7 +1576,7 @@ def get_invoices():
         if is_admin:
             cur.execute('''
                 SELECT invoices.id, invoice_number, invoice_date, payment_date, vendor_name, gstin, branch, state,
-                       taxable_value::float, cgst::float, sgst::float, igst::float, itc_blocked, remark,
+                       taxable_value::float, cgst::float, sgst::float, igst::float, itc_blocked, remark, gl_code,
                        eligible_itc::float, ineligible_itc::float, users.username,
                        financial_year, month, client_id,
                        (file_data IS NOT NULL) AS has_file
@@ -1544,7 +1588,7 @@ def get_invoices():
         else:
             cur.execute('''
                 SELECT id, invoice_number, invoice_date, payment_date, vendor_name, gstin, branch, state,
-                       taxable_value::float, cgst::float, sgst::float, igst::float, itc_blocked, remark,
+                       taxable_value::float, cgst::float, sgst::float, igst::float, itc_blocked, remark, gl_code,
                        eligible_itc::float, ineligible_itc::float,
                        financial_year, month, client_id,
                        (file_data IS NOT NULL) AS has_file
@@ -1651,6 +1695,7 @@ def save_invoice():
     igst = float(inv.get('igst', 0.0))
     itc_blocked = bool(inv.get('itc_blocked', False))
     remark = (inv.get('remark') or '').strip()[:500]
+    gl_code = (inv.get('gl_code') or '').strip()[:50] or None
 
     client_id = inv.get('client_id') or get_current_client_id()
     cfg = get_client_config(client_id)
@@ -1686,18 +1731,18 @@ def save_invoice():
                 cur.execute('''
                     UPDATE invoices
                     SET invoice_number = %s, invoice_date = %s, payment_date = %s, vendor_name = %s, gstin = %s, branch = %s, state = %s,
-                        taxable_value = %s, cgst = %s, sgst = %s, igst = %s, itc_blocked = %s, remark = %s,
+                        taxable_value = %s, cgst = %s, sgst = %s, igst = %s, itc_blocked = %s, remark = %s, gl_code = %s,
                         eligible_itc = %s, ineligible_itc = %s, financial_year = %s, month = %s
                     WHERE id = %s
-                ''', (inv_num, inv_date, payment_date, vendor, gstin, branch, state, taxable, cgst, sgst, igst, itc_blocked, remark, eligible, ineligible, fy, m, db_id))
+                ''', (inv_num, inv_date, payment_date, vendor, gstin, branch, state, taxable, cgst, sgst, igst, itc_blocked, remark, gl_code, eligible, ineligible, fy, m, db_id))
             else:
                 cur.execute('''
                     UPDATE invoices
                     SET invoice_number = %s, invoice_date = %s, payment_date = %s, vendor_name = %s, gstin = %s, branch = %s, state = %s,
-                        taxable_value = %s, cgst = %s, sgst = %s, igst = %s, itc_blocked = %s, remark = %s,
+                        taxable_value = %s, cgst = %s, sgst = %s, igst = %s, itc_blocked = %s, remark = %s, gl_code = %s,
                         eligible_itc = %s, ineligible_itc = %s, financial_year = %s, month = %s
                     WHERE id = %s AND user_id = %s
-                ''', (inv_num, inv_date, payment_date, vendor, gstin, branch, state, taxable, cgst, sgst, igst, itc_blocked, remark, eligible, ineligible, fy, m, db_id, user_id))
+                ''', (inv_num, inv_date, payment_date, vendor, gstin, branch, state, taxable, cgst, sgst, igst, itc_blocked, remark, gl_code, eligible, ineligible, fy, m, db_id, user_id))
             ret_id = db_id
         else:
             # Check if new invoice duplicates an existing record
@@ -1709,9 +1754,9 @@ def save_invoice():
 
             # Insert new invoice
             cur.execute('''
-                INSERT INTO invoices (user_id, invoice_number, invoice_date, payment_date, vendor_name, gstin, branch, state, taxable_value, cgst, sgst, igst, itc_blocked, remark, eligible_itc, ineligible_itc, financial_year, month)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
-            ''', (user_id, inv_num, inv_date, payment_date, vendor, gstin, branch, state, taxable, cgst, sgst, igst, itc_blocked, remark, eligible, ineligible, fy, m))
+                INSERT INTO invoices (user_id, invoice_number, invoice_date, payment_date, vendor_name, gstin, branch, state, taxable_value, cgst, sgst, igst, itc_blocked, remark, gl_code, eligible_itc, ineligible_itc, financial_year, month)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
+            ''', (user_id, inv_num, inv_date, payment_date, vendor, gstin, branch, state, taxable, cgst, sgst, igst, itc_blocked, remark, gl_code, eligible, ineligible, fy, m))
             ret_id = cur.fetchone()[0]
 
         conn.commit()
@@ -4672,6 +4717,35 @@ def get_income_code_meta(code_str):
     return None
 
 # ---------------------------------------------------------------------------
+# Expense/Purchase-side GL code catalog (Section 1 - separate from the
+# income catalog above). Starts empty; the CA/admin builds it up through the
+# "Manage Expense GL Codes" panel as branch expense heads come up, rather
+# than being seeded from a bundled reference file like the income side.
+# ---------------------------------------------------------------------------
+EXPENSE_MASTER_CODES = []
+
+def load_expense_code_catalog():
+    global EXPENSE_MASTER_CODES
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute('SELECT code, particulars, category FROM expense_code_catalog')
+        EXPENSE_MASTER_CODES = [dict(r) for r in cur.fetchall()]
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print(f"Error loading expense code catalog from DB: {e}")
+
+load_expense_code_catalog()
+
+def get_expense_code_meta(code_str):
+    clean = str(code_str).strip().upper()
+    for m in EXPENSE_MASTER_CODES:
+        if str(m.get('code')).strip().upper() == clean:
+            return m
+    return None
+
+# ---------------------------------------------------------------------------
 # Ledger statement parsing (reads the bank's actual GL/PL account statements)
 #
 # The core banking system exports these in four different layouts depending
@@ -5164,6 +5238,97 @@ def finalize_ledger_accounts(raw_accounts, financial_year='2026-27', month='July
     return entries, ledger_entries, exempt_entries, warnings
 
 
+# ---------------------------------------------------------------------------
+# Handwritten/photographed branch GL voucher scanning (Section 1's expense
+# side). Distinct from the digital ledger-export parsing above: a voucher
+# slip filled in by hand has no machine-readable text to pattern-match, so
+# this reuses the same AI vision OCR path already proven for invoice
+# scanning, rather than the text-scanning ledger engine.
+# ---------------------------------------------------------------------------
+
+def _parse_gl_voucher_vision_result(result, model_used):
+    if "```json" in result:
+        result = result.split("```json")[1].split("```")[0].strip()
+    elif "```" in result:
+        result = result.split("```")[1].split("```")[0].strip()
+    parsed = json.loads(result)
+    if isinstance(parsed, dict):
+        parsed = [parsed]
+    for p in parsed:
+        p['_ai_model'] = model_used
+    return parsed
+
+_GL_VOUCHER_SYSTEM_PROMPT = (
+    "You are an expert at reading Indian bank internal accounting vouchers - printed or "
+    "handwritten payment/journal vouchers used to book an expense to a General Ledger (GL) "
+    "account, often with handwritten amounts, GL codes, or approval signatures. "
+    "You must respond with ONLY a valid JSON array. Do not include any explanation outside JSON."
+)
+
+def _gl_voucher_prompt():
+    return (
+        "This image may show ONE OR MORE branch GL/expense vouchers. Identify EACH distinct "
+        "voucher separately and return a JSON ARRAY with one object per voucher. For each, extract "
+        "(reading BOTH PRINTED and HANDWRITTEN entries):\n"
+        "- branch (the bank branch name, if shown on the voucher - match to the closest name in "
+        "the known branches reference list below; leave blank if there's no explicit indication)\n"
+        "- gl_code (the GL/account code written or stamped on the voucher, if present; leave blank "
+        "if none is written anywhere on the document)\n"
+        "- particulars (a short description of what the expense is for, e.g. 'Security Charges', "
+        "'AMC - AC Maintenance', read from the voucher's narration/description line)\n"
+        "- amount (the voucher amount, numeric)\n"
+        "- financial_year (e.g. '2026-27') and month (e.g. 'July') if a date is shown; leave blank if not\n\n"
+        + build_master_reference_block() +
+        "\n\nProvide the output as a JSON array, one object per voucher, each using this format:\n"
+        "[{\"branch\": \"...\", \"gl_code\": \"...\", \"particulars\": \"...\", \"amount\": 0.0, "
+        "\"financial_year\": \"...\", \"month\": \"...\"}]"
+    )
+
+def extract_gl_voucher_from_image(base64_data, mime_type):
+    result, model_used = call_vision_model(_GL_VOUCHER_SYSTEM_PROMPT, _gl_voucher_prompt(), base64_data, mime_type)
+    return _parse_gl_voucher_vision_result(result, model_used)
+
+def extract_gl_voucher_from_pdf(file_bytes, page_index=0):
+    base64_jpg = render_pdf_page_to_png_base64(file_bytes, page_index=page_index)
+    result, model_used = call_vision_model(_GL_VOUCHER_SYSTEM_PROMPT, _gl_voucher_prompt(), base64_jpg, "image/jpeg")
+    return _parse_gl_voucher_vision_result(result, model_used)
+
+
+def finalize_expense_ledger_accounts(raw_accounts, financial_year, month):
+    """Groups raw {branch, gl_code, dr, cr, net} ledger accounts (from the
+    digital ledger-export parser above) into branch expense-voucher entries.
+    Expense accounts are debit-natured (unlike income's credit-natured
+    accounts), so the amount actually spent is debits minus credits - the
+    mirror image of finalize_ledger_accounts' credits-minus-debits. No
+    reclass rules or GST calculation apply here; this is a plain expense
+    total per (branch, GL code), matched against the expense catalog."""
+    by_branch = collections.defaultdict(dict)
+    for a in raw_accounts:
+        if not a.get('branch') or not a.get('gl_code'):
+            continue
+        code_map = by_branch[a['branch']]
+        if a['gl_code'] not in code_map:
+            code_map[a['gl_code']] = a
+
+    entries = []
+    for branch, code_map in by_branch.items():
+        for code, a in code_map.items():
+            amount = round(-(a.get('net') or 0.0), 2)
+            meta = get_expense_code_meta(code)
+            entries.append({
+                "branch": branch,
+                "financial_year": financial_year,
+                "month": month,
+                "gl_code": code,
+                "particulars": meta.get('particulars') if meta else (a.get('name') or 'Unclassified Expense'),
+                "voucher_amount": amount,
+                "needs_review": meta is None,
+                "review_reason": None if meta else f"GL code {code} not found in expense catalog - please add it or verify",
+                "filename": a.get('filename', 'upload'),
+            })
+    return entries
+
+
 def parse_full_workbook_excel(file_bytes, filename):
     """Bulk re-import of a complete branch-wise-calculation workbook (has its
     own 'SUMMARY SHEET GST' tab) - reads each branch tab's own columns
@@ -5420,6 +5585,368 @@ def delete_income_code_master(code):
     log_activity(session['user_id'], 'DELETE_GL_CODE', f"Deleted GL/PL code {clean} - {affected_count} existing entries re-flagged for review")
 
     return jsonify({"success": True, "affected_entries": affected_count})
+
+@app.route('/api/expense-codes-master', methods=['GET'])
+@login_required
+def get_expense_codes_master():
+    return jsonify({"codes": EXPENSE_MASTER_CODES})
+
+@app.route('/api/expense-codes-master', methods=['POST'])
+@login_required
+def add_expense_code_master():
+    """Admin-only: add or edit an expense/purchase-side GL code (Section 1 -
+    separate catalog from the income side). Used both to tag Purchase Bills
+    and to classify branch GL voucher uploads."""
+    if not is_admin_user():
+        return jsonify({"error": "Adding or editing Expense GL codes is restricted to Administrator users only."}), 403
+
+    data = request.json or {}
+    code = str(data.get('code', '')).strip().upper()
+    particulars = str(data.get('particulars', '')).strip()
+    if not code or not particulars:
+        return jsonify({"error": "GL code and particulars are both required."}), 400
+    category = str(data.get('category') or 'General Expense').strip()
+
+    global EXPENSE_MASTER_CODES
+    entry = {"code": code, "particulars": particulars, "category": category}
+    existing = next((m for m in EXPENSE_MASTER_CODES if str(m.get('code')).strip().upper() == code), None)
+    if existing:
+        existing.update(entry)
+    else:
+        EXPENSE_MASTER_CODES.append(entry)
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute('''
+            INSERT INTO expense_code_catalog (code, particulars, category)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (code) DO UPDATE SET
+                particulars = EXCLUDED.particulars,
+                category = EXCLUDED.category
+        ''', (code, particulars, category))
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    log_activity(session['user_id'], 'EDIT_EXPENSE_GL_CODE' if existing else 'ADD_EXPENSE_GL_CODE',
+                 f"{'Edited' if existing else 'Added'} Expense GL code {code} ({particulars})")
+
+    return jsonify({"success": True, "code": entry, "updated_existing": existing is not None})
+
+@app.route('/api/expense-codes-master/<code>', methods=['DELETE'])
+@login_required
+def delete_expense_code_master(code):
+    """Admin-only: remove an expense GL code. Bills/vouchers already tagged
+    with it are left as-is (not deleted) since the code no longer resolving
+    in the catalog is itself a visible signal something needs reclassifying."""
+    if not is_admin_user():
+        return jsonify({"error": "Deleting Expense GL codes is restricted to Administrator users only."}), 403
+
+    clean = str(code).strip().upper()
+    global EXPENSE_MASTER_CODES
+    before = len(EXPENSE_MASTER_CODES)
+    EXPENSE_MASTER_CODES = [m for m in EXPENSE_MASTER_CODES if str(m.get('code')).strip().upper() != clean]
+    if len(EXPENSE_MASTER_CODES) == before:
+        return jsonify({"error": f"Code {code} not found in the expense catalog."}), 404
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute('DELETE FROM expense_code_catalog WHERE UPPER(code) = %s', (clean,))
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    log_activity(session['user_id'], 'DELETE_EXPENSE_GL_CODE', f"Deleted Expense GL code {clean}")
+    return jsonify({"success": True})
+
+@app.route('/api/upload-gl-voucher', methods=['POST'])
+@login_required
+def upload_gl_voucher():
+    """Ingests a branch's expense-side GL voucher(s) for the Purchase Bill
+    tally - either a digital ledger export (reusing the same text-parsing
+    engine as Income & Output GST) or a photographed/handwritten voucher
+    slip (AI vision OCR). mode='ledger' or mode='scan'."""
+    user_id = session['user_id']
+    client_id = get_current_client_id()
+    mode = request.form.get('mode', 'ledger')
+    fy = request.form.get('financial_year', '').strip() or '2026-27'
+    month = request.form.get('month', '').strip() or 'July'
+    files = request.files.getlist('gl_files')
+
+    if not files or all(f.filename == '' for f in files):
+        return jsonify({"error": "No files selected"}), 400
+
+    results = []
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        for f in files:
+            fname = f.filename
+            ext = fname.lower().split('.')[-1] if '.' in fname else ''
+            fbytes = f.read()
+            entries = []
+
+            try:
+                if mode == 'scan':
+                    if ext == 'pdf':
+                        vouchers = extract_gl_voucher_from_pdf(fbytes)
+                    elif ext in ('png', 'jpg', 'jpeg', 'webp'):
+                        opt_bytes, mime_type = optimize_image_bytes(fbytes, ext)
+                        base64_img = base64.b64encode(opt_bytes).decode('utf-8')
+                        vouchers = extract_gl_voucher_from_image(base64_img, mime_type)
+                    else:
+                        results.append({"filename": fname, "error": f"Unsupported file type for scanning: .{ext}"})
+                        continue
+
+                    for v in vouchers:
+                        branch = (v.get('branch') or 'Unassigned').strip() or 'Unassigned'
+                        gl_code = str(v.get('gl_code') or '').strip().upper()
+                        amount = float(v.get('amount') or 0.0)
+                        if not gl_code:
+                            results.append({
+                                "filename": fname, "branch": branch, "amount": amount,
+                                "error": "No GL code could be read from this voucher - add it via Manual Entry instead"
+                            })
+                            continue
+                        meta = get_expense_code_meta(gl_code)
+                        entries.append({
+                            "branch": branch, "financial_year": fy, "month": month, "gl_code": gl_code,
+                            "particulars": meta.get('particulars') if meta else (v.get('particulars') or 'Unclassified Expense'),
+                            "voucher_amount": amount,
+                            "needs_review": meta is None,
+                            "review_reason": None if meta else f"GL code {gl_code} not found in expense catalog - please add it or verify",
+                            "source": "scan",
+                            "file_data": fbytes,
+                        })
+                elif ext in ('xlsx', 'xls', 'pdf'):
+                    if ext == 'pdf':
+                        raw = extract_raw_ledger_accounts_pdf(fbytes, fname)
+                    elif ext == 'xlsx':
+                        raw = extract_raw_ledger_accounts_xlsx(fbytes, fname)
+                    else:
+                        raw = extract_raw_ledger_accounts_xls(fbytes, fname)
+                    for e in finalize_expense_ledger_accounts(raw, fy, month):
+                        e['source'] = 'ledger_upload'
+                        e['file_data'] = fbytes
+                        entries.append(e)
+                else:
+                    results.append({"filename": fname, "error": f"Unsupported file type: .{ext}"})
+                    continue
+            except Exception as pe:
+                print(f"Error parsing GL voucher file {fname}: {pe}")
+                results.append({"filename": fname, "error": f"Failed to parse: {pe}"})
+                continue
+
+            if not entries:
+                results.append({"filename": fname, "error": "No expense GL accounts could be identified in this file"})
+
+            for e in entries:
+                try:
+                    cur.execute("SAVEPOINT sp_glv")
+                    cur.execute('''
+                        INSERT INTO purchase_gl_vouchers
+                            (user_id, client_id, branch, state, financial_year, month, gl_code, particulars,
+                             voucher_amount, source, file_name, file_data, needs_review, review_reason)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (client_id, branch, financial_year, month, gl_code) DO UPDATE SET
+                            voucher_amount = EXCLUDED.voucher_amount,
+                            particulars = EXCLUDED.particulars,
+                            source = EXCLUDED.source,
+                            file_name = EXCLUDED.file_name,
+                            file_data = EXCLUDED.file_data,
+                            needs_review = EXCLUDED.needs_review,
+                            review_reason = EXCLUDED.review_reason
+                        RETURNING id
+                    ''', (user_id, client_id, e['branch'], get_branch_state(e['branch']), e['financial_year'], e['month'],
+                          e['gl_code'], e['particulars'], e['voucher_amount'], e.get('source', 'ledger_upload'),
+                          e.get('filename', fname), psycopg2.Binary(e['file_data']) if e.get('file_data') else None,
+                          e.get('needs_review', False), e.get('review_reason')))
+                    vid = cur.fetchone()[0]
+                    cur.execute("RELEASE SAVEPOINT sp_glv")
+                    results.append({
+                        "id": vid, "branch": e['branch'], "gl_code": e['gl_code'], "particulars": e['particulars'],
+                        "voucher_amount": e['voucher_amount'], "financial_year": e['financial_year'], "month": e['month'],
+                        "needs_review": e.get('needs_review', False), "review_reason": e.get('review_reason'),
+                        "filename": fname
+                    })
+                except Exception as ie:
+                    cur.execute("ROLLBACK TO SAVEPOINT sp_glv")
+                    print(f"Insert error for GL voucher {fname}: {ie}")
+                    results.append({"filename": fname, "gl_code": e.get('gl_code'), "error": f"Database save error: {ie}"})
+
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    log_activity(user_id, 'GL_VOUCHER_UPLOAD', f"Uploaded {len(results)} branch GL voucher entr(y/ies) via {mode}", fy, month, len(results))
+    return jsonify({"results": results})
+
+@app.route('/api/save-gl-voucher-manual', methods=['POST'])
+@login_required
+def save_gl_voucher_manual():
+    """Single manual GL voucher entry - for when there's no file to upload at
+    all. Same underlying table/upsert as the bulk upload route, just a
+    one-row form submission instead of a parsed file."""
+    user_id = session['user_id']
+    client_id = get_current_client_id()
+
+    branch = (request.form.get('branch') or '').strip() or 'Unassigned'
+    gl_code = (request.form.get('gl_code') or '').strip().upper()
+    fy = (request.form.get('financial_year') or '').strip()
+    month = (request.form.get('month') or '').strip()
+    try:
+        amount = float(request.form.get('amount') or 0.0)
+    except (TypeError, ValueError):
+        amount = 0.0
+
+    if not gl_code or not fy or not month:
+        return jsonify({"error": "Branch, Financial Year, Month, and GL Code are required."}), 400
+
+    meta = get_expense_code_meta(gl_code)
+    particulars = meta.get('particulars') if meta else 'Unclassified Expense'
+    needs_review = meta is None
+    review_reason = None if meta else f"GL code {gl_code} not found in expense catalog - please add it or verify"
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute('''
+            INSERT INTO purchase_gl_vouchers
+                (user_id, client_id, branch, state, financial_year, month, gl_code, particulars,
+                 voucher_amount, source, needs_review, review_reason)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'manual', %s, %s)
+            ON CONFLICT (client_id, branch, financial_year, month, gl_code) DO UPDATE SET
+                voucher_amount = EXCLUDED.voucher_amount,
+                particulars = EXCLUDED.particulars,
+                source = 'manual',
+                needs_review = EXCLUDED.needs_review,
+                review_reason = EXCLUDED.review_reason
+            RETURNING id
+        ''', (user_id, client_id, branch, get_branch_state(branch), fy, month, gl_code, particulars,
+              amount, needs_review, review_reason))
+        vid = cur.fetchone()[0]
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    log_activity(user_id, 'GL_VOUCHER_MANUAL', f"Added manual GL voucher entry for {branch} / {gl_code}", fy, month, 1)
+    return jsonify({"success": True, "id": vid})
+
+@app.route('/api/get-gl-vouchers', methods=['GET'])
+@login_required
+def get_gl_vouchers():
+    client_id = get_current_client_id()
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute('''
+            SELECT id, branch, state, financial_year, month, gl_code, particulars,
+                   voucher_amount::float, source, needs_review, review_reason,
+                   (file_data IS NOT NULL) AS has_file
+            FROM purchase_gl_vouchers
+            WHERE client_id = %s
+            ORDER BY financial_year DESC, branch, gl_code
+        ''', (client_id,))
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        return jsonify({"vouchers": rows})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/delete-gl-voucher', methods=['POST'])
+@login_required
+def delete_gl_voucher():
+    data = request.json or {}
+    voucher_id = data.get('id')
+    if not voucher_id:
+        return jsonify({"error": "Voucher ID required"}), 400
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute('DELETE FROM purchase_gl_vouchers WHERE id = %s', (voucher_id,))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/gl-tally-report', methods=['GET'])
+@login_required
+def gl_tally_report():
+    """Branch-wise, GL-code-wise reconciliation: sum of Purchase Bills tagged
+    with each GL code vs. that branch's own voucher total for the same GL
+    code and period. Tally basis is Total Invoice Value (taxable + GST) -
+    a confirmed decision, not a default guess."""
+    client_id = get_current_client_id()
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute('''
+            SELECT branch, financial_year, month, gl_code,
+                   SUM(taxable_value + cgst + sgst + igst)::float AS bills_total,
+                   COUNT(*) AS bill_count
+            FROM invoices
+            WHERE client_id = %s AND gl_code IS NOT NULL AND gl_code != ''
+            GROUP BY branch, financial_year, month, gl_code
+        ''', (client_id,))
+        bill_totals = {(r['branch'], r['financial_year'], r['month'], r['gl_code']): r for r in cur.fetchall()}
+
+        cur.execute('''
+            SELECT branch, financial_year, month, gl_code, particulars,
+                   voucher_amount::float AS voucher_total
+            FROM purchase_gl_vouchers
+            WHERE client_id = %s
+        ''', (client_id,))
+        voucher_totals = {(r['branch'], r['financial_year'], r['month'], r['gl_code']): r for r in cur.fetchall()}
+
+        cur.close()
+        conn.close()
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    all_keys = set(bill_totals.keys()) | set(voucher_totals.keys())
+    report = []
+    for key in all_keys:
+        branch, fy, month, gl_code = key
+        bill_row = bill_totals.get(key)
+        voucher_row = voucher_totals.get(key)
+        bills_total = bill_row['bills_total'] if bill_row else 0.0
+        voucher_total = voucher_row['voucher_total'] if voucher_row else 0.0
+        particulars = (voucher_row['particulars'] if voucher_row else None) or (get_expense_code_meta(gl_code) or {}).get('particulars') or gl_code
+        diff = round(bills_total - voucher_total, 2)
+
+        if bill_row and not voucher_row:
+            status = "Missing in Voucher"
+        elif voucher_row and not bill_row:
+            status = "Missing in Bills"
+        elif abs(diff) <= 10.0:
+            status = "Matched"
+        else:
+            status = "Mismatch"
+
+        report.append({
+            "branch": branch, "financial_year": fy, "month": month, "gl_code": gl_code,
+            "particulars": particulars, "bills_total": round(bills_total, 2),
+            "voucher_total": round(voucher_total, 2), "difference": diff,
+            "bill_count": bill_row['bill_count'] if bill_row else 0,
+            "status": status
+        })
+
+    report.sort(key=lambda r: (r['branch'], r['gl_code'], r['financial_year'], r['month']))
+    return jsonify({"report": report})
 
 @app.route('/api/get-income-entries', methods=['GET'])
 @login_required
