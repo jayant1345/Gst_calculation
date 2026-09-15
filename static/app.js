@@ -1683,9 +1683,10 @@ document.addEventListener('DOMContentLoaded', () => {
             },
             body: JSON.stringify(invoices[index])
         })
-        .then(response => {
-            if (!response.ok) throw new Error('Failed to save changes');
-            return response.json();
+        .then(async response => {
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(data.error || 'Failed to save changes.');
+            return data;
         })
         .then(data => {
             if (data.success) {
@@ -1715,7 +1716,7 @@ document.addEventListener('DOMContentLoaded', () => {
         })
         .catch(error => {
             console.error('Error saving invoice change to database:', error);
-            alert('Failed to save changes to the database. Check connection.');
+            alert(error.message || 'Failed to save changes to the database. Check your connection and try again.');
         });
     }
 
@@ -2284,9 +2285,10 @@ document.addEventListener('DOMContentLoaded', () => {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(newInvoice)
         })
-        .then(response => {
-            if (!response.ok) throw new Error('Failed to save manual bill');
-            return response.json();
+        .then(async response => {
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(data.error || 'Failed to save manual bill.');
+            return data;
         })
         .then(data => {
             if (data.success) {
@@ -2307,7 +2309,7 @@ document.addEventListener('DOMContentLoaded', () => {
         })
         .catch(error => {
             console.error('Error saving manual bill:', error);
-            alert('Failed to save the manual bill. Check connection.');
+            alert(error.message || 'Failed to save the manual bill. Check your connection and try again.');
         })
         .finally(() => {
             saveBtn.disabled = false;
