@@ -168,7 +168,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let masterVendors = [];
 
     function loadMasterData() {
-        fetch('/api/master-data')
+        return fetch('/api/master-data')
             .then(res => res.json())
             .then(data => {
                 if (data.branches) masterBranches = data.branches;
@@ -2359,6 +2359,111 @@ document.addEventListener('DOMContentLoaded', () => {
                 mbGstinInput.value = matched.gstin;
             }
         });
+    }
+
+    // "Save as new vendor" -- shown only when the typed name doesn't exactly
+    // match a vendor we already know, so it isn't remembered for next time
+    // unless the user explicitly asks (avoids polluting the list with typos).
+    const mbSaveVendorBtn = document.getElementById('mb-save-vendor-btn');
+    if (mbPartyInput && mbSaveVendorBtn) {
+        const refreshSaveVendorVisibility = () => {
+            const partyVal = mbPartyInput.value.trim().toLowerCase();
+            const alreadyKnown = !partyVal || masterVendors.some(v => v.name.trim().toLowerCase() === partyVal);
+            mbSaveVendorBtn.style.display = alreadyKnown ? 'none' : 'inline-flex';
+            mbSaveVendorBtn.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Save as new vendor';
+            mbSaveVendorBtn.disabled = false;
+        };
+        mbPartyInput.addEventListener('input', refreshSaveVendorVisibility);
+
+        mbSaveVendorBtn.addEventListener('click', () => {
+            const name = mbPartyInput.value.trim();
+            if (!name) return;
+            mbSaveVendorBtn.disabled = true;
+            mbSaveVendorBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving...';
+            fetch('/api/vendor-master', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    name,
+                    gstin: mbGstinInput ? mbGstinInput.value.trim() : '',
+                    state: document.getElementById('mb-state') ? document.getElementById('mb-state').value : ''
+                })
+            })
+            .then(res => res.json().then(data => ({ ok: res.ok, data })))
+            .then(({ ok, data }) => {
+                if (!ok) throw new Error(data.error || 'Failed to save vendor.');
+                return loadMasterData();
+            })
+            .then(() => {
+                mbSaveVendorBtn.innerHTML = '<i class="fa-solid fa-circle-check"></i> Saved';
+                setTimeout(() => { mbSaveVendorBtn.style.display = 'none'; }, 1200);
+            })
+            .catch(err => {
+                alert(err.message || 'Failed to save vendor.');
+                refreshSaveVendorVisibility();
+            });
+        });
+    }
+
+    // ---- Vendor Directory: real vendor usage per branch, from saved bills ----
+    const btnVendorDirectory = document.getElementById('btn-vendor-directory');
+    const vendorDirectoryOverlay = document.getElementById('vendorDirectoryOverlay');
+    const vendorDirectoryClose = document.getElementById('vendorDirectoryClose');
+    const vendorDirectoryBranchFilter = document.getElementById('vendorDirectoryBranchFilter');
+    const vendorDirectoryTableBody = document.getElementById('vendorDirectoryTableBody');
+
+    function loadVendorDirectory() {
+        if (!vendorDirectoryTableBody) return;
+        const branch = vendorDirectoryBranchFilter ? vendorDirectoryBranchFilter.value : '';
+        const params = branch ? `?branch=${encodeURIComponent(branch)}` : '';
+        vendorDirectoryTableBody.innerHTML = `<tr><td colspan="6" style="text-align:center; padding: 16px; color: #94a3b8;"><i class="fa-solid fa-spinner fa-spin"></i> Loading...</td></tr>`;
+        fetch(`/api/branch-vendor-history${params}`)
+            .then(res => res.json())
+            .then(data => {
+                const rows = data.vendors || [];
+                if (rows.length === 0) {
+                    vendorDirectoryTableBody.innerHTML = `<tr><td colspan="6" style="text-align:center; padding: 16px; color: #94a3b8;">No vendor history yet for this filter.</td></tr>`;
+                    return;
+                }
+                vendorDirectoryTableBody.innerHTML = rows.map(r => `
+                    <tr>
+                        <td>${r.branch || '-'}</td>
+                        <td>${r.vendor_name || '-'}</td>
+                        <td style="font-family: monospace;">${r.gstin || 'N/A'}</td>
+                        <td>${r.state || '-'}</td>
+                        <td class="numeric">${r.bill_count}</td>
+                        <td class="numeric">₹${(r.total_taxable || 0).toFixed(2)}</td>
+                    </tr>
+                `).join('');
+
+                // Populate the branch filter from whatever branches actually have
+                // history, the first time this loads with no filter applied yet.
+                if (!branch && vendorDirectoryBranchFilter && vendorDirectoryBranchFilter.options.length <= 1) {
+                    const branches = [...new Set(rows.map(r => r.branch).filter(Boolean))].sort();
+                    vendorDirectoryBranchFilter.innerHTML = '<option value="">-- All Branches --</option>' +
+                        branches.map(b => `<option value="${b}">${b}</option>`).join('');
+                }
+            })
+            .catch(err => {
+                console.error('Error loading vendor directory:', err);
+                vendorDirectoryTableBody.innerHTML = `<tr><td colspan="6" style="text-align:center; padding: 16px; color: #dc2626;">Failed to load vendor directory.</td></tr>`;
+            });
+    }
+
+    if (btnVendorDirectory && vendorDirectoryOverlay) {
+        btnVendorDirectory.addEventListener('click', () => {
+            vendorDirectoryOverlay.style.display = 'flex';
+            loadVendorDirectory();
+        });
+        if (vendorDirectoryClose) {
+            vendorDirectoryClose.addEventListener('click', () => { vendorDirectoryOverlay.style.display = 'none'; });
+        }
+        vendorDirectoryOverlay.addEventListener('click', (e) => {
+            if (e.target === vendorDirectoryOverlay) vendorDirectoryOverlay.style.display = 'none';
+        });
+        if (vendorDirectoryBranchFilter) {
+            vendorDirectoryBranchFilter.addEventListener('change', loadVendorDirectory);
+        }
     }
 
     manualBillForm.addEventListener('submit', (e) => {

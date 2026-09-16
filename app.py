@@ -559,6 +559,24 @@ def init_db():
         cur.execute("CREATE INDEX IF NOT EXISTS idx_invoices_client ON invoices(client_id, user_id);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_gstr2b_client ON gstr2b_entries(client_id, user_id);")
 
+        # Vendor master: grows as users explicitly save new vendors from Add
+        # Manual Bill (a vendor can supply many branches, so this is NOT
+        # branch-scoped - "which branches has this vendor billed" is derived
+        # separately from actual invoices, see /api/branch-vendor-history).
+        # Layered on top of master_data.py's static MASTER_VENDORS seed list,
+        # same pattern as income_code_catalog for GL/PL codes.
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS vendor_master (
+                id SERIAL PRIMARY KEY,
+                client_id VARCHAR(50) NOT NULL DEFAULT 'nutan_nagrik',
+                name VARCHAR(255) NOT NULL,
+                gstin VARCHAR(20),
+                state VARCHAR(50),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        ''')
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_vendor_master_client ON vendor_master(client_id, name);")
+
         conn.commit()
 
         # Auto-seed a default user 'admin' if the users table is empty
@@ -1545,13 +1563,147 @@ def set_active_client_api():
         return jsonify({"success": True, "active_client_id": cid, "client": CLIENTS_CONFIG[cid]})
     return jsonify({"success": False, "error": "Invalid client ID"}), 400
 
+# Vendor master: DB-backed additions layered on top of master_data.py's
+# static MASTER_VENDORS seed list, so newly-saved vendors persist across
+# Railway redeploys (the static list alone never grows) and immediately
+# feed both the Add Manual Bill autocomplete and future auto-GSTIN-fill
+# during bill scanning, for every client sharing this in-memory cache.
+VENDOR_MASTER_OVERRIDES = []
+
+def load_vendor_master_overrides():
+    global VENDOR_MASTER_OVERRIDES
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute('SELECT id, client_id, name, gstin, state FROM vendor_master ORDER BY name')
+        VENDOR_MASTER_OVERRIDES = cur.fetchall()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print(f"Note: could not load vendor_master overrides: {e}")
+
+load_vendor_master_overrides()
+
+def get_combined_vendors(client_id):
+    """Static seed vendors + this client's DB-added vendors, for autocomplete
+    and matching. DB vendors take precedence on a name clash since they
+    reflect what the CA actually confirmed for this bank."""
+    extra = [v for v in VENDOR_MASTER_OVERRIDES if v.get('client_id') == client_id]
+    extra_names = {str(v['name']).strip().lower() for v in extra}
+    return [v for v in MASTER_VENDORS if v['name'].strip().lower() not in extra_names] + extra
+
 @app.route('/api/master-data', methods=['GET'])
 @login_required
 def get_master_data():
     return jsonify({
         "branches": MASTER_BRANCHES,
-        "vendors": MASTER_VENDORS
+        "vendors": get_combined_vendors(get_current_client_id())
     })
+
+@app.route('/api/vendor-master', methods=['POST'])
+@login_required
+def add_vendor_master():
+    """Any logged-in user can save a new vendor from Add Manual Bill -- this
+    is routine data entry (unlike the GL/PL code catalog, which is a chart-
+    of-accounts change reserved for admins). Upserts by case-insensitive
+    name within the current client, filling in gstin/state if previously
+    blank rather than overwriting a good value with an empty one."""
+    data = request.json or {}
+    name = str(data.get('name', '')).strip()
+    gstin = str(data.get('gstin', '')).strip().upper() or None
+    state = str(data.get('state', '')).strip() or None
+    if not name:
+        return jsonify({"error": "Vendor name is required."}), 400
+    if gstin and gstin in ('N/A', '-', 'NONE', 'NULL'):
+        gstin = None
+
+    client_id = get_current_client_id()
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(
+            'SELECT id, gstin, state FROM vendor_master WHERE client_id = %s AND LOWER(name) = LOWER(%s)',
+            (client_id, name)
+        )
+        existing = cur.fetchone()
+        if existing:
+            merged_gstin = gstin or existing['gstin']
+            merged_state = state or existing['state']
+            cur.execute(
+                'UPDATE vendor_master SET gstin = %s, state = %s WHERE id = %s',
+                (merged_gstin, merged_state, existing['id'])
+            )
+            vendor_id = existing['id']
+            gstin, state = merged_gstin, merged_state
+        else:
+            cur.execute(
+                'INSERT INTO vendor_master (client_id, name, gstin, state) VALUES (%s, %s, %s, %s) RETURNING id',
+                (client_id, name, gstin, state)
+            )
+            vendor_id = cur.fetchone()['id']
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    load_vendor_master_overrides()
+    return jsonify({"success": True, "vendor": {"id": vendor_id, "client_id": client_id, "name": name, "gstin": gstin, "state": state}})
+
+@app.route('/api/vendor-master/<int:vendor_id>', methods=['DELETE'])
+@login_required
+def delete_vendor_master(vendor_id):
+    if not is_admin_user():
+        return jsonify({"error": "Removing vendors from the shared list is restricted to Administrator users only."}), 403
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute('DELETE FROM vendor_master WHERE id = %s', (vendor_id,))
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    load_vendor_master_overrides()
+    return jsonify({"success": True})
+
+@app.route('/api/branch-vendor-history', methods=['GET'])
+@login_required
+def branch_vendor_history():
+    """Real vendor usage per branch, derived from actual saved bills (not
+    the curated vendor_master list) - this is the ground truth for "which
+    vendors has this branch actually billed from", since the same vendor
+    can legitimately supply many branches."""
+    user_id = session['user_id']
+    is_admin = is_admin_user()
+    client_id = get_current_client_id()
+    branch_filter = request.args.get('branch', '').strip()
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        query = '''
+            SELECT branch, vendor_name, gstin, state,
+                   COUNT(*) AS bill_count,
+                   SUM(taxable_value)::float AS total_taxable
+            FROM invoices
+            WHERE client_id = %s
+              AND vendor_name IS NOT NULL AND vendor_name NOT IN ('', 'Unknown Vendor')
+        '''
+        params = [client_id]
+        if not is_admin:
+            query += ' AND user_id = %s'
+            params.append(user_id)
+        if branch_filter:
+            query += ' AND branch = %s'
+            params.append(branch_filter)
+        query += ' GROUP BY branch, vendor_name, gstin, state ORDER BY branch, vendor_name'
+        cur.execute(query, params)
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        return jsonify({"vendors": rows})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.route('/api/get-invoices', methods=['GET'])
 @login_required

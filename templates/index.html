@@ -317,6 +317,9 @@
                         <button class="btn btn-secondary" id="btn-add-manual">
                             <i class="fa-solid fa-pen-to-square"></i> Add Manual Bill
                         </button>
+                        <button class="btn btn-secondary" id="btn-vendor-directory" title="See which vendors each branch has actually billed from, with GSTIN and totals">
+                            <i class="fa-solid fa-address-book"></i> Vendor Directory
+                        </button>
                         <button class="btn btn-primary" id="btn-rescan-incomplete" title="Re-scan incomplete bills with Advanced High-Accuracy AI">
                             <i class="fa-solid fa-arrows-rotate"></i> Re-scan Incomplete (<span id="rescan-incomplete-count">0</span>)
                         </button>
@@ -621,6 +624,9 @@
                             <input type="text" id="mb-party" placeholder="Select or type vendor name" autocomplete="off">
                             <ul class="autocomplete-dropdown" id="mb-party-dropdown"></ul>
                         </div>
+                        <button type="button" class="link-btn" id="mb-save-vendor-btn" style="display: none; margin-top: 4px;" title="This vendor isn't in the saved list yet -- add it so it's remembered next time">
+                            <i class="fa-solid fa-floppy-disk"></i> Save as new vendor
+                        </button>
                     </div>
                     <div class="form-field">
                         <label for="mb-gstin">GST No</label>
@@ -736,6 +742,43 @@
                     </button>
                 </div>
             </form>
+        </div>
+    </div>
+
+    <!-- Vendor Directory Modal - real vendor usage per branch, derived from
+         actual saved bills (a vendor can supply more than one branch) -->
+    <div class="modal-overlay" id="vendorDirectoryOverlay" style="display: none;">
+        <div class="modal-card" style="max-width: 900px; width: 94vw; max-height: 85vh; display: flex; flex-direction: column;">
+            <div class="modal-header">
+                <h3><i class="fa-solid fa-address-book"></i> Vendor Directory</h3>
+                <button type="button" class="modal-close" id="vendorDirectoryClose" aria-label="Close">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+            <div class="modal-body" style="overflow-y: auto;">
+                <p class="panel-subtitle" style="margin-top: 0;">Vendors each branch has actually billed from, based on saved Purchase Bills.</p>
+                <div class="form-field" style="max-width: 320px;">
+                    <label for="vendorDirectoryBranchFilter">Branch</label>
+                    <select id="vendorDirectoryBranchFilter">
+                        <option value="">-- All Branches --</option>
+                    </select>
+                </div>
+                <div class="table-container" style="margin-top: 12px; max-height: 55vh;">
+                    <table class="invoice-table">
+                        <thead>
+                            <tr>
+                                <th>Branch</th>
+                                <th>Vendor Name</th>
+                                <th>GST No</th>
+                                <th>State</th>
+                                <th>Bills</th>
+                                <th>Total Taxable (₹)</th>
+                            </tr>
+                        </thead>
+                        <tbody id="vendorDirectoryTableBody"></tbody>
+                    </table>
+                </div>
+            </div>
         </div>
     </div>
 

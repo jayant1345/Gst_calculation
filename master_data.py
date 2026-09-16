@@ -489,24 +489,27 @@ def get_branch_state(branch_name):
         return 'Maharashtra'
     return 'Gujarat'
 
-def match_master_vendor(vendor_name_query, gstin_query=""):
-    """Fuzzy matches an extracted vendor name or partial GSTIN against the 91 master vendors."""
+def match_master_vendor(vendor_name_query, gstin_query="", extra_vendors=None):
+    """Fuzzy matches an extracted vendor name or partial GSTIN against the 91
+    master vendors, plus any extra_vendors (e.g. a client's DB-saved vendors
+    from vendor_master) passed in by the caller."""
     if not vendor_name_query and not gstin_query:
         return None
-        
+
+    vendor_pool = MASTER_VENDORS + (extra_vendors or [])
     v_clean = "".join(e for e in (vendor_name_query or "").lower() if e.isalnum())
     g_clean = (gstin_query or "").strip().upper()
 
     # Exact GSTIN match
     if len(g_clean) == 15:
-        for v in MASTER_VENDORS:
+        for v in vendor_pool:
             if v["gstin"] == g_clean:
                 return v
 
     # Substring / fuzzy vendor match
     best_match = None
     best_len = 0
-    for v in MASTER_VENDORS:
+    for v in vendor_pool:
         mv_clean = "".join(e for e in v["name"].lower() if e.isalnum())
         if mv_clean and (mv_clean in v_clean or v_clean in mv_clean):
             match_len = min(len(mv_clean), len(v_clean))
