@@ -198,6 +198,19 @@ def parse_date_to_fy_and_month(date_str):
     return _dt_to_fy_and_month(dt)
 
 
+def compute_billing_period(invoice_date, payment_date):
+    """The CA's confirmed rule: a bill belongs to the period it was PAID in
+    (e.g. invoiced in July but paid in August is an August bill) - not the
+    period it was invoiced in. A bill with no payment date yet is
+    provisionally bucketed by its invoice date until one is entered, at
+    which point it reclassifies into the paid period."""
+    if payment_date and str(payment_date).strip() not in ('', 'N/A', '-', 'None'):
+        fy, m = parse_date_to_fy_and_month(payment_date)
+        if fy and m:
+            return fy, m
+    return parse_date_to_fy_and_month(invoice_date)
+
+
 def normalize_date_ddmmyyyy(date_str):
     """Normalizes a Purchase Bill date typed/extracted with '/', '-', or '.'
     separators (or a textual month) into the canonical DD/MM/YYYY display
@@ -612,13 +625,20 @@ def init_db():
         cur.execute("UPDATE gstr2b_entries SET state = 'Unassigned' WHERE state IS NULL OR state = '';")
         conn.commit()
 
-        # Backfill financial_year and month for old invoices
-        cur.execute("SELECT id, invoice_date FROM invoices WHERE financial_year IS NULL OR month IS NULL;")
-        old_invoices = cur.fetchall()
-        for row in old_invoices:
-            inv_id, inv_date = row
-            fy, m = parse_date_to_fy_and_month(inv_date)
-            if fy and m:
+        # Recompute financial_year/month for every invoice using the CA's
+        # confirmed rule: a bill belongs to the period it was PAID in, not
+        # invoiced in (falling back to invoice date until it's paid). This
+        # also covers the original purpose of this block (backfilling old
+        # rows where financial_year/month were never set) since
+        # compute_billing_period() runs unconditionally and the row is only
+        # written back when the computed value actually differs from what's
+        # stored - safe to re-run on every startup.
+        cur.execute("SELECT id, invoice_date, payment_date, financial_year, month FROM invoices;")
+        all_invoices = cur.fetchall()
+        for row in all_invoices:
+            inv_id, inv_date, pay_date, cur_fy, cur_m = row
+            fy, m = compute_billing_period(inv_date, pay_date)
+            if fy and m and (fy != cur_fy or m != cur_m):
                 cur.execute("UPDATE invoices SET financial_year = %s, month = %s WHERE id = %s;", (fy, m, inv_id))
         conn.commit()
 
@@ -1851,7 +1871,7 @@ def save_invoice():
         eligible = round(total_gst * 0.5, 2)
         ineligible = round(total_gst * 0.5, 2)
 
-    fy, m = parse_date_to_fy_and_month(inv_date)
+    fy, m = compute_billing_period(inv_date, payment_date)
 
     is_admin = is_admin_user()
 
@@ -2083,7 +2103,7 @@ def rescan_invoice():
             eligible = round(total_gst * 0.5, 2)
             ineligible = round(total_gst * 0.5, 2)
 
-        fy, m = parse_date_to_fy_and_month(invoice_date)
+        fy, m = compute_billing_period(invoice_date, payment_date)
 
         cur.execute('''
             UPDATE invoices
@@ -2444,8 +2464,8 @@ def apply_rescan_results():
                 eligible = round(total_gst * 0.5, 2)
                 ineligible = round(total_gst * 0.5, 2)
                 
-            fy, m = parse_date_to_fy_and_month(inv_date)
-            
+            fy, m = compute_billing_period(inv_date, payment_date)
+
             if is_admin:
                 cur.execute('''
                     UPDATE invoices
@@ -2888,7 +2908,7 @@ def process_invoices():
                     eligible = round(total_gst * 0.5, 2)
                     ineligible = round(total_gst * 0.5, 2)
 
-                fy, m = parse_date_to_fy_and_month(inv["invoice_date"])
+                fy, m = compute_billing_period(inv["invoice_date"], inv["payment_date"])
 
                 # Check duplicate against existing records in PostgreSQL
                 dup_id, dup_reason = find_duplicate_invoice(
