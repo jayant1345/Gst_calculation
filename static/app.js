@@ -1,6 +1,7 @@
 document.addEventListener('DOMContentLoaded', () => {
     // State management
     let invoices = [];
+    let invoicePeriods = [];
     let currentAuditFilter = 'all';
     const columnFilters = {};
     let activeFilterPopup = null;
@@ -49,6 +50,43 @@ document.addEventListener('DOMContentLoaded', () => {
         return { fy, monthName: MONTH_NAMES[month - 1] };
     }
 
+    // GST filing runs about a month behind (e.g. GSTR-3B for August is filed
+    // in September), so on any given day the CA is actively working the
+    // PREVIOUS calendar month's bills, not the current one - confirmed
+    // explicitly, not assumed. new Date(y, m-1, 1) rolls year over correctly
+    // (January - 1 month = December of the previous year).
+    function getDefaultWorkingFyMonth() {
+        const now = new Date();
+        const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        return computeFyMonthFromYearMonth(`${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, '0')}`);
+    }
+
+    // Defaults the dashboard to that working month on the very first load,
+    // so opening the software doesn't fetch/render every bill ever entered
+    // when the CA is really just working on one month's pile. Only ever
+    // applied once per page load (not on every loadInvoices() refresh) so
+    // it never yanks the user back mid-work after they've deliberately
+    // picked a different period. Only sets a dropdown to a real option that
+    // actually exists (built by populateFilters() from real data) - never
+    // leaves it pointing at a value with no matching <option>, which would
+    // show up blank.
+    let hasAppliedDefaultPeriod = false;
+    function applyDefaultWorkingMonthFilterOnce() {
+        if (hasAppliedDefaultPeriod) return;
+        hasAppliedDefaultPeriod = true;
+        const target = getDefaultWorkingFyMonth();
+        if (!target || !fyFilter || !monthFilter) return;
+        // Runs before the very first loadInvoices() fetch, so there's no
+        // real period data loaded yet to check against - create the option
+        // rather than skip-if-missing (the old guard, from when this ran
+        // AFTER a full dataset was already in memory). Once the real fetch
+        // completes, populateFilters() reconciles this against actual data.
+        ensureOption(fyFilter, target.fy, `FY ${target.fy}`);
+        fyFilter.value = target.fy;
+        ensureOption(monthFilter, target.monthName, target.monthName);
+        monthFilter.value = target.monthName;
+    }
+
     // Whenever fyFilter/monthFilter are only mirroring the Payment Month
     // selection (not a deliberate user pick), their value must NOT also
     // constrain invoices by their own invoice-date FY/Month -- otherwise a
@@ -59,6 +97,22 @@ document.addEventListener('DOMContentLoaded', () => {
         const fy = (fyFilter && fyFilter.dataset.autoSynced === 'true') ? '' : (fyFilter ? fyFilter.value : '');
         const month = (monthFilter && monthFilter.dataset.autoSynced === 'true') ? '' : (monthFilter ? monthFilter.value : '');
         return { fy, month };
+    }
+
+    // Adds an <option> to a <select> if it doesn't already have one with this
+    // value, so a dropdown can be pointed at a period that's real (currently
+    // selected, or just picked) even if it isn't in the freshly-rebuilt list
+    // of periods with actual data - never leaves the select pointing at a
+    // value with no matching <option>, which would render blank.
+    function ensureOption(selectEl, value, label) {
+        if (!selectEl) return;
+        const hasOption = Array.from(selectEl.options).some(o => o.value === value);
+        if (!hasOption) {
+            const opt = document.createElement('option');
+            opt.value = value;
+            opt.textContent = label;
+            selectEl.appendChild(opt);
+        }
     }
 
     // Mirrors the Payment Month's implied FY/Month onto the two dropdowns
@@ -73,17 +127,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         const derived = computeFyMonthFromYearMonth(paymentMonthValue);
         if (!derived) return;
-
-        const ensureOption = (selectEl, value, label) => {
-            if (!selectEl) return;
-            const hasOption = Array.from(selectEl.options).some(o => o.value === value);
-            if (!hasOption) {
-                const opt = document.createElement('option');
-                opt.value = value;
-                opt.textContent = label;
-                selectEl.appendChild(opt);
-            }
-        };
 
         ensureOption(fyFilter, derived.fy, `FY ${derived.fy}`);
         ensureOption(monthFilter, derived.monthName, derived.monthName);
@@ -198,18 +241,31 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // Guards against a fast double period-switch (e.g. changing FY then
+    // Month before the first fetch has returned) leaving stale data on
+    // screen if the older request happens to resolve after the newer one -
+    // only the response matching the most recently issued request is ever
+    // applied.
+    let loadInvoicesRequestId = 0;
     function loadInvoices() {
-        fetch('/api/get-invoices?client_id=' + encodeURIComponent(currentClientId))
+        const requestId = ++loadInvoicesRequestId;
+        const params = new URLSearchParams({ client_id: currentClientId });
+        const { fy, month } = getFyMonthFilterRaw();
+        if (fy) params.set('financial_year', fy);
+        if (month) params.set('month', month);
+        fetch('/api/get-invoices?' + params.toString())
             .then(response => {
                 if (!response.ok) throw new Error('Failed to fetch invoices');
                 return response.json();
             })
             .then(data => {
+                if (requestId !== loadInvoicesRequestId) return;
                 if (data.invoices) {
                     if (data.client) {
                         updateClientUI(data.client);
                     }
                     invoices = data.invoices || [];
+                    invoicePeriods = data.periods || [];
                     populateFilters();
                     calculateAuditCounts();
                     renderTable();
@@ -218,6 +274,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             })
             .catch(error => {
+                if (requestId !== loadInvoicesRequestId) return;
                 console.error('Error fetching invoices from database:', error);
                 if (invoiceCountText) {
                     invoiceCountText.classList.remove('is-loading');
@@ -550,30 +607,33 @@ document.addEventListener('DOMContentLoaded', () => {
     // years/months are actually present in the currently loaded invoices,
     // so they always reflect real data.
     function populateFilters() {
-        const years = [...new Set(invoices.map(inv => inv.financial_year).filter(Boolean))]
+        const currentFy = fyFilter.value;
+        const currentMonth = monthFilter.value;
+
+        const years = [...new Set(invoicePeriods.map(p => p.financial_year).filter(Boolean))]
             .sort((a, b) => b.localeCompare(a));
 
-        const currentFy = fyFilter.value;
         fyFilter.innerHTML = '<option value="">All Years</option>' +
             years.map(fy => `<option value="${fy}">FY ${fy}</option>`).join('');
-        if (years.includes(currentFy)) {
-            fyFilter.value = currentFy;
-        }
+        // Keep a deliberately-selected FY even if it has zero bills (e.g. day
+        // 1 of a new working month, nothing entered yet) instead of silently
+        // snapping back to "All Years" - a real period the user picked or
+        // that was defaulted to should never just vanish from the dropdown.
+        if (currentFy) ensureOption(fyFilter, currentFy, `FY ${currentFy}`);
+        fyFilter.value = currentFy;
 
         const selectedFy = fyFilter.value;
         const months = [...new Set(
-            invoices
-                .filter(inv => !selectedFy || inv.financial_year === selectedFy)
-                .map(inv => inv.month)
+            invoicePeriods
+                .filter(p => !selectedFy || p.financial_year === selectedFy)
+                .map(p => p.month)
                 .filter(Boolean)
         )].sort((a, b) => FY_MONTH_ORDER.indexOf(a) - FY_MONTH_ORDER.indexOf(b));
 
-        const currentMonth = monthFilter.value;
         monthFilter.innerHTML = '<option value="">All Months</option>' +
             months.map(m => `<option value="${m}">${m}</option>`).join('');
-        if (months.includes(currentMonth)) {
-            monthFilter.value = currentMonth;
-        }
+        if (currentMonth) ensureOption(monthFilter, currentMonth, currentMonth);
+        monthFilter.value = currentMonth;
     }
 
     function escapeHtml(text) {
@@ -1841,6 +1901,24 @@ document.addEventListener('DOMContentLoaded', () => {
                 invoices[index].invoice_date = data.invoice_date;
                 invoices[index].payment_date = data.payment_date;
 
+                // A Payment Date edit can move a bill's period out of the
+                // currently-loaded scope (e.g. it's now paid in a different
+                // month than the one being viewed) - since only one period's
+                // worth of bills is fetched from the server at a time, a row
+                // that no longer belongs here has to be dropped from view
+                // instead of lingering until the next full reload.
+                const { fy: scopedFy, month: scopedMonth } = getFyMonthFilterRaw();
+                const outOfScope = (scopedFy && data.financial_year !== scopedFy) ||
+                    (scopedMonth && data.month !== scopedMonth);
+                if (outOfScope) {
+                    invoices.splice(index, 1);
+                    populateFilters();
+                    calculateAuditCounts();
+                    renderTable();
+                    updateMetrics();
+                    return;
+                }
+
                 // Update table values
                 document.getElementById(`row-eligible-${index}`).textContent = `₹${data.eligible_itc.toFixed(2)}`;
                 document.getElementById(`row-ineligible-${index}`).textContent = `₹${data.ineligible_itc.toFixed(2)}`;
@@ -1986,32 +2064,40 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // FY filter dropdown -- changing the year narrows the month dropdown to
     // just the months present within that year, then re-renders table and updates metrics.
+    // Changing FY/Month/Payment Month or hitting Reset now re-fetches from
+    // the server for the newly-selected period (Stage 2 of the on-demand
+    // loading work) instead of just re-filtering an already-fully-loaded
+    // array - loadInvoices() itself does the populateFilters();
+    // calculateAuditCounts(); renderTable(); updateMetrics(); sequence once
+    // the new data actually arrives, so nothing renders under a mismatched
+    // label during the round trip.
     if (fyFilter) {
         fyFilter.addEventListener('change', () => {
             // A real pick by the user -- it's no longer just mirroring Payment Month.
             delete fyFilter.dataset.autoSynced;
             if (monthFilter) monthFilter.value = '';
             populateFilters();
-            renderTable();
-            updateMetrics();
+            loadInvoices();
         });
     }
 
-    // Month filter dropdown -- updates table and re-calculates top metrics
+    // Month filter dropdown -- re-fetches scoped to the new period
     if (monthFilter) {
         monthFilter.addEventListener('change', () => {
             delete monthFilter.dataset.autoSynced;
-            renderTable();
-            updateMetrics();
+            loadInvoices();
         });
     }
 
-    // Payment Month filter (calendar month-picker) -- updates table and top metrics
+    // Payment Month filter (calendar month-picker) -- syncing FY/Month blanks
+    // their filter value (see getFyMonthFilterRaw), so this naturally widens
+    // to a full, unscoped fetch, over which paymentDateInFilterMonth() keeps
+    // filtering client-side exactly as before - Payment Month stays a
+    // cross-period view, not server-scoped (see plan Stage 3).
     if (paymentMonthFilter) {
         paymentMonthFilter.addEventListener('change', () => {
             syncFyMonthToPaymentMonth(paymentMonthFilter.value);
-            renderTable();
-            updateMetrics();
+            loadInvoices();
         });
     }
 
@@ -2022,8 +2108,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (monthFilter) { monthFilter.value = ''; delete monthFilter.dataset.autoSynced; }
             if (paymentMonthFilter) paymentMonthFilter.value = '';
             populateFilters();
-            renderTable();
-            updateMetrics();
+            loadInvoices();
         });
     }
 
@@ -2990,5 +3075,6 @@ document.addEventListener('DOMContentLoaded', () => {
     // Initial Data & UI Setup
     setupAuditPills();
     setupColumnFilterTriggers();
+    applyDefaultWorkingMonthFilterOnce();
     loadInvoices();
 });
