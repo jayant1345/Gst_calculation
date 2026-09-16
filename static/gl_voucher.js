@@ -77,7 +77,7 @@ document.addEventListener('DOMContentLoaded', () => {
             })
             .catch(err => {
                 console.error('GL voucher upload error:', err);
-                alert(err.message || 'Failed to upload GL voucher file(s).');
+                alert(err.message || 'Failed to upload PL voucher file(s).');
                 progressContainer.style.display = 'none';
             });
     }
@@ -145,7 +145,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const amount = parseFloat(document.getElementById('glm-amount').value) || 0;
 
             if (!branch || !fy || !glCode) {
-                alert('Branch, Financial Year, and GL/PL Code are required.');
+                alert('Branch, Financial Year, and PL Code are required.');
                 saveBtn.disabled = false;
                 saveBtn.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Add Voucher Entry';
                 return;
@@ -180,7 +180,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // Manage GL/PL Codes modal - same shared catalog Section 3 manages
+    // Manage PL Codes modal - same shared catalog Section 3 manages
     // (/api/income-codes-master), just also editable here so tagging a bill
     // or classifying a voucher never requires leaving Section 1.
     const glCodesModalOverlay = document.getElementById('glCodesModalOverlay');
@@ -221,7 +221,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (glCodeSearchCount) glCodeSearchCount.textContent = `${codes.length} code(s)`;
 
         if (codes.length === 0) {
-            glCodesTableBody.innerHTML = `<tr><td colspan="4" style="padding: 16px; text-align: center; color: #94a3b8;">No GL/PL codes yet. Add one above.</td></tr>`;
+            glCodesTableBody.innerHTML = `<tr><td colspan="4" style="padding: 16px; text-align: center; color: #94a3b8;">No PL codes yet. Add one above.</td></tr>`;
             return;
         }
 
@@ -248,7 +248,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         glCodesTableBody.querySelectorAll('.btn-delete-gl-code').forEach(btn => {
             btn.addEventListener('click', () => {
-                if (!confirm(`Delete GL/PL code ${btn.dataset.code}? This is the same shared catalog Income & Output GST uses - bills/vouchers/income entries already tagged with it are left as-is.`)) return;
+                if (!confirm(`Delete PL code ${btn.dataset.code}? This is the same shared catalog Income & Output GST uses - bills/vouchers/income entries already tagged with it are left as-is.`)) return;
                 fetch(`/api/income-codes-master/${encodeURIComponent(btn.dataset.code)}`, { method: 'DELETE' })
                     .then(async res => {
                         const data = await res.json().catch(() => ({}));
@@ -286,7 +286,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     glCodeFormMsg.style.display = 'block';
                     glCodeFormMsg.style.background = '#dcfce7';
                     glCodeFormMsg.style.color = '#166534';
-                    glCodeFormMsg.textContent = `Saved GL/PL code ${code}.`;
+                    glCodeFormMsg.textContent = `Saved PL code ${code}.`;
                     setTimeout(() => { glCodeFormMsg.style.display = 'none'; }, 3000);
                 }
                 return window.loadGlPlCodes();

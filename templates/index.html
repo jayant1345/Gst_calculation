@@ -404,8 +404,8 @@
                                     <div class="th-content"><span>Blocked</span><button type="button" class="col-filter-trigger" data-col="itc_blocked" title="Filter Blocked"><i class="fa-solid fa-filter"></i></button></div>
                                 </th>
                                 <th width="10%" title="e.g. GSTIN not mentioned on bill">Remark</th>
-                                <th width="9%" title="Branch expense head, for the branch GL voucher tally" data-col="gl_code">
-                                    <div class="th-content"><span>GL/PL Code</span><button type="button" class="col-filter-trigger" data-col="gl_code" title="Filter GL/PL Code"><i class="fa-solid fa-filter"></i></button></div>
+                                <th width="9%" title="Branch expense head, for the branch PL voucher tally" data-col="gl_code">
+                                    <div class="th-content"><span>PL Code</span><button type="button" class="col-filter-trigger" data-col="gl_code" title="Filter PL Code"><i class="fa-solid fa-filter"></i></button></div>
                                 </th>
                                 <th width="9%" class="th-green">Eligible ITC (50%)</th>
                                 <th width="9%" class="th-red">Ineligible ITC (50%)</th>
@@ -427,17 +427,17 @@
                 </div>
             </section>
 
-            <!-- Branch GL Voucher Reconciliation -->
+            <!-- Branch PL Voucher Reconciliation -->
             <section class="dashboard-panel gl-voucher-panel">
                 <div class="panel-toolbar">
                     <div class="toolbar-left">
-                        <h2><i class="fa-solid fa-scale-balanced"></i> Branch GL Voucher Reconciliation</h2>
-                        <span class="row-count">Tally Purchase Bills against each branch's own GL ledger, branch-wise and code-wise</span>
+                        <h2><i class="fa-solid fa-scale-balanced"></i> Branch PL Voucher Reconciliation</h2>
+                        <span class="row-count">Tally Purchase Bills against each branch's own PL ledger, branch-wise and code-wise</span>
                     </div>
                     <div class="toolbar-right">
                         {% if is_admin %}
-                        <button class="btn btn-secondary" id="btn-manage-expense-codes" title="Manage the shared GL/PL code catalog (also used by Income & Output GST)">
-                            <i class="fa-solid fa-list-check"></i> Manage GL/PL Codes
+                        <button class="btn btn-secondary" id="btn-manage-expense-codes" title="Manage the shared PL code catalog (also used by Income & Output GST)">
+                            <i class="fa-solid fa-list-check"></i> Manage PL Codes
                         </button>
                         {% endif %}
                         <button class="btn btn-secondary" id="btn-refresh-gl-tally">
@@ -491,7 +491,7 @@
                 </div>
 
                 <div class="gl-tab-panel" id="gl-tab-scan" style="display: none;">
-                    <p class="panel-subtitle">Upload a photo or scan of a handwritten/physical GL voucher slip &mdash; read with the same AI vision OCR already used for invoice scanning.</p>
+                    <p class="panel-subtitle">Upload a photo or scan of a handwritten/physical PL voucher slip &mdash; read with the same AI vision OCR already used for invoice scanning.</p>
                     <div class="drop-zone" id="gl-scan-drop-zone">
                         <div class="drop-zone-content">
                             <i class="fa-solid fa-camera cloud-icon"></i>
@@ -532,7 +532,7 @@
                             </select>
                         </div>
                         <div class="form-field">
-                            <label for="glm-gl-code">GL/PL Code</label>
+                            <label for="glm-gl-code">PL Code</label>
                             <select id="glm-gl-code" required>
                                 <option value="">-- Select --</option>
                             </select>
@@ -559,7 +559,7 @@
                         <thead>
                             <tr>
                                 <th width="12%">Branch</th>
-                                <th width="8%">GL/PL Code</th>
+                                <th width="8%">PL Code</th>
                                 <th width="16%">Particulars</th>
                                 <th width="10%">Period</th>
                                 <th width="14%">Purchase Bills Total (₹)</th>
@@ -636,21 +636,6 @@
                     </div>
                 </div>
 
-                <div class="form-field">
-                    <label for="mb-remark">Remark / Reason <span class="field-hint">(optional)</span></label>
-                    <input type="text" id="mb-remark" placeholder="e.g. GSTIN not mentioned on bill" maxlength="500" autocomplete="off">
-                </div>
-
-                <div class="form-field">
-                    <label for="mb-gl-code">
-                        GL/PL Code <span class="field-hint">(optional &mdash; for branch expense tally)</span>
-                        {% if is_admin %}<button type="button" class="link-btn" id="mb-manage-expense-codes-btn">Manage codes</button>{% endif %}
-                    </label>
-                    <select id="mb-gl-code">
-                        <option value="">-- No GL/PL code --</option>
-                    </select>
-                </div>
-
                 <label class="checkbox-field">
                     <input type="checkbox" id="mb-itc-blocked">
                     <span>ITC Blocked (Sec 17(5) / fully ineligible) &mdash; skip the 50% eligible split, mark 100% ineligible</span>
@@ -685,12 +670,12 @@
 
                 <div class="entry-mode-toggle">
                     <label class="radio-pill">
-                        <input type="radio" name="mb-mode" value="direct" checked>
-                        <span>Enter Taxable Value (auto-calculates GST from Rate above)</span>
-                    </label>
-                    <label class="radio-pill">
                         <input type="radio" name="mb-mode" value="auto">
                         <span>Enter Total Amount (auto-splits into Taxable + GST)</span>
+                    </label>
+                    <label class="radio-pill">
+                        <input type="radio" name="mb-mode" value="direct" checked>
+                        <span>Enter Taxable Value (auto-calculates GST from Rate above)</span>
                     </label>
                 </div>
 
@@ -729,6 +714,21 @@
                     IGST: <strong id="mb-preview-igst">₹0.00</strong>
                 </div>
 
+                <div class="form-field">
+                    <label for="mb-remark">Remark / Reason <span class="field-hint">(optional)</span></label>
+                    <input type="text" id="mb-remark" placeholder="e.g. GSTIN not mentioned on bill" maxlength="500" autocomplete="off">
+                </div>
+
+                <div class="form-field">
+                    <label for="mb-gl-code">
+                        PL Code <span class="field-hint">(optional &mdash; for branch expense tally)</span>
+                        {% if is_admin %}<button type="button" class="link-btn" id="mb-manage-expense-codes-btn">Manage codes</button>{% endif %}
+                    </label>
+                    <select id="mb-gl-code">
+                        <option value="">-- No PL code --</option>
+                    </select>
+                </div>
+
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" id="manual-bill-cancel">Cancel</button>
                     <button type="submit" class="btn btn-primary" id="manual-bill-save">
@@ -739,22 +739,22 @@
         </div>
     </div>
 
-    <!-- Manage GL/PL Codes Modal (admin-only) - same shared catalog Section 3 manages -->
+    <!-- Manage PL Codes Modal (admin-only) - same shared catalog Section 3 manages -->
     <div class="modal-overlay" id="glCodesModalOverlay" style="display: none;">
         <div class="modal-card" style="max-width: 640px; width: 92vw; max-height: 85vh; display: flex; flex-direction: column;">
             <div class="modal-header">
-                <h3><i class="fa-solid fa-list-check"></i> Manage GL/PL Codes</h3>
+                <h3><i class="fa-solid fa-list-check"></i> Manage PL Codes</h3>
                 <button type="button" class="modal-close" id="glCodesModalClose" aria-label="Close">
                     <i class="fa-solid fa-xmark"></i>
                 </button>
             </div>
             <div class="modal-body" style="display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden;">
                 <p style="font-size: 12.5px; color: #64748b; margin: -4px 0 4px; flex-shrink: 0;">
-                    One shared code list used across the whole bank &mdash; the same catalog Income &amp; Output GST manages. Adding a code here (e.g. for a branch expense head like Security Charges or AMC) makes it available for tagging Purchase Bills and classifying GL vouchers immediately.
+                    One shared code list used across the whole bank &mdash; the same catalog Income &amp; Output GST manages. Adding a code here (e.g. for a branch expense head like Security Charges or AMC) makes it available for tagging Purchase Bills and classifying PL vouchers immediately.
                 </p>
                 <form id="glCodeForm" class="form-grid" style="margin-bottom: 4px; flex-shrink: 0;">
                     <div class="form-field">
-                        <label for="glCodeInputCode">GL / PL Code</label>
+                        <label for="glCodeInputCode">PL Code</label>
                         <input type="text" id="glCodeInputCode" placeholder="e.g. 4021" autocomplete="off" required>
                     </div>
                     <div class="form-field">

@@ -179,8 +179,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     loadMasterData();
 
-    // GL/PL Code catalog - the SAME shared list Section 3 (Income & Output
-    // GST) manages under "Manage GL/PL Codes". One bank chart of accounts,
+    // PL Code catalog - the SAME shared list Section 3 (Income & Output
+    // GST) manages under "Manage PL Codes". One bank chart of accounts,
     // not a separate list per section. gl_voucher.js also reads window.glPlCodes.
     window.glPlCodes = [];
     function loadGlPlCodes() {
@@ -190,14 +190,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 window.glPlCodes = data.codes || [];
                 populateGlCodeDropdowns();
             })
-            .catch(err => console.error("Error loading GL/PL codes:", err));
+            .catch(err => console.error("Error loading PL codes:", err));
     }
     loadGlPlCodes();
     window.loadGlPlCodes = loadGlPlCodes;
     window.populateGlCodeDropdowns = () => populateGlCodeDropdowns();
 
     function populateGlCodeDropdowns() {
-        const optionsHtml = '<option value="">-- No GL/PL code --</option>' +
+        const optionsHtml = '<option value="">-- No PL code --</option>' +
             window.glPlCodes.slice().sort((a, b) => a.code.localeCompare(b.code))
                 .map(c => `<option value="${c.code}">${c.code} - ${c.particulars}</option>`).join('');
         const mbGlCode = document.getElementById('mb-gl-code');
@@ -1583,7 +1583,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 <td class="numeric"><input type="number" step="0.01" class="field-igst" value="${(inv.igst || 0).toFixed(2)}"></td>
                 <td class="checkbox-cell"><input type="checkbox" class="field-itc-blocked" title="Section 17(5) blocked credit / fully ineligible" ${inv.itc_blocked ? 'checked' : ''}></td>
                 <td><input type="text" class="field-remark" placeholder="e.g. GSTIN not on bill" maxlength="500" value="${(inv.remark || '').replace(/"/g, '&quot;')}"></td>
-                <td><select class="field-gl-code"><option value="">-- No GL/PL code --</option></select></td>
+                <td><select class="field-gl-code"><option value="">-- No PL code --</option></select></td>
                 <td class="numeric eligible-column font-bold" id="row-eligible-${inv.id}">₹${(inv.eligible_itc || 0).toFixed(2)}</td>
                 <td class="numeric ineligible-column" id="row-ineligible-${inv.id}">₹${(inv.ineligible_itc || 0).toFixed(2)}</td>
                 ${window.IS_ADMIN ? `<td class="col-owner">${inv.username || window.CURRENT_USERNAME || ''}</td>` : ''}
@@ -1604,7 +1604,7 @@ document.addEventListener('DOMContentLoaded', () => {
             // Populate this row's GL code dropdown from the shared expense catalog
             const glCodeSelect = tr.querySelector('.field-gl-code');
             if (glCodeSelect) {
-                glCodeSelect.innerHTML = '<option value="">-- No GL/PL code --</option>' +
+                glCodeSelect.innerHTML = '<option value="">-- No PL code --</option>' +
                     (window.glPlCodes || []).slice().sort((a, b) => a.code.localeCompare(b.code))
                         .map(c => `<option value="${c.code}">${c.code} - ${c.particulars}</option>`).join('');
                 glCodeSelect.value = inv.gl_code || '';
