@@ -178,10 +178,6 @@
                                 <option value="">All Months</option>
                             </select>
                         </div>
-                        <div class="filter-group">
-                            <label for="payment-month-filter"><i class="fa-solid fa-calendar-check"></i> Payment Month</label>
-                            <input type="month" id="payment-month-filter" class="form-control period-select" title="Filter invoices by the month they were actually paid">
-                        </div>
                         <button type="button" class="btn btn-secondary btn-sm" id="btn-reset-period" title="Reset all period filters" style="display: none; padding: 6px 12px; font-size: 12.5px;">
                             <i class="fa-solid fa-rotate-left"></i> Reset
                         </button>
@@ -193,7 +189,7 @@
                         <div class="card-icon blue"><i class="fa-solid fa-money-bill-wave"></i></div>
                         <div class="card-data">
                             <h3>Total Billing Amount</h3>
-                            <span class="metric-value" id="metric-total-billing">₹0.00</span>
+                            <span class="metric-value is-loading" id="metric-total-billing">Loading&hellip;</span>
                         </div>
                     </div>
                     
@@ -201,7 +197,7 @@
                         <div class="card-icon yellow"><i class="fa-solid fa-file-lines"></i></div>
                         <div class="card-data">
                             <h3>Total Taxable Value</h3>
-                            <span class="metric-value" id="metric-total-taxable">₹0.00</span>
+                            <span class="metric-value is-loading" id="metric-total-taxable">Loading&hellip;</span>
                         </div>
                     </div>
                     
@@ -209,7 +205,7 @@
                         <div class="card-icon green"><i class="fa-solid fa-circle-check"></i></div>
                         <div class="card-data">
                             <h3 id="card-eligible-title">Eligible ITC (50%)</h3>
-                            <span class="metric-value text-green" id="metric-eligible-itc">₹0.00</span>
+                            <span class="metric-value text-green is-loading" id="metric-eligible-itc">Loading&hellip;</span>
                         </div>
                     </div>
                     
@@ -217,7 +213,7 @@
                         <div class="card-icon red"><i class="fa-solid fa-circle-xmark"></i></div>
                         <div class="card-data">
                             <h3 id="card-ineligible-title">Ineligible ITC (50%)</h3>
-                            <span class="metric-value text-red" id="metric-ineligible-itc">₹0.00</span>
+                            <span class="metric-value text-red is-loading" id="metric-ineligible-itc">Loading&hellip;</span>
                         </div>
                     </div>
                 </section>
@@ -300,18 +296,21 @@
             </section>
 
             <!-- Invoice Table Panel -->
-            <section class="dashboard-panel table-panel">
+            <section class="dashboard-panel table-panel" id="invoice-table-panel">
                 <div class="panel-toolbar">
                     <div class="toolbar-left">
                         <h2><i class="fa-solid fa-list-check"></i> Parsed Invoices List</h2>
-                        <span class="row-count" id="invoice-count">0 Invoices Loaded</span>
+                        <span class="row-count is-loading" id="invoice-count"><i class="fa-solid fa-spinner fa-spin"></i> Loading bills&hellip;</span>
                     </div>
-                    
+
                     <div class="toolbar-right">
                         <div class="search-box">
                             <i class="fa-solid fa-magnifying-glass"></i>
                             <input type="text" id="table-search" placeholder="Search vendor, invoice no, GSTIN...">
                         </div>
+                        <button class="btn btn-secondary" id="btn-toggle-fullscreen" title="Expand table to full screen for easier editing">
+                            <i class="fa-solid fa-expand"></i> Full Screen
+                        </button>
                         <button class="btn btn-secondary" id="btn-add-manual">
                             <i class="fa-solid fa-pen-to-square"></i> Add Manual Bill
                         </button>
@@ -358,6 +357,11 @@
                         <button type="button" class="audit-pill warning" data-audit-filter="zero-tax" title="Show bills with 0 or blank tax amounts">
                             <i class="fa-solid fa-coins"></i> <span>Zero / Blank Tax</span> <span class="pill-count" id="count-pill-tax">0</span>
                         </button>
+                    </div>
+                    <div class="audit-ribbon-divider"></div>
+                    <div class="ribbon-payment-filter">
+                        <label for="payment-month-filter"><i class="fa-solid fa-calendar-check"></i> Payment Month</label>
+                        <input type="month" id="payment-month-filter" class="period-select" title="Pick a calendar month to instantly filter bills by Payment Date">
                     </div>
                 </div>
 

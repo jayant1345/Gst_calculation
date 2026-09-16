@@ -7218,5 +7218,6 @@ if __name__ == '__main__':
     
     # Run server
     port = int(os.getenv("PORT", 5588))
+    debug_mode = os.getenv("FLASK_DEBUG", "false").lower() == "true"
     print(f"Starting GST Calculation Server on port {port}...")
-    app.run(host='0.0.0.0', port=port, debug=True)
+    app.run(host='0.0.0.0', port=port, debug=debug_mode, threaded=True)

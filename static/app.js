@@ -42,6 +42,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const btnResetPeriod = document.getElementById('btn-reset-period');
     
     // Button Elements
+    const invoiceTablePanel = document.getElementById('invoice-table-panel');
+    const btnToggleFullscreen = document.getElementById('btn-toggle-fullscreen');
     const btnClearAll = document.getElementById('btn-clear-all');
     const btnExportExcel = document.getElementById('btn-export-excel');
     const btnAddManual = document.getElementById('btn-add-manual');
@@ -154,6 +156,10 @@ document.addEventListener('DOMContentLoaded', () => {
             })
             .catch(error => {
                 console.error('Error fetching invoices from database:', error);
+                if (invoiceCountText) {
+                    invoiceCountText.classList.remove('is-loading');
+                    invoiceCountText.textContent = 'Failed to load bills - check connection and refresh';
+                }
             });
     }
 
@@ -1527,11 +1533,13 @@ document.addEventListener('DOMContentLoaded', () => {
                     </td>
                 </tr>
             `;
+            invoiceCountText.classList.remove('is-loading');
             invoiceCountText.textContent = `0 of ${periodInvoices.length} Invoice(s) Loaded`;
             updateDeleteSelectedState();
             return;
         }
 
+        invoiceCountText.classList.remove('is-loading');
         invoiceCountText.textContent = `${filteredInvoices.length} of ${periodInvoices.length} Invoice(s) Loaded`;
         tableBody.innerHTML = '';
 
@@ -1870,10 +1878,16 @@ document.addEventListener('DOMContentLoaded', () => {
             }).format(val);
         };
 
-        if (billingMetric) billingMetric.textContent = formatCurrency(totalBilling);
-        if (taxableMetric) taxableMetric.textContent = formatCurrency(totalTaxable);
-        if (eligibleMetric) eligibleMetric.textContent = formatCurrency(totalEligible);
-        if (ineligibleMetric) ineligibleMetric.textContent = formatCurrency(totalIneligible);
+        [
+            [billingMetric, totalBilling],
+            [taxableMetric, totalTaxable],
+            [eligibleMetric, totalEligible],
+            [ineligibleMetric, totalIneligible]
+        ].forEach(([el, val]) => {
+            if (!el) return;
+            el.textContent = formatCurrency(val);
+            el.classList.remove('is-loading');
+        });
 
         // Update period indicator subtitle
         if (metricsPeriodLabel) {
@@ -2159,6 +2173,31 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function closeManualBillModal() {
         manualBillOverlay.style.display = 'none';
+    }
+
+    // Full-screen table toggle -- expand the invoice table to the whole
+    // viewport for easier column-by-column editing, then collapse back.
+    function setTableFullscreen(on) {
+        if (!invoiceTablePanel || !btnToggleFullscreen) return;
+        invoiceTablePanel.classList.toggle('is-fullscreen', on);
+        document.body.classList.toggle('table-fullscreen-active', on);
+        btnToggleFullscreen.classList.toggle('is-active', on);
+        btnToggleFullscreen.innerHTML = on
+            ? '<i class="fa-solid fa-compress"></i> Exit Full Screen'
+            : '<i class="fa-solid fa-expand"></i> Full Screen';
+        btnToggleFullscreen.title = on
+            ? 'Collapse back to the normal dashboard view'
+            : 'Expand table to full screen for easier editing';
+    }
+    if (btnToggleFullscreen && invoiceTablePanel) {
+        btnToggleFullscreen.addEventListener('click', () => {
+            setTableFullscreen(!invoiceTablePanel.classList.contains('is-fullscreen'));
+        });
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && invoiceTablePanel.classList.contains('is-fullscreen')) {
+                setTableFullscreen(false);
+            }
+        });
     }
 
     btnAddManual.addEventListener('click', openManualBillModal);
@@ -2767,7 +2806,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Initial Data & UI Setup
-    loadMasterData();
     setupAuditPills();
     setupColumnFilterTriggers();
     loadInvoices();

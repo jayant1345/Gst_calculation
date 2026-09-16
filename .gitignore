@@ -1,6 +1,7 @@
 .env
 __pycache__/
 *.pyc
+*.log
 GST_ITC_Reconciled_Sheet.xlsx
 
 # Real customer/branch bank ledger source documents and working outputs -
