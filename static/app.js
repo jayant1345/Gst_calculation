@@ -2889,6 +2889,11 @@ document.addEventListener('DOMContentLoaded', () => {
             const isInvRec = changes.some(c => c.field === 'invoice_number' && c.is_recovered);
             const isPayRec = changes.some(c => c.field === 'payment_date' && c.is_recovered);
             const isDateRec = changes.some(c => c.field === 'invoice_date' && c.is_recovered);
+            // Never silently blocked -- "0" from a re-scan is genuinely
+            // ambiguous (a real nil-rated correction vs. a field the AI
+            // just couldn't read), so this only flags it for the operator
+            // to verify against the actual bill before approving.
+            const isRiskyZeroOut = changes.some(c => c.field === 'tax_amounts' && c.is_risky_zero_out);
 
             const tr = document.createElement('tr');
             tr.innerHTML = `
@@ -2925,15 +2930,16 @@ document.addEventListener('DOMContentLoaded', () => {
                         <span class="rescan-diff-new ${isPayRec ? 'recovered' : (orig.payment_date !== sc.payment_date && sc.payment_date ? 'changed' : '')}">${escapeHtml(sc.payment_date || 'None')}</span>
                     </div>
                 </td>
-                <td>
+                <td class="${isRiskyZeroOut ? 'rescan-amount-risky' : ''}" ${isRiskyZeroOut ? 'title="This re-scan proposes wiping a previously non-zero amount to ₹0 -- verify against the actual bill before approving"' : ''}>
                     <div style="font-size: 13px; font-weight: 600;">Taxable: ₹${(sc.taxable_value || 0).toFixed(2)}</div>
                     <div style="font-size: 11.5px; color: #64748b;">GST: ₹${((sc.cgst || 0) + (sc.sgst || 0) + (sc.igst || 0)).toFixed(2)}</div>
                 </td>
                 <td>
                     <div style="display: flex; flex-direction: column; gap: 2px;">
                         ${changes.length > 0 ? changes.map(c => `
-                            <span class="rescan-tag ${c.is_recovered ? 'recovered' : 'updated'}">
-                                <i class="fa-solid ${c.is_recovered ? 'fa-check' : 'fa-pen'}"></i> ${escapeHtml(c.label)}
+                            <span class="rescan-tag ${c.is_risky_zero_out ? 'risky' : (c.is_recovered ? 'recovered' : 'updated')}"
+                                  ${c.is_risky_zero_out ? 'title="Proposes wiping a previously non-zero amount to ₹0 - verify against the actual bill before approving"' : ''}>
+                                <i class="fa-solid ${c.is_risky_zero_out ? 'fa-triangle-exclamation' : (c.is_recovered ? 'fa-check' : 'fa-pen')}"></i> ${c.is_risky_zero_out ? 'Verify: ' : ''}${escapeHtml(c.label)}
                             </span>
                         `).join('') : '<span class="rescan-tag no-change">No changes</span>'}
                     </div>

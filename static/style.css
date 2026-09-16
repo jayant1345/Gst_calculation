@@ -3123,6 +3123,17 @@ body.table-fullscreen-active {
     border: 1px solid #e2e8f0;
 }
 
+.rescan-tag.risky {
+    background: #fee2e2;
+    color: #991b1b;
+    border: 1px solid #fecaca;
+}
+
+.rescan-amount-risky {
+    background: #fef2f2;
+    box-shadow: inset 3px 0 0 #dc2626;
+}
+
 
 
 

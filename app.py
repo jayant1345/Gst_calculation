@@ -2355,7 +2355,12 @@ def rescan_invoices_batch():
             new_gstin = normalize_gstin((scanned.get('gstin') or '').strip() or orig_gstin, new_vendor)
             new_inv_num = (scanned.get('invoice_number') or orig_inv_num).strip()
             new_inv_date = (scanned.get('invoice_date') or orig_inv_date).strip()
-            new_pay_date = (scanned.get('payment_date') or '').strip() or None
+            # Same safe pattern as the other fields above: a re-scan that
+            # fails to spot the payment date (the hardest field to find, per
+            # the rescan prompt itself) must never propose erasing an
+            # already-known-correct one - fall back to the original instead
+            # of defaulting to blank.
+            new_pay_date = (scanned.get('payment_date') or orig_pay_date or '').strip() or None
             
             # Numeric values
             try:
@@ -2438,12 +2443,22 @@ def rescan_invoices_batch():
                 
             # Tax amounts
             if round(orig_taxable, 2) != round(new_taxable, 2) or round(orig_cgst, 2) != round(new_cgst, 2) or round(orig_sgst, 2) != round(new_sgst, 2) or round(orig_igst, 2) != round(new_igst, 2):
+                orig_total_gst_check = orig_cgst + orig_sgst + orig_igst
+                new_total_gst_check = new_cgst + new_sgst + new_igst
+                # Flag (never silently block) a re-scan proposing to wipe an
+                # already-known amount to zero - "0" from the AI is
+                # genuinely ambiguous (a real nil-rated correction vs. a
+                # field it just couldn't read), so this only draws the
+                # operator's eye to double-check against the actual bill
+                # before approving, rather than guessing which case it is.
+                is_risky_zero_out = (orig_taxable > 0 and new_taxable == 0) or (orig_total_gst_check > 0 and new_total_gst_check == 0)
                 changes.append({
                     "field": "tax_amounts",
                     "label": "Tax Amounts",
                     "old": f"Taxable: ₹{orig_taxable:.2f}, CGST: ₹{orig_cgst:.2f}, SGST: ₹{orig_sgst:.2f}, IGST: ₹{orig_igst:.2f}",
                     "new": f"Taxable: ₹{new_taxable:.2f}, CGST: ₹{new_cgst:.2f}, SGST: ₹{new_sgst:.2f}, IGST: ₹{new_igst:.2f}",
-                    "is_recovered": (orig_taxable == 0 and new_taxable > 0) or (orig_cgst == 0 and orig_sgst == 0 and orig_igst == 0 and (new_cgst > 0 or new_sgst > 0 or new_igst > 0))
+                    "is_recovered": (orig_taxable == 0 and new_taxable > 0) or (orig_cgst == 0 and orig_sgst == 0 and orig_igst == 0 and (new_cgst > 0 or new_sgst > 0 or new_igst > 0)),
+                    "is_risky_zero_out": is_risky_zero_out
                 })
                 
             total_new_gst = new_cgst + new_sgst + new_igst
