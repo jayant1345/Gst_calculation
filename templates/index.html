@@ -722,7 +722,10 @@
 
                 <div class="form-field">
                     <label for="mb-remark">Remark / Reason <span class="field-hint">(optional)</span></label>
-                    <input type="text" id="mb-remark" placeholder="e.g. GSTIN not mentioned on bill" maxlength="500" autocomplete="off">
+                    <div class="autocomplete-wrapper" id="mb-remark-wrapper">
+                        <input type="text" id="mb-remark" placeholder="e.g. GSTIN not mentioned on bill" maxlength="500" autocomplete="off">
+                        <ul class="autocomplete-dropdown" id="mb-remark-dropdown"></ul>
+                    </div>
                 </div>
 
                 <div class="form-field">

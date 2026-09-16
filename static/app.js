@@ -286,6 +286,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Master Branches & Vendors Directory
     let masterBranches = [];
     let masterVendors = [];
+    let masterRemarks = [];
 
     function loadMasterData() {
         return fetch('/api/master-data')
@@ -293,6 +294,7 @@ document.addEventListener('DOMContentLoaded', () => {
             .then(data => {
                 if (data.branches) masterBranches = data.branches;
                 if (data.vendors) masterVendors = data.vendors;
+                if (data.remarks) masterRemarks = data.remarks;
                 initAutocompletes();
             })
             .catch(err => console.error("Error loading master data:", err));
@@ -468,6 +470,24 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (mbGstinInput && item.data && item.data.gstin) {
                         mbGstinInput.value = item.data.gstin;
                     }
+                }
+            });
+        }
+
+        // 4. Manual Bill modal Remark / Reason input -- every remark typed is
+        // automatically remembered server-side (see save-invoice), so this
+        // just grows into a useful suggestion list over time.
+        const mbRemarkInput = document.getElementById('mb-remark');
+        const mbRemarkDropdown = document.getElementById('mb-remark-dropdown');
+        if (mbRemarkInput && mbRemarkDropdown) {
+            setupAutocomplete({
+                inputEl: mbRemarkInput,
+                dropdownEl: mbRemarkDropdown,
+                getItems: (query) => {
+                    const remarks = query
+                        ? masterRemarks.filter(r => r.toLowerCase().includes(query))
+                        : masterRemarks.slice(0, 15);
+                    return remarks.map(r => ({ text: r }));
                 }
             });
         }

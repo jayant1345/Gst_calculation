@@ -591,6 +591,20 @@ def init_db():
         ''')
         cur.execute("CREATE INDEX IF NOT EXISTS idx_vendor_master_client ON vendor_master(client_id, name);")
 
+        # Remark master: every remark typed on a manual bill is remembered
+        # automatically (unlike vendors, a free-text note carries no risk of
+        # mis-attributing GSTIN/state to future bills, so there's no need for
+        # an explicit "save" step - it just grows as people type).
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS remark_master (
+                id SERIAL PRIMARY KEY,
+                client_id VARCHAR(50) NOT NULL DEFAULT 'nutan_nagrik',
+                remark VARCHAR(500) NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        ''')
+        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_remark_master_unique ON remark_master(client_id, LOWER(remark));")
+
         conn.commit()
 
         # Auto-seed a default user 'admin' if the users table is empty
@@ -1613,12 +1627,27 @@ def get_combined_vendors(client_id):
     extra_names = {str(v['name']).strip().lower() for v in extra}
     return [v for v in MASTER_VENDORS if v['name'].strip().lower() not in extra_names] + extra
 
+def get_remarks_for_client(client_id):
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute('SELECT remark FROM remark_master WHERE client_id = %s ORDER BY remark', (client_id,))
+        remarks = [row[0] for row in cur.fetchall()]
+        cur.close()
+        conn.close()
+        return remarks
+    except Exception as e:
+        print(f"Note: could not load remark_master: {e}")
+        return []
+
 @app.route('/api/master-data', methods=['GET'])
 @login_required
 def get_master_data():
+    client_id = get_current_client_id()
     return jsonify({
         "branches": MASTER_BRANCHES,
-        "vendors": get_combined_vendors(get_current_client_id())
+        "vendors": get_combined_vendors(client_id),
+        "remarks": get_remarks_for_client(client_id)
     })
 
 @app.route('/api/vendor-master', methods=['POST'])
@@ -1947,6 +1976,15 @@ def save_invoice():
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
             ''', (user_id, inv_num, inv_date, payment_date, vendor, gstin, branch, state, taxable, cgst, sgst, igst, itc_blocked, remark, gl_code, eligible, ineligible, fy, m))
             ret_id = cur.fetchone()[0]
+
+        # Remember this remark for future autocomplete suggestions - fully
+        # automatic (unlike vendors) since a free-text note carries no risk
+        # of mis-attributing data to a future bill.
+        if remark:
+            cur.execute(
+                'INSERT INTO remark_master (client_id, remark) VALUES (%s, %s) ON CONFLICT (client_id, LOWER(remark)) DO NOTHING',
+                (client_id, remark)
+            )
 
         conn.commit()
         cur.close()
