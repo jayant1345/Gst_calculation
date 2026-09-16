@@ -2163,9 +2163,10 @@ document.addEventListener('DOMContentLoaded', () => {
         manualBillForm.reset();
         if (stateInput && document.getElementById('mb-state')) document.getElementById('mb-state').value = stateInput.value.trim();
         if (branchInput && document.getElementById('mb-branch')) document.getElementById('mb-branch').value = branchInput.value.trim();
-        mbDirectFields.style.display = 'grid';
-        mbAutoFields.style.display = 'none';
-        mbPreview.style.display = 'none';
+        mbDirectFields.style.display = 'none';
+        mbAutoFields.style.display = 'grid';
+        mbPreview.style.display = 'block';
+        updateAutoSplitPreview();
         mbCustomRateField.style.display = 'none';
         manualBillOverlay.style.display = 'flex';
         document.getElementById('mb-branch').focus();
