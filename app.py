@@ -1755,6 +1755,51 @@ def branch_vendor_history():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route('/bill-copy/<int:invoice_id>')
+@login_required
+def view_bill_copy(invoice_id):
+    """Printable bill-copy page for a manually-entered invoice, standing in
+    for the scanned original a manual entry never had. Purely display-only:
+    formats the already-entered fields into a clean, printable page (browser
+    Print/Save-as-PDF handles the rest) rather than generating a real file."""
+    user_id = session['user_id']
+    is_admin = is_admin_user()
+    client_id = get_current_client_id()
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        if is_admin:
+            cur.execute('''
+                SELECT invoices.invoice_number, invoice_date, payment_date, vendor_name, gstin, branch, state,
+                       taxable_value::float, cgst::float, sgst::float, igst::float, itc_blocked, remark, gl_code,
+                       eligible_itc::float, ineligible_itc::float, users.username, invoices.created_at
+                FROM invoices
+                JOIN users ON users.id = invoices.user_id
+                WHERE invoices.id = %s AND invoices.client_id = %s
+            ''', (invoice_id, client_id))
+        else:
+            cur.execute('''
+                SELECT invoice_number, invoice_date, payment_date, vendor_name, gstin, branch, state,
+                       taxable_value::float, cgst::float, sgst::float, igst::float, itc_blocked, remark, gl_code,
+                       eligible_itc::float, ineligible_itc::float, created_at
+                FROM invoices
+                WHERE id = %s AND client_id = %s AND user_id = %s
+            ''', (invoice_id, client_id, user_id))
+        bill = cur.fetchone()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        return f"Error loading bill: {e}", 500
+
+    if not bill:
+        return "Bill not found.", 404
+
+    if 'username' not in bill:
+        bill['username'] = session.get('username', '')
+
+    client_cfg = get_client_config(client_id)
+    return render_template('bill_copy.html', bill=bill, client=client_cfg, invoice_id=invoice_id)
+
 @app.route('/api/get-invoices', methods=['GET'])
 @login_required
 def get_invoices():

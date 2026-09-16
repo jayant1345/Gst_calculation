@@ -1712,7 +1712,7 @@ body.table-fullscreen-active {
     gap: 4px;
 }
 
-.btn-delete, .btn-view-file {
+.btn-delete, .btn-view-file, .btn-view-bill-copy {
     background: transparent;
     border: none;
     color: #94a3b8;
@@ -1728,7 +1728,7 @@ body.table-fullscreen-active {
     background-color: #fee2e2;
 }
 
-.btn-view-file:hover {
+.btn-view-file:hover, .btn-view-bill-copy:hover {
     color: var(--accent-blue);
     background-color: rgba(37, 99, 235, 0.08);
 }

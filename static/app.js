@@ -1744,7 +1744,11 @@ document.addEventListener('DOMContentLoaded', () => {
                     </button>` : `
                     <span class="manual-entry-badge" title="No scanned bill attached - this row was typed in directly via Add Manual Bill">
                         <i class="fa-solid fa-pen"></i> Manual Entry
-                    </span>`}
+                    </span>
+                    ${inv.id ? `
+                    <button class="btn-view-bill-copy" title="View a printable bill copy generated from this entry's data" data-id="${inv.id}">
+                        <i class="fa-solid fa-file-lines"></i>
+                    </button>` : ''}`}
                     <button class="btn-delete" title="Remove row">
                         <i class="fa-solid fa-trash"></i>
                     </button>
@@ -1840,6 +1844,13 @@ document.addEventListener('DOMContentLoaded', () => {
             if (viewFileBtn) {
                 viewFileBtn.addEventListener('click', () => {
                     window.open(`/api/invoice-file/${viewFileBtn.dataset.id}`, '_blank');
+                });
+            }
+
+            const viewBillCopyBtn = tr.querySelector('.btn-view-bill-copy');
+            if (viewBillCopyBtn) {
+                viewBillCopyBtn.addEventListener('click', () => {
+                    window.open(`/bill-copy/${viewBillCopyBtn.dataset.id}`, '_blank');
                 });
             }
 

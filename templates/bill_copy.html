@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bill Copy - {{ bill.vendor_name or 'Manual Entry' }}</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Arial, sans-serif;
+            max-width: 720px;
+            margin: 40px auto;
+            padding: 0 20px;
+            color: #1e293b;
+            background: #f8fafc;
+        }
+        .sheet {
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            border-radius: 10px;
+            padding: 36px 40px;
+        }
+        .header {
+            text-align: center;
+            border-bottom: 3px solid #0A2540;
+            padding-bottom: 16px;
+            margin-bottom: 24px;
+        }
+        .header img {
+            max-height: 60px;
+            margin-bottom: 10px;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 19px;
+            color: #0A2540;
+        }
+        .header p {
+            margin: 4px 0 0;
+            color: #64748b;
+            font-size: 13px;
+        }
+        .manual-badge {
+            display: inline-block;
+            margin-top: 10px;
+            padding: 4px 14px;
+            background: #fefce8;
+            border: 1px solid #fde047;
+            color: #92400e;
+            border-radius: 14px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 22px;
+        }
+        td {
+            padding: 10px 14px;
+            border: 1px solid #e2e8f0;
+            font-size: 13.5px;
+        }
+        td.label {
+            font-weight: 600;
+            background: #f8fafc;
+            width: 42%;
+            color: #334155;
+        }
+        tr.total-row td {
+            font-weight: 700;
+            background: #eff6ff;
+            font-size: 14.5px;
+        }
+        .footer {
+            margin-top: 28px;
+            padding-top: 14px;
+            border-top: 1px solid #e2e8f0;
+            font-size: 11px;
+            color: #94a3b8;
+            text-align: center;
+        }
+        .print-btn {
+            display: block;
+            margin: 0 auto 20px;
+            padding: 10px 22px;
+            background: #2563eb;
+            color: #ffffff;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+        }
+        .print-btn:hover { background: #1d4ed8; }
+        @media print {
+            .no-print { display: none; }
+            body { margin: 0; background: #ffffff; }
+            .sheet { border: none; padding: 0; }
+        }
+    </style>
+</head>
+<body>
+    <button class="print-btn no-print" onclick="window.print()">
+        Print / Save as PDF
+    </button>
+
+    <div class="sheet">
+        <div class="header">
+            <img src="/static/nn_shah_logo.png" alt="{{ client.name }}" onerror="this.style.display='none';">
+            <h1>{{ client.name }}</h1>
+            <p>Bill Copy &mdash; Manually Entered Record</p>
+            <span class="manual-badge">No original scanned bill attached</span>
+        </div>
+
+        <table>
+            <tr><td class="label">Branch</td><td>{{ bill.branch or '-' }}</td></tr>
+            <tr><td class="label">State</td><td>{{ bill.state or '-' }}</td></tr>
+            <tr><td class="label">Vendor Name</td><td>{{ bill.vendor_name or '-' }}</td></tr>
+            <tr><td class="label">GSTIN</td><td>{{ bill.gstin or '-' }}</td></tr>
+            <tr><td class="label">Invoice Number</td><td>{{ bill.invoice_number or '-' }}</td></tr>
+            <tr><td class="label">Invoice Date</td><td>{{ bill.invoice_date or '-' }}</td></tr>
+            <tr><td class="label">Payment Date</td><td>{{ bill.payment_date or '-' }}</td></tr>
+            <tr><td class="label">Taxable Value</td><td>&#8377;{{ '%.2f'|format(bill.taxable_value or 0) }}</td></tr>
+            <tr><td class="label">CGST</td><td>&#8377;{{ '%.2f'|format(bill.cgst or 0) }}</td></tr>
+            <tr><td class="label">SGST</td><td>&#8377;{{ '%.2f'|format(bill.sgst or 0) }}</td></tr>
+            <tr><td class="label">IGST</td><td>&#8377;{{ '%.2f'|format(bill.igst or 0) }}</td></tr>
+            <tr class="total-row">
+                <td class="label">Total Invoice Value</td>
+                <td>&#8377;{{ '%.2f'|format((bill.taxable_value or 0) + (bill.cgst or 0) + (bill.sgst or 0) + (bill.igst or 0)) }}</td>
+            </tr>
+            <tr><td class="label">ITC Blocked (Sec 17(5))</td><td>{{ 'Yes' if bill.itc_blocked else 'No' }}</td></tr>
+            <tr><td class="label">Eligible ITC (50%)</td><td>&#8377;{{ '%.2f'|format(bill.eligible_itc or 0) }}</td></tr>
+            <tr><td class="label">Ineligible ITC (50%)</td><td>&#8377;{{ '%.2f'|format(bill.ineligible_itc or 0) }}</td></tr>
+            <tr><td class="label">PL Code</td><td>{{ bill.gl_code or '-' }}</td></tr>
+            <tr><td class="label">Remark</td><td>{{ bill.remark or '-' }}</td></tr>
+        </table>
+
+        <div class="footer">
+            System-generated bill copy from manually entered data &mdash; not the original bill.<br>
+            Entered by: {{ bill.username or '-' }} &bull; Bill ID: #{{ invoice_id }} &bull; Recorded: {{ bill.created_at.strftime('%d/%m/%Y %I:%M %p') if bill.created_at else '-' }}
+        </div>
+    </div>
+</body>
+</html>
