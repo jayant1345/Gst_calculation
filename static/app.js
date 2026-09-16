@@ -2189,10 +2189,14 @@ document.addEventListener('DOMContentLoaded', () => {
             ? 'Collapse back to the normal dashboard view'
             : 'Expand table to full screen for easier editing';
     }
+    const btnExitFullscreenFab = document.getElementById('btn-exit-fullscreen-fab');
     if (btnToggleFullscreen && invoiceTablePanel) {
         btnToggleFullscreen.addEventListener('click', () => {
             setTableFullscreen(!invoiceTablePanel.classList.contains('is-fullscreen'));
         });
+        if (btnExitFullscreenFab) {
+            btnExitFullscreenFab.addEventListener('click', () => setTableFullscreen(false));
+        }
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape' && invoiceTablePanel.classList.contains('is-fullscreen')) {
                 setTableFullscreen(false);
