@@ -1741,7 +1741,10 @@ document.addEventListener('DOMContentLoaded', () => {
                     </button>
                     <button class="btn-view-file" title="View original bill" data-id="${inv.id}">
                         <i class="fa-solid fa-file-invoice"></i>
-                    </button>` : ''}
+                    </button>` : `
+                    <span class="manual-entry-badge" title="No scanned bill attached - this row was typed in directly via Add Manual Bill">
+                        <i class="fa-solid fa-pen"></i> Manual Entry
+                    </span>`}
                     <button class="btn-delete" title="Remove row">
                         <i class="fa-solid fa-trash"></i>
                     </button>
