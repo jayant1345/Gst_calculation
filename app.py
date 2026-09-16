@@ -3105,14 +3105,18 @@ def export_excel():
         elig_cgst = round(cgst * elig_ratio, 2)
         elig_sgst = round(sgst * elig_ratio, 2)
         elig_igst = round(igst * elig_ratio, 2)
+        total_gst = cgst + sgst + igst
+        gst_rate = round((total_gst / taxable) * 100, 2) if taxable else 0.0
         rows.append({
             "state": inv.get('state') or 'Unassigned',
             "branch": inv.get('branch') or 'Unassigned',
             "gstin": inv.get('gstin') or 'N/A',
             "invoice_date": inv.get('invoice_date') or '',
+            "payment_date": inv.get('payment_date') or '',
             "vendor_name": inv.get('vendor_name') or '',
             "invoice_number": inv.get('invoice_number') or '',
             "taxable_value": taxable,
+            "gst_rate": gst_rate,
             "cgst": cgst,
             "sgst": sgst,
             "igst": igst,
@@ -3139,6 +3143,9 @@ def export_excel():
 
     NUMERIC_FIELDS = ["taxable_value", "cgst", "sgst", "igst", "total_invoice_value",
                        "elig_cgst", "elig_sgst", "elig_igst", "inelig_cgst", "inelig_sgst", "inelig_igst"]
+    # gst_rate is a percentage, not an amount -- deliberately excluded from
+    # NUMERIC_FIELDS so it's never summed into subtotal/total rows (a "total"
+    # GST rate is meaningless; those rows leave that column blank instead).
 
     workbook = Workbook()
     worksheet = workbook.active
@@ -3161,23 +3168,23 @@ def export_excel():
 
     # ---- Header (two rows, with merged ELIGIBLE / INELIGIBLE groups) ----
     single_headers = [
-        (1, "State"), (2, "Branch"), (3, "GST No"), (4, "Date"), (5, "Vendor Name"), (6, "Invoice No"),
-        (7, "Taxable Value (INR)"), (8, "CGST (INR)"), (9, "SGST (INR)"), (10, "IGST (INR)"),
-        (11, "Total Invoice Value (INR)")
+        (1, "State"), (2, "Branch"), (3, "GST No"), (4, "Date"), (5, "Payment Date"), (6, "Vendor Name"), (7, "Invoice No"),
+        (8, "Taxable Value (INR)"), (9, "GST Rate"), (10, "CGST (INR)"), (11, "SGST (INR)"), (12, "IGST (INR)"),
+        (13, "Total Invoice Value (INR)")
     ]
     for col_idx, label in single_headers:
         worksheet.merge_cells(start_row=1, start_column=col_idx, end_row=2, end_column=col_idx)
         worksheet.cell(row=1, column=col_idx, value=label)
 
-    worksheet.merge_cells(start_row=1, start_column=12, end_row=1, end_column=14)
-    worksheet.cell(row=1, column=12, value="ELIGIBLE ITC (50%)")
-    worksheet.merge_cells(start_row=1, start_column=15, end_row=1, end_column=17)
-    worksheet.cell(row=1, column=15, value="INELIGIBLE ITC (50%)")
+    worksheet.merge_cells(start_row=1, start_column=14, end_row=1, end_column=16)
+    worksheet.cell(row=1, column=14, value="ELIGIBLE ITC (50%)")
+    worksheet.merge_cells(start_row=1, start_column=17, end_row=1, end_column=19)
+    worksheet.cell(row=1, column=17, value="INELIGIBLE ITC (50%)")
 
-    for col_idx, label in [(12, "CGST"), (13, "SGST"), (14, "IGST"), (15, "CGST"), (16, "SGST"), (17, "IGST")]:
+    for col_idx, label in [(14, "CGST"), (15, "SGST"), (16, "IGST"), (17, "CGST"), (18, "SGST"), (19, "IGST")]:
         worksheet.cell(row=2, column=col_idx, value=label)
 
-    total_cols = 17
+    total_cols = 19
     for row_idx in (1, 2):
         for col_idx in range(1, total_cols + 1):
             cell = worksheet.cell(row=row_idx, column=col_idx)
@@ -3201,15 +3208,18 @@ def export_excel():
 
             for r in branch_rows:
                 values = [
-                    r["state"], r["branch"], r["gstin"], r["invoice_date"], r["vendor_name"], r["invoice_number"],
-                    r["taxable_value"], r["cgst"], r["sgst"], r["igst"], r["total_invoice_value"],
+                    r["state"], r["branch"], r["gstin"], r["invoice_date"], r["payment_date"], r["vendor_name"], r["invoice_number"],
+                    r["taxable_value"], r["gst_rate"], r["cgst"], r["sgst"], r["igst"], r["total_invoice_value"],
                     r["elig_cgst"], r["elig_sgst"], r["elig_igst"], r["inelig_cgst"], r["inelig_sgst"], r["inelig_igst"]
                 ]
                 for col_idx, val in enumerate(values, start=1):
                     cell = worksheet.cell(row=row_idx, column=col_idx, value=val)
                     cell.font = regular_font
                     cell.border = thin_border
-                    if col_idx >= 7:
+                    if col_idx == 9:
+                        cell.alignment = Alignment(horizontal="right")
+                        cell.number_format = '0.00"%"'
+                    elif col_idx >= 8:
                         cell.alignment = Alignment(horizontal="right")
                         cell.number_format = '#,##0.00'
                     else:
@@ -3220,9 +3230,9 @@ def export_excel():
                     grand_totals[f] += r[f]
                 row_idx += 1
 
-            # Branch subtotal row
-            subtotal_values = ["", f"{branch} - Subtotal", "", "", "", "",
-                                branch_totals["taxable_value"], branch_totals["cgst"], branch_totals["sgst"],
+            # Branch subtotal row (GST Rate left blank - a "total rate" is meaningless)
+            subtotal_values = ["", f"{branch} - Subtotal", "", "", "", "", "",
+                                branch_totals["taxable_value"], "", branch_totals["cgst"], branch_totals["sgst"],
                                 branch_totals["igst"], branch_totals["total_invoice_value"],
                                 branch_totals["elig_cgst"], branch_totals["elig_sgst"], branch_totals["elig_igst"],
                                 branch_totals["inelig_cgst"], branch_totals["inelig_sgst"], branch_totals["inelig_igst"]]
@@ -3231,14 +3241,14 @@ def export_excel():
                 cell.font = bold_font
                 cell.fill = subtotal_fill
                 cell.border = thin_border
-                if col_idx >= 7:
+                if col_idx >= 8 and col_idx != 9:
                     cell.alignment = Alignment(horizontal="right")
                     cell.number_format = '#,##0.00'
             row_idx += 1
 
         # State total row
-        state_total_values = [f"{state} - TOTAL", "", "", "", "", "",
-                               state_totals["taxable_value"], state_totals["cgst"], state_totals["sgst"],
+        state_total_values = [f"{state} - TOTAL", "", "", "", "", "", "",
+                               state_totals["taxable_value"], "", state_totals["cgst"], state_totals["sgst"],
                                state_totals["igst"], state_totals["total_invoice_value"],
                                state_totals["elig_cgst"], state_totals["elig_sgst"], state_totals["elig_igst"],
                                state_totals["inelig_cgst"], state_totals["inelig_sgst"], state_totals["inelig_igst"]]
@@ -3247,14 +3257,14 @@ def export_excel():
             cell.font = bold_font
             cell.fill = total_fill
             cell.border = thin_border
-            if col_idx >= 7:
+            if col_idx >= 8 and col_idx != 9:
                 cell.alignment = Alignment(horizontal="right")
                 cell.number_format = '#,##0.00'
         row_idx += 1
 
     # ---- Grand total row ----
-    grand_total_values = ["GRAND TOTAL", "", "", "", "", "",
-                           grand_totals["taxable_value"], grand_totals["cgst"], grand_totals["sgst"],
+    grand_total_values = ["GRAND TOTAL", "", "", "", "", "", "",
+                           grand_totals["taxable_value"], "", grand_totals["cgst"], grand_totals["sgst"],
                            grand_totals["igst"], grand_totals["total_invoice_value"],
                            grand_totals["elig_cgst"], grand_totals["elig_sgst"], grand_totals["elig_igst"],
                            grand_totals["inelig_cgst"], grand_totals["inelig_sgst"], grand_totals["inelig_igst"]]
@@ -3263,7 +3273,7 @@ def export_excel():
         cell.font = bold_font
         cell.fill = total_fill
         cell.border = double_bottom_border
-        if col_idx >= 7:
+        if col_idx >= 8 and col_idx != 9:
             cell.alignment = Alignment(horizontal="right")
             cell.number_format = '#,##0.00'
 
@@ -3278,6 +3288,8 @@ def export_excel():
                 val_to_check = str(cell.value)
                 if cell.number_format == '#,##0.00' and isinstance(cell.value, (int, float)):
                     val_to_check = f"{cell.value:,.2f}"
+                elif cell.number_format == '0.00"%"' and isinstance(cell.value, (int, float)):
+                    val_to_check = f"{cell.value:.2f}%"
                 max_len = max(max_len, len(val_to_check))
         worksheet.column_dimensions[col_letter].width = max(max_len + 3, 12)
 
