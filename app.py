@@ -348,21 +348,10 @@ def init_db():
         cur.execute('ALTER TABLE invoices ADD COLUMN IF NOT EXISTS remark VARCHAR(500);')
 
         # Migrate existing installs that predate branch GL-voucher tallying:
-        # which expense head (from expense_code_catalog) this bill belongs to
+        # which GL/PL code (the same shared catalog Section 3 manages under
+        # "Manage GL/PL Codes" - one bank chart of accounts, not a separate
+        # list per section) this bill belongs to
         cur.execute('ALTER TABLE invoices ADD COLUMN IF NOT EXISTS gl_code VARCHAR(50);')
-
-        # Expense/purchase-side GL code catalog - separate from income_code_catalog
-        # (Section 3 is income/Output GST; this is expense/Input ITC). Admin-managed,
-        # same durability reasoning as income_code_catalog: kept in the DB so it
-        # survives a Railway redeploy rather than living only in a bundled file.
-        cur.execute('''
-            CREATE TABLE IF NOT EXISTS expense_code_catalog (
-                code VARCHAR(50) PRIMARY KEY,
-                particulars VARCHAR(255) NOT NULL,
-                category VARCHAR(100),
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-        ''')
 
         # Branch GL voucher entries - one row per (branch, GL code, month): the
         # branch's own ledger total for that expense head, to be tallied against
@@ -4717,35 +4706,6 @@ def get_income_code_meta(code_str):
     return None
 
 # ---------------------------------------------------------------------------
-# Expense/Purchase-side GL code catalog (Section 1 - separate from the
-# income catalog above). Starts empty; the CA/admin builds it up through the
-# "Manage Expense GL Codes" panel as branch expense heads come up, rather
-# than being seeded from a bundled reference file like the income side.
-# ---------------------------------------------------------------------------
-EXPENSE_MASTER_CODES = []
-
-def load_expense_code_catalog():
-    global EXPENSE_MASTER_CODES
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute('SELECT code, particulars, category FROM expense_code_catalog')
-        EXPENSE_MASTER_CODES = [dict(r) for r in cur.fetchall()]
-        cur.close()
-        conn.close()
-    except Exception as e:
-        print(f"Error loading expense code catalog from DB: {e}")
-
-load_expense_code_catalog()
-
-def get_expense_code_meta(code_str):
-    clean = str(code_str).strip().upper()
-    for m in EXPENSE_MASTER_CODES:
-        if str(m.get('code')).strip().upper() == clean:
-            return m
-    return None
-
-# ---------------------------------------------------------------------------
 # Ledger statement parsing (reads the bank's actual GL/PL account statements)
 #
 # The core banking system exports these in four different layouts depending
@@ -5301,7 +5261,7 @@ def finalize_expense_ledger_accounts(raw_accounts, financial_year, month):
     accounts), so the amount actually spent is debits minus credits - the
     mirror image of finalize_ledger_accounts' credits-minus-debits. No
     reclass rules or GST calculation apply here; this is a plain expense
-    total per (branch, GL code), matched against the expense catalog."""
+    total per (branch, GL code), matched against the shared GL/PL code catalog."""
     by_branch = collections.defaultdict(dict)
     for a in raw_accounts:
         if not a.get('branch') or not a.get('gl_code'):
@@ -5314,7 +5274,7 @@ def finalize_expense_ledger_accounts(raw_accounts, financial_year, month):
     for branch, code_map in by_branch.items():
         for code, a in code_map.items():
             amount = round(-(a.get('net') or 0.0), 2)
-            meta = get_expense_code_meta(code)
+            meta = get_income_code_meta(code)
             entries.append({
                 "branch": branch,
                 "financial_year": financial_year,
@@ -5323,7 +5283,7 @@ def finalize_expense_ledger_accounts(raw_accounts, financial_year, month):
                 "particulars": meta.get('particulars') if meta else (a.get('name') or 'Unclassified Expense'),
                 "voucher_amount": amount,
                 "needs_review": meta is None,
-                "review_reason": None if meta else f"GL code {code} not found in expense catalog - please add it or verify",
+                "review_reason": None if meta else f"GL code {code} not found in the GL/PL code catalog (Manage GL/PL Codes) - please add it or verify",
                 "filename": a.get('filename', 'upload'),
             })
     return entries
@@ -5586,85 +5546,6 @@ def delete_income_code_master(code):
 
     return jsonify({"success": True, "affected_entries": affected_count})
 
-@app.route('/api/expense-codes-master', methods=['GET'])
-@login_required
-def get_expense_codes_master():
-    return jsonify({"codes": EXPENSE_MASTER_CODES})
-
-@app.route('/api/expense-codes-master', methods=['POST'])
-@login_required
-def add_expense_code_master():
-    """Admin-only: add or edit an expense/purchase-side GL code (Section 1 -
-    separate catalog from the income side). Used both to tag Purchase Bills
-    and to classify branch GL voucher uploads."""
-    if not is_admin_user():
-        return jsonify({"error": "Adding or editing Expense GL codes is restricted to Administrator users only."}), 403
-
-    data = request.json or {}
-    code = str(data.get('code', '')).strip().upper()
-    particulars = str(data.get('particulars', '')).strip()
-    if not code or not particulars:
-        return jsonify({"error": "GL code and particulars are both required."}), 400
-    category = str(data.get('category') or 'General Expense').strip()
-
-    global EXPENSE_MASTER_CODES
-    entry = {"code": code, "particulars": particulars, "category": category}
-    existing = next((m for m in EXPENSE_MASTER_CODES if str(m.get('code')).strip().upper() == code), None)
-    if existing:
-        existing.update(entry)
-    else:
-        EXPENSE_MASTER_CODES.append(entry)
-
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute('''
-            INSERT INTO expense_code_catalog (code, particulars, category)
-            VALUES (%s, %s, %s)
-            ON CONFLICT (code) DO UPDATE SET
-                particulars = EXCLUDED.particulars,
-                category = EXCLUDED.category
-        ''', (code, particulars, category))
-        conn.commit()
-        cur.close()
-        conn.close()
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-    log_activity(session['user_id'], 'EDIT_EXPENSE_GL_CODE' if existing else 'ADD_EXPENSE_GL_CODE',
-                 f"{'Edited' if existing else 'Added'} Expense GL code {code} ({particulars})")
-
-    return jsonify({"success": True, "code": entry, "updated_existing": existing is not None})
-
-@app.route('/api/expense-codes-master/<code>', methods=['DELETE'])
-@login_required
-def delete_expense_code_master(code):
-    """Admin-only: remove an expense GL code. Bills/vouchers already tagged
-    with it are left as-is (not deleted) since the code no longer resolving
-    in the catalog is itself a visible signal something needs reclassifying."""
-    if not is_admin_user():
-        return jsonify({"error": "Deleting Expense GL codes is restricted to Administrator users only."}), 403
-
-    clean = str(code).strip().upper()
-    global EXPENSE_MASTER_CODES
-    before = len(EXPENSE_MASTER_CODES)
-    EXPENSE_MASTER_CODES = [m for m in EXPENSE_MASTER_CODES if str(m.get('code')).strip().upper() != clean]
-    if len(EXPENSE_MASTER_CODES) == before:
-        return jsonify({"error": f"Code {code} not found in the expense catalog."}), 404
-
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute('DELETE FROM expense_code_catalog WHERE UPPER(code) = %s', (clean,))
-        conn.commit()
-        cur.close()
-        conn.close()
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-    log_activity(session['user_id'], 'DELETE_EXPENSE_GL_CODE', f"Deleted Expense GL code {clean}")
-    return jsonify({"success": True})
-
 @app.route('/api/upload-gl-voucher', methods=['POST'])
 @login_required
 def upload_gl_voucher():
@@ -5715,13 +5596,13 @@ def upload_gl_voucher():
                                 "error": "No GL code could be read from this voucher - add it via Manual Entry instead"
                             })
                             continue
-                        meta = get_expense_code_meta(gl_code)
+                        meta = get_income_code_meta(gl_code)
                         entries.append({
                             "branch": branch, "financial_year": fy, "month": month, "gl_code": gl_code,
                             "particulars": meta.get('particulars') if meta else (v.get('particulars') or 'Unclassified Expense'),
                             "voucher_amount": amount,
                             "needs_review": meta is None,
-                            "review_reason": None if meta else f"GL code {gl_code} not found in expense catalog - please add it or verify",
+                            "review_reason": None if meta else f"GL code {gl_code} not found in the GL/PL code catalog (Manage GL/PL Codes) - please add it or verify",
                             "source": "scan",
                             "file_data": fbytes,
                         })
@@ -5811,10 +5692,10 @@ def save_gl_voucher_manual():
     if not gl_code or not fy or not month:
         return jsonify({"error": "Branch, Financial Year, Month, and GL Code are required."}), 400
 
-    meta = get_expense_code_meta(gl_code)
+    meta = get_income_code_meta(gl_code)
     particulars = meta.get('particulars') if meta else 'Unclassified Expense'
     needs_review = meta is None
-    review_reason = None if meta else f"GL code {gl_code} not found in expense catalog - please add it or verify"
+    review_reason = None if meta else f"GL code {gl_code} not found in the GL/PL code catalog (Manage GL/PL Codes) - please add it or verify"
 
     try:
         conn = get_db_connection()
@@ -5889,27 +5770,48 @@ def gl_tally_report():
     """Branch-wise, GL-code-wise reconciliation: sum of Purchase Bills tagged
     with each GL code vs. that branch's own voucher total for the same GL
     code and period. Tally basis is Total Invoice Value (taxable + GST) -
-    a confirmed decision, not a default guess."""
+    a confirmed decision, not a default guess. Optional financial_year/month
+    query params combine with (narrow) the report, matching the ITC
+    Dashboard's own top-level period filter so both stay in sync."""
     client_id = get_current_client_id()
+    fy_filter = request.args.get('financial_year', '').strip()
+    month_filter = request.args.get('month', '').strip()
     try:
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute('''
+
+        bill_query = '''
             SELECT branch, financial_year, month, gl_code,
                    SUM(taxable_value + cgst + sgst + igst)::float AS bills_total,
                    COUNT(*) AS bill_count
             FROM invoices
             WHERE client_id = %s AND gl_code IS NOT NULL AND gl_code != ''
-            GROUP BY branch, financial_year, month, gl_code
-        ''', (client_id,))
+        '''
+        bill_params = [client_id]
+        if fy_filter:
+            bill_query += ' AND financial_year = %s'
+            bill_params.append(fy_filter)
+        if month_filter:
+            bill_query += ' AND month = %s'
+            bill_params.append(month_filter)
+        bill_query += ' GROUP BY branch, financial_year, month, gl_code'
+        cur.execute(bill_query, bill_params)
         bill_totals = {(r['branch'], r['financial_year'], r['month'], r['gl_code']): r for r in cur.fetchall()}
 
-        cur.execute('''
+        voucher_query = '''
             SELECT branch, financial_year, month, gl_code, particulars,
                    voucher_amount::float AS voucher_total
             FROM purchase_gl_vouchers
             WHERE client_id = %s
-        ''', (client_id,))
+        '''
+        voucher_params = [client_id]
+        if fy_filter:
+            voucher_query += ' AND financial_year = %s'
+            voucher_params.append(fy_filter)
+        if month_filter:
+            voucher_query += ' AND month = %s'
+            voucher_params.append(month_filter)
+        cur.execute(voucher_query, voucher_params)
         voucher_totals = {(r['branch'], r['financial_year'], r['month'], r['gl_code']): r for r in cur.fetchall()}
 
         cur.close()
@@ -5925,7 +5827,7 @@ def gl_tally_report():
         voucher_row = voucher_totals.get(key)
         bills_total = bill_row['bills_total'] if bill_row else 0.0
         voucher_total = voucher_row['voucher_total'] if voucher_row else 0.0
-        particulars = (voucher_row['particulars'] if voucher_row else None) or (get_expense_code_meta(gl_code) or {}).get('particulars') or gl_code
+        particulars = (voucher_row['particulars'] if voucher_row else None) or (get_income_code_meta(gl_code) or {}).get('particulars') or gl_code
         diff = round(bills_total - voucher_total, 2)
 
         if bill_row and not voucher_row:

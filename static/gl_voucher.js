@@ -124,7 +124,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!sel) return;
         const current = sel.value;
         sel.innerHTML = '<option value="">-- Select --</option>' +
-            (window.expenseCodes || []).slice().sort((a, b) => a.code.localeCompare(b.code))
+            (window.glPlCodes || []).slice().sort((a, b) => a.code.localeCompare(b.code))
                 .map(c => `<option value="${c.code}">${c.code} - ${c.particulars}</option>`).join('');
         sel.value = current;
     };
@@ -145,7 +145,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const amount = parseFloat(document.getElementById('glm-amount').value) || 0;
 
             if (!branch || !fy || !glCode) {
-                alert('Branch, Financial Year, and GL Code are required.');
+                alert('Branch, Financial Year, and GL/PL Code are required.');
                 saveBtn.disabled = false;
                 saveBtn.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Add Voucher Entry';
                 return;
@@ -180,95 +180,97 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // Manage Expense GL Codes modal
-    const expenseCodesModalOverlay = document.getElementById('expenseCodesModalOverlay');
-    const expenseCodesModalClose = document.getElementById('expenseCodesModalClose');
-    const expenseCodeForm = document.getElementById('expenseCodeForm');
-    const expenseCodeFormMsg = document.getElementById('expenseCodeFormMsg');
-    const expenseCodesTableBody = document.getElementById('expenseCodesTableBody');
-    const expenseCodeSearchInput = document.getElementById('expenseCodeSearchInput');
-    const expenseCodeSearchCount = document.getElementById('expenseCodeSearchCount');
+    // Manage GL/PL Codes modal - same shared catalog Section 3 manages
+    // (/api/income-codes-master), just also editable here so tagging a bill
+    // or classifying a voucher never requires leaving Section 1.
+    const glCodesModalOverlay = document.getElementById('glCodesModalOverlay');
+    const glCodesModalClose = document.getElementById('glCodesModalClose');
+    const glCodeForm = document.getElementById('glCodeForm');
+    const glCodeFormMsg = document.getElementById('glCodeFormMsg');
+    const glCodesTableBody = document.getElementById('glCodesTableBody');
+    const glCodeSearchInput = document.getElementById('glCodeSearchInput');
+    const glCodeSearchCount = document.getElementById('glCodeSearchCount');
 
-    function openExpenseCodesModal() {
-        if (!expenseCodesModalOverlay) return;
-        expenseCodesModalOverlay.style.display = 'flex';
-        renderExpenseCodesTable();
+    function openGlCodesModal() {
+        if (!glCodesModalOverlay) return;
+        glCodesModalOverlay.style.display = 'flex';
+        renderGlCodesTable();
     }
-    function closeExpenseCodesModal() {
-        if (expenseCodesModalOverlay) expenseCodesModalOverlay.style.display = 'none';
+    function closeGlCodesModal() {
+        if (glCodesModalOverlay) glCodesModalOverlay.style.display = 'none';
     }
 
     ['btn-manage-expense-codes', 'mb-manage-expense-codes-btn'].forEach(id => {
         const btn = document.getElementById(id);
-        if (btn) btn.addEventListener('click', (e) => { e.preventDefault(); openExpenseCodesModal(); });
+        if (btn) btn.addEventListener('click', (e) => { e.preventDefault(); openGlCodesModal(); });
     });
-    if (expenseCodesModalClose) expenseCodesModalClose.addEventListener('click', closeExpenseCodesModal);
-    if (expenseCodesModalOverlay) {
-        expenseCodesModalOverlay.addEventListener('click', (e) => {
-            if (e.target === expenseCodesModalOverlay) closeExpenseCodesModal();
+    if (glCodesModalClose) glCodesModalClose.addEventListener('click', closeGlCodesModal);
+    if (glCodesModalOverlay) {
+        glCodesModalOverlay.addEventListener('click', (e) => {
+            if (e.target === glCodesModalOverlay) closeGlCodesModal();
         });
     }
 
-    function renderExpenseCodesTable() {
-        if (!expenseCodesTableBody) return;
-        const query = expenseCodeSearchInput ? expenseCodeSearchInput.value.toLowerCase().trim() : '';
-        const codes = (window.expenseCodes || []).filter(c =>
+    function renderGlCodesTable() {
+        if (!glCodesTableBody) return;
+        const query = glCodeSearchInput ? glCodeSearchInput.value.toLowerCase().trim() : '';
+        const codes = (window.glPlCodes || []).filter(c =>
             !query || c.code.toLowerCase().includes(query) || (c.particulars || '').toLowerCase().includes(query)
         ).sort((a, b) => a.code.localeCompare(b.code));
 
-        if (expenseCodeSearchCount) expenseCodeSearchCount.textContent = `${codes.length} code(s)`;
+        if (glCodeSearchCount) glCodeSearchCount.textContent = `${codes.length} code(s)`;
 
         if (codes.length === 0) {
-            expenseCodesTableBody.innerHTML = `<tr><td colspan="4" style="padding: 16px; text-align: center; color: #94a3b8;">No expense GL codes yet. Add one above.</td></tr>`;
+            glCodesTableBody.innerHTML = `<tr><td colspan="4" style="padding: 16px; text-align: center; color: #94a3b8;">No GL/PL codes yet. Add one above.</td></tr>`;
             return;
         }
 
-        expenseCodesTableBody.innerHTML = codes.map(c => `
+        glCodesTableBody.innerHTML = codes.map(c => `
             <tr style="border-top: 1px solid var(--border-color);">
                 <td style="padding: 8px 10px; font-family: monospace;">${c.code}</td>
                 <td style="padding: 8px 10px;">${c.particulars}</td>
                 <td style="padding: 8px 10px; color: #64748b;">${c.category || ''}</td>
                 <td style="padding: 8px 10px;">
-                    <button type="button" class="btn-edit-expense-code" data-code="${c.code}" title="Edit"><i class="fa-solid fa-pen"></i></button>
-                    <button type="button" class="btn-delete-expense-code" data-code="${c.code}" title="Delete"><i class="fa-solid fa-trash"></i></button>
+                    <button type="button" class="btn-edit-gl-code" data-code="${c.code}" title="Edit"><i class="fa-solid fa-pen"></i></button>
+                    <button type="button" class="btn-delete-gl-code" data-code="${c.code}" title="Delete"><i class="fa-solid fa-trash"></i></button>
                 </td>
             </tr>
         `).join('');
 
-        expenseCodesTableBody.querySelectorAll('.btn-edit-expense-code').forEach(btn => {
+        glCodesTableBody.querySelectorAll('.btn-edit-gl-code').forEach(btn => {
             btn.addEventListener('click', () => {
-                const c = window.expenseCodes.find(x => x.code === btn.dataset.code);
+                const c = window.glPlCodes.find(x => x.code === btn.dataset.code);
                 if (!c) return;
-                document.getElementById('expenseCodeInputCode').value = c.code;
-                document.getElementById('expenseCodeInputParticulars').value = c.particulars;
-                document.getElementById('expenseCodeInputCategory').value = c.category || '';
+                document.getElementById('glCodeInputCode').value = c.code;
+                document.getElementById('glCodeInputParticulars').value = c.particulars;
+                document.getElementById('glCodeInputCategory').value = c.category || '';
             });
         });
-        expenseCodesTableBody.querySelectorAll('.btn-delete-expense-code').forEach(btn => {
+        glCodesTableBody.querySelectorAll('.btn-delete-gl-code').forEach(btn => {
             btn.addEventListener('click', () => {
-                if (!confirm(`Delete Expense GL code ${btn.dataset.code}? Bills/vouchers already tagged with it are left as-is.`)) return;
-                fetch(`/api/expense-codes-master/${encodeURIComponent(btn.dataset.code)}`, { method: 'DELETE' })
+                if (!confirm(`Delete GL/PL code ${btn.dataset.code}? This is the same shared catalog Income & Output GST uses - bills/vouchers/income entries already tagged with it are left as-is.`)) return;
+                fetch(`/api/income-codes-master/${encodeURIComponent(btn.dataset.code)}`, { method: 'DELETE' })
                     .then(async res => {
                         const data = await res.json().catch(() => ({}));
                         if (!res.ok) throw new Error(data.error || 'Failed to delete code.');
                         return data;
                     })
-                    .then(() => loadExpenseCodes().then(renderExpenseCodesTable))
+                    .then(() => window.loadGlPlCodes().then(renderGlCodesTable))
                     .catch(err => alert(err.message || 'Failed to delete code.'));
             });
         });
     }
 
-    if (expenseCodeSearchInput) expenseCodeSearchInput.addEventListener('input', renderExpenseCodesTable);
+    if (glCodeSearchInput) glCodeSearchInput.addEventListener('input', renderGlCodesTable);
 
-    if (expenseCodeForm) {
-        expenseCodeForm.addEventListener('submit', (e) => {
+    if (glCodeForm) {
+        glCodeForm.addEventListener('submit', (e) => {
             e.preventDefault();
-            const code = document.getElementById('expenseCodeInputCode').value.trim();
-            const particulars = document.getElementById('expenseCodeInputParticulars').value.trim();
-            const category = document.getElementById('expenseCodeInputCategory').value.trim();
+            const code = document.getElementById('glCodeInputCode').value.trim();
+            const particulars = document.getElementById('glCodeInputParticulars').value.trim();
+            const category = document.getElementById('glCodeInputCategory').value.trim();
 
-            fetch('/api/expense-codes-master', {
+            fetch('/api/income-codes-master', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ code, particulars, category })
@@ -279,23 +281,23 @@ document.addEventListener('DOMContentLoaded', () => {
                 return data;
             })
             .then(() => {
-                expenseCodeForm.reset();
-                if (expenseCodeFormMsg) {
-                    expenseCodeFormMsg.style.display = 'block';
-                    expenseCodeFormMsg.style.background = '#dcfce7';
-                    expenseCodeFormMsg.style.color = '#166534';
-                    expenseCodeFormMsg.textContent = `Saved GL code ${code}.`;
-                    setTimeout(() => { expenseCodeFormMsg.style.display = 'none'; }, 3000);
+                glCodeForm.reset();
+                if (glCodeFormMsg) {
+                    glCodeFormMsg.style.display = 'block';
+                    glCodeFormMsg.style.background = '#dcfce7';
+                    glCodeFormMsg.style.color = '#166534';
+                    glCodeFormMsg.textContent = `Saved GL/PL code ${code}.`;
+                    setTimeout(() => { glCodeFormMsg.style.display = 'none'; }, 3000);
                 }
-                return loadExpenseCodes();
+                return window.loadGlPlCodes();
             })
-            .then(() => renderExpenseCodesTable())
+            .then(() => renderGlCodesTable())
             .catch(err => {
-                if (expenseCodeFormMsg) {
-                    expenseCodeFormMsg.style.display = 'block';
-                    expenseCodeFormMsg.style.background = '#fee2e2';
-                    expenseCodeFormMsg.style.color = '#991b1b';
-                    expenseCodeFormMsg.textContent = err.message || 'Failed to save code.';
+                if (glCodeFormMsg) {
+                    glCodeFormMsg.style.display = 'block';
+                    glCodeFormMsg.style.background = '#fee2e2';
+                    glCodeFormMsg.style.color = '#991b1b';
+                    glCodeFormMsg.textContent = err.message || 'Failed to save code.';
                 }
             });
         });
@@ -315,19 +317,34 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    // The tally follows the ITC Dashboard's own top-level FY/Month filter,
+    // so switching that filter narrows this table too instead of always
+    // showing every period at once.
+    const topFyFilter = document.getElementById('fy-filter');
+    const topMonthFilter = document.getElementById('month-filter');
+
     function loadGlTallyReport() {
         if (!glTallyTableBody) return;
-        fetch('/api/gl-tally-report')
+        const fyValue = topFyFilter ? topFyFilter.value.trim() : '';
+        const monthValue = topMonthFilter ? topMonthFilter.value.trim() : '';
+        const params = new URLSearchParams();
+        if (fyValue) params.set('financial_year', fyValue);
+        if (monthValue) params.set('month', monthValue);
+
+        fetch(`/api/gl-tally-report?${params.toString()}`)
             .then(res => res.json())
             .then(data => {
                 const report = data.report || [];
                 if (report.length === 0) {
+                    const filtered = fyValue || monthValue;
                     glTallyTableBody.innerHTML = `
                         <tr class="empty-state-row">
                             <td colspan="8">
                                 <div class="empty-state">
                                     <i class="fa-solid fa-scale-balanced"></i>
-                                    <p>No tally data yet. Upload a branch ledger export, scan a voucher, or add one manually above.</p>
+                                    <p>${filtered
+                                        ? 'No tally data for the selected FY/Month filter above.'
+                                        : 'No tally data yet. Upload a branch ledger export, scan a voucher, or add one manually above.'}</p>
                                 </div>
                             </td>
                         </tr>`;
@@ -350,6 +367,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     if (btnRefreshGlTally) btnRefreshGlTally.addEventListener('click', loadGlTallyReport);
+    if (topFyFilter) topFyFilter.addEventListener('change', loadGlTallyReport);
+    if (topMonthFilter) topMonthFilter.addEventListener('change', loadGlTallyReport);
 
     loadGlTallyReport();
 });

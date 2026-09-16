@@ -178,7 +178,11 @@
                                 <option value="">All Months</option>
                             </select>
                         </div>
-                        <button type="button" class="btn btn-secondary btn-sm" id="btn-reset-period" title="Reset filter to All Years and All Months" style="display: none; padding: 6px 12px; font-size: 12.5px;">
+                        <div class="filter-group">
+                            <label for="payment-month-filter"><i class="fa-solid fa-calendar-check"></i> Payment Month</label>
+                            <input type="month" id="payment-month-filter" class="form-control period-select" title="Filter invoices by the month they were actually paid">
+                        </div>
+                        <button type="button" class="btn btn-secondary btn-sm" id="btn-reset-period" title="Reset all period filters" style="display: none; padding: 6px 12px; font-size: 12.5px;">
                             <i class="fa-solid fa-rotate-left"></i> Reset
                         </button>
                     </div>
@@ -394,7 +398,7 @@
                                 </th>
                                 <th width="10%" title="e.g. GSTIN not mentioned on bill">Remark</th>
                                 <th width="9%" title="Branch expense head, for the branch GL voucher tally" data-col="gl_code">
-                                    <div class="th-content"><span>GL Code</span><button type="button" class="col-filter-trigger" data-col="gl_code" title="Filter GL Code"><i class="fa-solid fa-filter"></i></button></div>
+                                    <div class="th-content"><span>GL/PL Code</span><button type="button" class="col-filter-trigger" data-col="gl_code" title="Filter GL/PL Code"><i class="fa-solid fa-filter"></i></button></div>
                                 </th>
                                 <th width="9%" class="th-green">Eligible ITC (50%)</th>
                                 <th width="9%" class="th-red">Ineligible ITC (50%)</th>
@@ -425,8 +429,8 @@
                     </div>
                     <div class="toolbar-right">
                         {% if is_admin %}
-                        <button class="btn btn-secondary" id="btn-manage-expense-codes">
-                            <i class="fa-solid fa-list-check"></i> Manage Expense GL Codes
+                        <button class="btn btn-secondary" id="btn-manage-expense-codes" title="Manage the shared GL/PL code catalog (also used by Income & Output GST)">
+                            <i class="fa-solid fa-list-check"></i> Manage GL/PL Codes
                         </button>
                         {% endif %}
                         <button class="btn btn-secondary" id="btn-refresh-gl-tally">
@@ -521,7 +525,7 @@
                             </select>
                         </div>
                         <div class="form-field">
-                            <label for="glm-gl-code">GL Code</label>
+                            <label for="glm-gl-code">GL/PL Code</label>
                             <select id="glm-gl-code" required>
                                 <option value="">-- Select --</option>
                             </select>
@@ -548,7 +552,7 @@
                         <thead>
                             <tr>
                                 <th width="12%">Branch</th>
-                                <th width="8%">GL Code</th>
+                                <th width="8%">GL/PL Code</th>
                                 <th width="16%">Particulars</th>
                                 <th width="10%">Period</th>
                                 <th width="14%">Purchase Bills Total (₹)</th>
@@ -632,11 +636,11 @@
 
                 <div class="form-field">
                     <label for="mb-gl-code">
-                        GL Code <span class="field-hint">(optional &mdash; for branch expense tally)</span>
+                        GL/PL Code <span class="field-hint">(optional &mdash; for branch expense tally)</span>
                         {% if is_admin %}<button type="button" class="link-btn" id="mb-manage-expense-codes-btn">Manage codes</button>{% endif %}
                     </label>
                     <select id="mb-gl-code">
-                        <option value="">-- No GL code --</option>
+                        <option value="">-- No GL/PL code --</option>
                     </select>
                 </div>
 
@@ -728,38 +732,38 @@
         </div>
     </div>
 
-    <!-- Manage Expense GL Codes Modal (admin-only) -->
-    <div class="modal-overlay" id="expenseCodesModalOverlay" style="display: none;">
+    <!-- Manage GL/PL Codes Modal (admin-only) - same shared catalog Section 3 manages -->
+    <div class="modal-overlay" id="glCodesModalOverlay" style="display: none;">
         <div class="modal-card" style="max-width: 640px; width: 92vw; max-height: 85vh; display: flex; flex-direction: column;">
             <div class="modal-header">
-                <h3><i class="fa-solid fa-list-check"></i> Manage Expense GL Codes</h3>
-                <button type="button" class="modal-close" id="expenseCodesModalClose" aria-label="Close">
+                <h3><i class="fa-solid fa-list-check"></i> Manage GL/PL Codes</h3>
+                <button type="button" class="modal-close" id="glCodesModalClose" aria-label="Close">
                     <i class="fa-solid fa-xmark"></i>
                 </button>
             </div>
             <div class="modal-body" style="display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden;">
                 <p style="font-size: 12.5px; color: #64748b; margin: -4px 0 4px; flex-shrink: 0;">
-                    These are the branch expense heads (Security Charges, AMC, Stationery, etc.) used to tag Purchase Bills and to classify uploaded branch GL vouchers for the tally below.
+                    One shared code list used across the whole bank &mdash; the same catalog Income &amp; Output GST manages. Adding a code here (e.g. for a branch expense head like Security Charges or AMC) makes it available for tagging Purchase Bills and classifying GL vouchers immediately.
                 </p>
-                <form id="expenseCodeForm" class="form-grid" style="margin-bottom: 4px; flex-shrink: 0;">
+                <form id="glCodeForm" class="form-grid" style="margin-bottom: 4px; flex-shrink: 0;">
                     <div class="form-field">
-                        <label for="expenseCodeInputCode">GL Code</label>
-                        <input type="text" id="expenseCodeInputCode" placeholder="e.g. 4021" autocomplete="off" required>
+                        <label for="glCodeInputCode">GL / PL Code</label>
+                        <input type="text" id="glCodeInputCode" placeholder="e.g. 4021" autocomplete="off" required>
                     </div>
                     <div class="form-field">
-                        <label for="expenseCodeInputParticulars">Particulars</label>
-                        <input type="text" id="expenseCodeInputParticulars" placeholder="e.g. Security Charges" autocomplete="off" required>
+                        <label for="glCodeInputParticulars">Particulars</label>
+                        <input type="text" id="glCodeInputParticulars" placeholder="e.g. Security Charges" autocomplete="off" required>
                     </div>
                     <div class="form-field" style="grid-column: 1 / -1;">
-                        <label for="expenseCodeInputCategory">Category <span class="field-hint">(optional)</span></label>
-                        <input type="text" id="expenseCodeInputCategory" placeholder="e.g. Facility & Security" autocomplete="off">
+                        <label for="glCodeInputCategory">Category <span class="field-hint">(optional)</span></label>
+                        <input type="text" id="glCodeInputCategory" placeholder="e.g. Facility & Security" autocomplete="off">
                     </div>
                 </form>
-                <div id="expenseCodeFormMsg" style="display:none; font-size: 12.5px; padding: 8px 12px; border-radius: 8px; flex-shrink: 0;"></div>
+                <div id="glCodeFormMsg" style="display:none; font-size: 12.5px; padding: 8px 12px; border-radius: 8px; flex-shrink: 0;"></div>
 
                 <div style="margin-top: 10px; display: flex; align-items: center; gap: 8px; flex-shrink: 0;">
-                    <input type="text" id="expenseCodeSearchInput" placeholder="Search by code or particulars..." style="flex: 1; padding: 8px 12px; border-radius: 8px; border: 1px solid #cbd5e1; font-size: 12.5px;">
-                    <span id="expenseCodeSearchCount" style="font-size: 11.5px; color: #94a3b8; white-space: nowrap;"></span>
+                    <input type="text" id="glCodeSearchInput" placeholder="Search by code or particulars..." style="flex: 1; padding: 8px 12px; border-radius: 8px; border: 1px solid #cbd5e1; font-size: 12.5px;">
+                    <span id="glCodeSearchCount" style="font-size: 11.5px; color: #94a3b8; white-space: nowrap;"></span>
                 </div>
                 <div style="margin-top: 6px; flex: 1; min-height: 150px; overflow: auto; border: 1px solid var(--border-color); border-radius: 10px;">
                     <table style="width: 100%; min-width: 420px; border-collapse: collapse; font-size: 12.5px; table-layout: fixed;">
@@ -777,7 +781,7 @@
                                 <th style="padding: 8px 10px;">Actions</th>
                             </tr>
                         </thead>
-                        <tbody id="expenseCodesTableBody"></tbody>
+                        <tbody id="glCodesTableBody"></tbody>
                     </table>
                 </div>
             </div>

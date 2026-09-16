@@ -17,6 +17,18 @@ document.addEventListener('DOMContentLoaded', () => {
     const searchInput = document.getElementById('table-search');
     const fyFilter = document.getElementById('fy-filter');
     const monthFilter = document.getElementById('month-filter');
+    const paymentMonthFilter = document.getElementById('payment-month-filter');
+
+    // Parses a canonical DD/MM/YYYY payment_date and checks it falls in the
+    // "YYYY-MM" value of the native <input type="month"> payment filter.
+    function paymentDateInFilterMonth(paymentDate, filterMonthValue) {
+        if (!filterMonthValue) return true;
+        if (!paymentDate) return false;
+        const parts = String(paymentDate).trim().split('/');
+        if (parts.length !== 3) return false;
+        const [, mm, yyyy] = parts;
+        return `${yyyy}-${mm}` === filterMonthValue;
+    }
     const invoiceCountText = document.getElementById('invoice-count');
     const branchInput = document.getElementById('branch-input');
     const stateInput = document.getElementById('state-input');
@@ -161,23 +173,26 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     loadMasterData();
 
-    // Expense GL Code catalog (Section 1's branch GL voucher tally) - shared
-    // with gl_voucher.js, which also reads/writes window.expenseCodes.
-    window.expenseCodes = [];
-    function loadExpenseCodes() {
-        return fetch('/api/expense-codes-master')
+    // GL/PL Code catalog - the SAME shared list Section 3 (Income & Output
+    // GST) manages under "Manage GL/PL Codes". One bank chart of accounts,
+    // not a separate list per section. gl_voucher.js also reads window.glPlCodes.
+    window.glPlCodes = [];
+    function loadGlPlCodes() {
+        return fetch('/api/income-codes-master')
             .then(res => res.json())
             .then(data => {
-                window.expenseCodes = data.codes || [];
+                window.glPlCodes = data.codes || [];
                 populateGlCodeDropdowns();
             })
-            .catch(err => console.error("Error loading expense GL codes:", err));
+            .catch(err => console.error("Error loading GL/PL codes:", err));
     }
-    loadExpenseCodes();
+    loadGlPlCodes();
+    window.loadGlPlCodes = loadGlPlCodes;
+    window.populateGlCodeDropdowns = () => populateGlCodeDropdowns();
 
     function populateGlCodeDropdowns() {
-        const optionsHtml = '<option value="">-- No GL code --</option>' +
-            window.expenseCodes.slice().sort((a, b) => a.code.localeCompare(b.code))
+        const optionsHtml = '<option value="">-- No GL/PL code --</option>' +
+            window.glPlCodes.slice().sort((a, b) => a.code.localeCompare(b.code))
                 .map(c => `<option value="${c.code}">${c.code} - ${c.particulars}</option>`).join('');
         const mbGlCode = document.getElementById('mb-gl-code');
         if (mbGlCode) {
@@ -1169,12 +1184,14 @@ document.addEventListener('DOMContentLoaded', () => {
     function calculateAuditCounts() {
         const fyValue = fyFilter ? fyFilter.value.trim() : '';
         const monthValue = monthFilter ? monthFilter.value.trim().toLowerCase() : '';
+        const paymentMonthValue = paymentMonthFilter ? paymentMonthFilter.value : '';
 
         // Filter invoices by the selected FY and Month period
         const periodInvoices = invoices.filter(inv => {
             const matchesFy = !fyValue || String(inv.financial_year || '').trim() === fyValue;
             const matchesMonth = !monthValue || String(inv.month || '').trim().toLowerCase() === monthValue;
-            return matchesFy && matchesMonth;
+            const matchesPaymentMonth = paymentDateInFilterMonth(inv.payment_date, paymentMonthValue);
+            return matchesFy && matchesMonth && matchesPaymentMonth;
         });
 
         let countIncomplete = 0;
@@ -1277,10 +1294,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const fyValue = fyFilter ? fyFilter.value.trim() : '';
         const monthValue = monthFilter ? monthFilter.value.trim().toLowerCase() : '';
+        const paymentMonthValue = paymentMonthFilter ? paymentMonthFilter.value : '';
         const periodInvoices = invoices.filter(inv => {
             const matchesFy = !fyValue || String(inv.financial_year || '').trim() === fyValue;
             const matchesMonth = !monthValue || String(inv.month || '').trim().toLowerCase() === monthValue;
-            return matchesFy && matchesMonth;
+            const matchesPaymentMonth = paymentDateInFilterMonth(inv.payment_date, paymentMonthValue);
+            return matchesFy && matchesMonth && matchesPaymentMonth;
         });
 
         // Collect unique values and counts within active period
@@ -1389,6 +1408,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const query = searchInput ? searchInput.value.toLowerCase().trim() : '';
         const fyValue = fyFilter ? fyFilter.value.trim() : '';
         const monthValue = monthFilter ? monthFilter.value.trim().toLowerCase() : '';
+        const paymentMonthValue = paymentMonthFilter ? paymentMonthFilter.value : '';
 
         return invoices.filter(inv => {
             // 1. Text Search across vendor, invoice number, GSTIN, branch, state
@@ -1403,9 +1423,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (!matchesSearch) return false;
             }
 
-            // 2. Financial Year & Month Filters
+            // 2. Financial Year, Month & Payment Month Filters
             if (fyValue && String(inv.financial_year || '').trim() !== fyValue) return false;
             if (monthValue && String(inv.month || '').trim().toLowerCase() !== monthValue) return false;
+            if (!paymentDateInFilterMonth(inv.payment_date, paymentMonthValue)) return false;
 
             // 3. Quick Audit Rectification filter
             const missingGstin = isFieldBlank(inv.gstin) || String(inv.gstin).trim().length !== 15;
@@ -1487,10 +1508,12 @@ document.addEventListener('DOMContentLoaded', () => {
         const query = searchInput ? searchInput.value.toLowerCase().trim() : '';
         const fyValue = fyFilter ? fyFilter.value.trim() : '';
         const monthValue = monthFilter ? monthFilter.value.trim().toLowerCase() : '';
+        const paymentMonthValue = paymentMonthFilter ? paymentMonthFilter.value : '';
         const periodInvoices = invoices.filter(inv => {
             const matchesFy = !fyValue || String(inv.financial_year || '').trim() === fyValue;
             const matchesMonth = !monthValue || String(inv.month || '').trim().toLowerCase() === monthValue;
-            return matchesFy && matchesMonth;
+            const matchesPaymentMonth = paymentDateInFilterMonth(inv.payment_date, paymentMonthValue);
+            return matchesFy && matchesMonth && matchesPaymentMonth;
         });
 
         if (filteredInvoices.length === 0) {
@@ -1552,7 +1575,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 <td class="numeric"><input type="number" step="0.01" class="field-igst" value="${(inv.igst || 0).toFixed(2)}"></td>
                 <td class="checkbox-cell"><input type="checkbox" class="field-itc-blocked" title="Section 17(5) blocked credit / fully ineligible" ${inv.itc_blocked ? 'checked' : ''}></td>
                 <td><input type="text" class="field-remark" placeholder="e.g. GSTIN not on bill" maxlength="500" value="${(inv.remark || '').replace(/"/g, '&quot;')}"></td>
-                <td><select class="field-gl-code"><option value="">-- No GL code --</option></select></td>
+                <td><select class="field-gl-code"><option value="">-- No GL/PL code --</option></select></td>
                 <td class="numeric eligible-column font-bold" id="row-eligible-${inv.id}">₹${(inv.eligible_itc || 0).toFixed(2)}</td>
                 <td class="numeric ineligible-column" id="row-ineligible-${inv.id}">₹${(inv.ineligible_itc || 0).toFixed(2)}</td>
                 ${window.IS_ADMIN ? `<td class="col-owner">${inv.username || window.CURRENT_USERNAME || ''}</td>` : ''}
@@ -1573,8 +1596,8 @@ document.addEventListener('DOMContentLoaded', () => {
             // Populate this row's GL code dropdown from the shared expense catalog
             const glCodeSelect = tr.querySelector('.field-gl-code');
             if (glCodeSelect) {
-                glCodeSelect.innerHTML = '<option value="">-- No GL code --</option>' +
-                    (window.expenseCodes || []).slice().sort((a, b) => a.code.localeCompare(b.code))
+                glCodeSelect.innerHTML = '<option value="">-- No GL/PL code --</option>' +
+                    (window.glPlCodes || []).slice().sort((a, b) => a.code.localeCompare(b.code))
                         .map(c => `<option value="${c.code}">${c.code} - ${c.particulars}</option>`).join('');
                 glCodeSelect.value = inv.gl_code || '';
             }
@@ -1806,16 +1829,18 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // Sum totals and refresh dashboard widgets based on selected FY and Month
+    // Sum totals and refresh dashboard widgets based on selected FY, Month & Payment Month
     function updateMetrics() {
         const fyValue = fyFilter ? fyFilter.value : '';
         const monthValue = monthFilter ? monthFilter.value : '';
+        const paymentMonthValue = paymentMonthFilter ? paymentMonthFilter.value : '';
 
         // Filter invoices by the active FY and Month period
         const periodInvoices = invoices.filter(inv => {
             const matchesFy = !fyValue || inv.financial_year === fyValue;
             const matchesMonth = !monthValue || inv.month === monthValue;
-            return matchesFy && matchesMonth;
+            const matchesPaymentMonth = paymentDateInFilterMonth(inv.payment_date, paymentMonthValue);
+            return matchesFy && matchesMonth && matchesPaymentMonth;
         });
 
         let totalTaxable = 0;
@@ -1852,19 +1877,23 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Update period indicator subtitle
         if (metricsPeriodLabel) {
-            if (fyValue && monthValue) {
-                metricsPeriodLabel.innerHTML = `<i class="fa-solid fa-filter" style="color: var(--accent-blue);"></i> Filtered: <strong>FY ${fyValue} &bull; ${monthValue}</strong> (${periodInvoices.length} bill${periodInvoices.length === 1 ? '' : 's'})`;
-            } else if (fyValue) {
-                metricsPeriodLabel.innerHTML = `<i class="fa-solid fa-filter" style="color: var(--accent-blue);"></i> Filtered: <strong>FY ${fyValue}</strong> (${periodInvoices.length} bill${periodInvoices.length === 1 ? '' : 's'})`;
-            } else if (monthValue) {
-                metricsPeriodLabel.innerHTML = `<i class="fa-solid fa-filter" style="color: var(--accent-blue);"></i> Filtered: <strong>${monthValue} (All Years)</strong> (${periodInvoices.length} bill${periodInvoices.length === 1 ? '' : 's'})`;
+            const labelParts = [];
+            if (fyValue) labelParts.push(`FY ${fyValue}`);
+            if (monthValue) labelParts.push(monthValue);
+            if (paymentMonthValue) {
+                const [py, pm] = paymentMonthValue.split('-');
+                const paymentMonthName = new Date(Number(py), Number(pm) - 1, 1).toLocaleString('en-IN', { month: 'long', year: 'numeric' });
+                labelParts.push(`Paid in ${paymentMonthName}`);
+            }
+            if (labelParts.length > 0) {
+                metricsPeriodLabel.innerHTML = `<i class="fa-solid fa-filter" style="color: var(--accent-blue);"></i> Filtered: <strong>${labelParts.join(' &bull; ')}</strong> (${periodInvoices.length} bill${periodInvoices.length === 1 ? '' : 's'})`;
             } else {
                 metricsPeriodLabel.innerHTML = `<i class="fa-solid fa-circle-check" style="color: var(--accent-green);"></i> Showing <strong>All Financial Years & Months</strong> (${invoices.length} total bill${invoices.length === 1 ? '' : 's'})`;
             }
         }
 
         if (btnResetPeriod) {
-            btnResetPeriod.style.display = (fyValue || monthValue) ? 'inline-flex' : 'none';
+            btnResetPeriod.style.display = (fyValue || monthValue || paymentMonthValue) ? 'inline-flex' : 'none';
         }
     }
 
@@ -1892,11 +1921,20 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // Payment Month filter (calendar month-picker) -- updates table and top metrics
+    if (paymentMonthFilter) {
+        paymentMonthFilter.addEventListener('change', () => {
+            renderTable();
+            updateMetrics();
+        });
+    }
+
     // Reset period button
     if (btnResetPeriod) {
         btnResetPeriod.addEventListener('click', () => {
             if (fyFilter) fyFilter.value = '';
             if (monthFilter) monthFilter.value = '';
+            if (paymentMonthFilter) paymentMonthFilter.value = '';
             populateFilters();
             renderTable();
             updateMetrics();
