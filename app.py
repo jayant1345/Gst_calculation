@@ -571,6 +571,7 @@ def init_db():
         cur.execute("UPDATE activity_log SET client_id = 'nutan_nagrik' WHERE client_id IS NULL OR client_id = '' OR client_id = 'default';")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_invoices_client ON invoices(client_id, user_id);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_gstr2b_client ON gstr2b_entries(client_id, user_id);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_invoices_client_fy ON invoices(client_id, financial_year, month);")
 
         # Vendor master: grows as users explicitly save new vendors from Add
         # Manual Bill (a vendor can supply many branches, so this is NOT
@@ -1731,11 +1732,13 @@ def get_invoices():
     user_id = session['user_id']
     is_admin = is_admin_user()
     client_id = get_current_client_id()
+    fy_filter = request.args.get('financial_year', '').strip()
+    month_filter = request.args.get('month', '').strip()
     try:
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         if is_admin:
-            cur.execute('''
+            query = '''
                 SELECT invoices.id, invoice_number, invoice_date, payment_date, vendor_name, gstin, branch, state,
                        taxable_value::float, cgst::float, sgst::float, igst::float, itc_blocked, remark, gl_code,
                        eligible_itc::float, ineligible_itc::float, users.username,
@@ -1744,10 +1747,10 @@ def get_invoices():
                 FROM invoices
                 JOIN users ON users.id = invoices.user_id
                 WHERE invoices.client_id = %s
-                ORDER BY invoices.created_at DESC
-            ''', (client_id,))
+            '''
+            params = [client_id]
         else:
-            cur.execute('''
+            query = '''
                 SELECT id, invoice_number, invoice_date, payment_date, vendor_name, gstin, branch, state,
                        taxable_value::float, cgst::float, sgst::float, igst::float, itc_blocked, remark, gl_code,
                        eligible_itc::float, ineligible_itc::float,
@@ -1755,12 +1758,37 @@ def get_invoices():
                        (file_data IS NOT NULL) AS has_file
                 FROM invoices
                 WHERE user_id = %s AND client_id = %s
-                ORDER BY created_at DESC
-            ''', (user_id, client_id))
+            '''
+            params = [user_id, client_id]
+        if fy_filter:
+            query += ' AND financial_year = %s'
+            params.append(fy_filter)
+        if month_filter:
+            query += ' AND month = %s'
+            params.append(month_filter)
+        query += ' ORDER BY invoices.created_at DESC' if is_admin else ' ORDER BY created_at DESC'
+        cur.execute(query, params)
         rows = cur.fetchall()
+
+        # Every real (financial_year, month) this client/user has bills in,
+        # regardless of the fy/month filter above - lets the frontend build
+        # the FY/Month dropdown options without needing the full row set.
+        periods_query = '''
+            SELECT financial_year, month, COUNT(*) AS count
+            FROM invoices
+            WHERE client_id = %s
+        '''
+        periods_params = [client_id]
+        if not is_admin:
+            periods_query += ' AND user_id = %s'
+            periods_params.append(user_id)
+        periods_query += ' GROUP BY financial_year, month'
+        cur.execute(periods_query, periods_params)
+        periods = cur.fetchall()
+
         cur.close()
         conn.close()
-        return jsonify({"invoices": rows, "client_id": client_id, "client": get_client_config(client_id)})
+        return jsonify({"invoices": rows, "periods": periods, "client_id": client_id, "client": get_client_config(client_id)})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
