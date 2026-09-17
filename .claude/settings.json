@@ -2,7 +2,17 @@
   "permissions": {
     "allow": [
       "Bash(python -c ' *)",
-      "Bash(curl -s http://127.0.0.1:5588/static/style.css)"
+      "Bash(curl -s http://127.0.0.1:5588/static/style.css)",
+      "Bash(py -m py_compile app.py)",
+      "Bash(py snapshot_periods.py before before_snapshot.json)",
+      "Bash(powershell -Command 'Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '\\\\''*app.py*'\\\\'' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }')",
+      "Bash(nohup env FLASK_DEBUG=false PORT=5588 py app.py)",
+      "Bash(sleep 2; cat /c/Project_AI/GST_calculation/local_server.log)",
+      "Read(//c/Project_AI/GST_calculation/**)",
+      "Bash(py snapshot_periods.py after after_snapshot.json)",
+      "Bash(py \"C:\\\\Users\\\\jayan\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Project-AI-GST-calculation\\\\ffdac58c-7c04-40bc-b82d-a1d5660ab305\\\\scratchpad\\\\test_billing_period.py\")",
+      "Bash(py \"C:\\\\Users\\\\jayan\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Project-AI-GST-calculation\\\\ffdac58c-7c04-40bc-b82d-a1d5660ab305\\\\scratchpad\\\\test_payment_period_e2e.py\")",
+      "Bash(py test_maharashtra_igst.py)"
     ]
   }
 }
