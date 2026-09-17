@@ -457,7 +457,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         data: v
                     }));
                     return masterVendors
-                        .filter(v => v.name.toLowerCase().includes(query) || v.gstin.toLowerCase().includes(query))
+                        .filter(v => (v.name || '').toLowerCase().includes(query) || (v.gstin || '').toLowerCase().includes(query))
                         .map(v => ({
                             text: v.name,
                             subtext: `GST: ${v.gstin}`,
@@ -499,7 +499,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
         function render(query = '') {
             const q = query.trim().toLowerCase();
-            currentItems = getItems(q);
+            try {
+                currentItems = getItems(q);
+            } catch (err) {
+                // A single malformed record (e.g. a saved vendor missing its
+                // name/GSTIN) must never freeze the whole dropdown on stale
+                // results for every later keystroke -- fail closed instead.
+                console.error('Autocomplete getItems failed:', err);
+                currentItems = [];
+            }
             if (currentItems.length === 0) {
                 dropdownEl.style.display = 'none';
                 return;
@@ -1790,7 +1798,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 vendorInput.addEventListener('input', () => {
                     const partyVal = vendorInput.value.trim().toLowerCase();
                     if (!partyVal) return;
-                    const matched = masterVendors.find(v => v.name.toLowerCase() === partyVal || partyVal.includes(v.name.toLowerCase()) || v.name.toLowerCase().includes(partyVal));
+                    const matched = masterVendors.find(v => {
+                        const vName = (v.name || '').toLowerCase();
+                        return vName && (vName === partyVal || partyVal.includes(vName) || vName.includes(partyVal));
+                    });
                     if (matched) {
                         gstinInput.value = matched.gstin;
                         gstinInput.classList.remove('field-needs-rectification');
@@ -2545,7 +2556,10 @@ document.addEventListener('DOMContentLoaded', () => {
         mbPartyInput.addEventListener('input', () => {
             const partyVal = mbPartyInput.value.trim().toLowerCase();
             if (!partyVal) return;
-            const matched = masterVendors.find(v => v.name.toLowerCase() === partyVal || partyVal.includes(v.name.toLowerCase()) || v.name.toLowerCase().includes(partyVal));
+            const matched = masterVendors.find(v => {
+                const vName = (v.name || '').toLowerCase();
+                return vName && (vName === partyVal || partyVal.includes(vName) || vName.includes(partyVal));
+            });
             if (matched) {
                 mbGstinInput.value = matched.gstin;
             }
@@ -2559,7 +2573,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (mbPartyInput && mbSaveVendorBtn) {
         const refreshSaveVendorVisibility = () => {
             const partyVal = mbPartyInput.value.trim().toLowerCase();
-            const alreadyKnown = !partyVal || masterVendors.some(v => v.name.trim().toLowerCase() === partyVal);
+            const alreadyKnown = !partyVal || masterVendors.some(v => (v.name || '').trim().toLowerCase() === partyVal);
             mbSaveVendorBtn.style.display = alreadyKnown ? 'none' : 'inline-flex';
             mbSaveVendorBtn.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Save as new vendor';
             mbSaveVendorBtn.disabled = false;
