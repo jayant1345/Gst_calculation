@@ -17,8 +17,18 @@ document.addEventListener('DOMContentLoaded', () => {
     const tableBody = document.getElementById('invoice-table-body');
     const searchInput = document.getElementById('table-search');
     const fyFilter = document.getElementById('fy-filter');
-    const monthFilter = document.getElementById('month-filter');
+    const monthFilterBtn = document.getElementById('month-filter-btn');
+    const monthFilterLabel = document.getElementById('month-filter-label');
+    const monthFilterPanel = document.getElementById('month-filter-panel');
+    const monthFilterMultiselect = document.getElementById('month-filter-multiselect');
     const paymentMonthFilter = document.getElementById('payment-month-filter');
+
+    // Month filter state: FY stays single-select (a bill's period always
+    // belongs to exactly one FY), but multiple months WITHIN that FY can be
+    // checked at once. selectedMonths is the source of truth; the panel of
+    // checkboxes and the button's label are just views onto it.
+    let selectedMonths = [];
+    let monthAutoSynced = false;
 
     // Parses a canonical DD/MM/YYYY payment_date and checks it falls in the
     // "YYYY-MM" value of the native <input type="month"> payment filter.
@@ -75,7 +85,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (hasAppliedDefaultPeriod) return;
         hasAppliedDefaultPeriod = true;
         const target = getDefaultWorkingFyMonth();
-        if (!target || !fyFilter || !monthFilter) return;
+        if (!target || !fyFilter) return;
         // Runs before the very first loadInvoices() fetch, so there's no
         // real period data loaded yet to check against - create the option
         // rather than skip-if-missing (the old guard, from when this ran
@@ -83,20 +93,21 @@ document.addEventListener('DOMContentLoaded', () => {
         // completes, populateFilters() reconciles this against actual data.
         ensureOption(fyFilter, target.fy, `FY ${target.fy}`);
         fyFilter.value = target.fy;
-        ensureOption(monthFilter, target.monthName, target.monthName);
-        monthFilter.value = target.monthName;
+        selectedMonths = [target.monthName];
+        updateMonthButtonLabel();
     }
 
-    // Whenever fyFilter/monthFilter are only mirroring the Payment Month
-    // selection (not a deliberate user pick), their value must NOT also
+    // Whenever fyFilter/month selection are only mirroring the Payment
+    // Month selection (not a deliberate user pick), they must NOT also
     // constrain invoices by their own invoice-date FY/Month -- otherwise a
     // bill invoiced in July but paid in August would wrongly disappear from
-    // an "August payment" view. Every fyValue/monthValue read in this file
-    // goes through here instead of touching fyFilter.value directly.
+    // an "August payment" view. Every fyValue/months read in this file
+    // goes through here instead of touching fyFilter.value / selectedMonths
+    // directly.
     function getFyMonthFilterRaw() {
         const fy = (fyFilter && fyFilter.dataset.autoSynced === 'true') ? '' : (fyFilter ? fyFilter.value : '');
-        const month = (monthFilter && monthFilter.dataset.autoSynced === 'true') ? '' : (monthFilter ? monthFilter.value : '');
-        return { fy, month };
+        const months = monthAutoSynced ? [] : selectedMonths.slice();
+        return { fy, months };
     }
 
     // Adds an <option> to a <select> if it doesn't already have one with this
@@ -119,21 +130,78 @@ document.addEventListener('DOMContentLoaded', () => {
     // above for a consistent-looking filter bar, without those dropdowns
     // becoming a second, invoice-date-based filter (see getFyMonthFilterRaw).
     function syncFyMonthToPaymentMonth(paymentMonthValue) {
-        if (!fyFilter || !monthFilter) return;
+        if (!fyFilter) return;
         if (!paymentMonthValue) {
             if (fyFilter.dataset.autoSynced === 'true') { fyFilter.value = ''; delete fyFilter.dataset.autoSynced; }
-            if (monthFilter.dataset.autoSynced === 'true') { monthFilter.value = ''; delete monthFilter.dataset.autoSynced; }
+            if (monthAutoSynced) { monthAutoSynced = false; selectedMonths = []; updateMonthButtonLabel(); }
             return;
         }
         const derived = computeFyMonthFromYearMonth(paymentMonthValue);
         if (!derived) return;
 
         ensureOption(fyFilter, derived.fy, `FY ${derived.fy}`);
-        ensureOption(monthFilter, derived.monthName, derived.monthName);
         fyFilter.value = derived.fy;
-        monthFilter.value = derived.monthName;
         fyFilter.dataset.autoSynced = 'true';
-        monthFilter.dataset.autoSynced = 'true';
+        selectedMonths = [derived.monthName];
+        monthAutoSynced = true;
+        updateMonthButtonLabel();
+    }
+
+    // Reflects selectedMonths onto the toggle button's label text.
+    function updateMonthButtonLabel() {
+        if (!monthFilterLabel) return;
+        if (selectedMonths.length === 0) {
+            monthFilterLabel.textContent = 'All Months';
+        } else if (selectedMonths.length === 1) {
+            monthFilterLabel.textContent = selectedMonths[0];
+        } else {
+            monthFilterLabel.textContent = `${selectedMonths.length} months`;
+        }
+    }
+
+    // Rebuilds the checkbox list inside the month panel from whichever
+    // months actually exist for the currently selected FY (populateFilters
+    // computes that list) - matches the requirement that multiple months
+    // can be picked, but only within one financial year at a time.
+    function renderMonthPanel(monthsAvailable) {
+        if (!monthFilterPanel) return;
+        if (monthsAvailable.length === 0) {
+            monthFilterPanel.innerHTML = '<div class="multiselect-empty">No months yet for this year</div>';
+            return;
+        }
+        monthFilterPanel.innerHTML = monthsAvailable.map(m => `
+            <label class="multiselect-option">
+                <input type="checkbox" value="${escapeHtml(m)}" ${selectedMonths.includes(m) ? 'checked' : ''}>
+                <span>${escapeHtml(m)}</span>
+            </label>
+        `).join('');
+    }
+
+    if (monthFilterPanel) {
+        monthFilterPanel.addEventListener('change', (e) => {
+            const cb = e.target.closest('input[type="checkbox"]');
+            if (!cb) return;
+            monthAutoSynced = false;
+            if (cb.checked) {
+                if (!selectedMonths.includes(cb.value)) selectedMonths.push(cb.value);
+            } else {
+                selectedMonths = selectedMonths.filter(m => m !== cb.value);
+            }
+            updateMonthButtonLabel();
+            loadInvoices();
+        });
+    }
+
+    if (monthFilterBtn && monthFilterPanel) {
+        monthFilterBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            monthFilterPanel.classList.toggle('show');
+        });
+        document.addEventListener('click', (e) => {
+            if (monthFilterMultiselect && !monthFilterMultiselect.contains(e.target)) {
+                monthFilterPanel.classList.remove('show');
+            }
+        });
     }
     const invoiceCountText = document.getElementById('invoice-count');
     const branchInput = document.getElementById('branch-input');
@@ -250,9 +318,9 @@ document.addEventListener('DOMContentLoaded', () => {
     function loadInvoices() {
         const requestId = ++loadInvoicesRequestId;
         const params = new URLSearchParams({ client_id: currentClientId });
-        const { fy, month } = getFyMonthFilterRaw();
+        const { fy, months } = getFyMonthFilterRaw();
         if (fy) params.set('financial_year', fy);
-        if (month) params.set('month', month);
+        months.forEach(m => params.append('month', m));
         fetch('/api/get-invoices?' + params.toString())
             .then(response => {
                 if (!response.ok) throw new Error('Failed to fetch invoices');
@@ -636,7 +704,6 @@ document.addEventListener('DOMContentLoaded', () => {
     // so they always reflect real data.
     function populateFilters() {
         const currentFy = fyFilter.value;
-        const currentMonth = monthFilter.value;
 
         const years = [...new Set(invoicePeriods.map(p => p.financial_year).filter(Boolean))]
             .sort((a, b) => b.localeCompare(a));
@@ -658,10 +725,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 .filter(Boolean)
         )].sort((a, b) => FY_MONTH_ORDER.indexOf(a) - FY_MONTH_ORDER.indexOf(b));
 
-        monthFilter.innerHTML = '<option value="">All Months</option>' +
-            months.map(m => `<option value="${m}">${m}</option>`).join('');
-        if (currentMonth) ensureOption(monthFilter, currentMonth, currentMonth);
-        monthFilter.value = currentMonth;
+        // Months are scoped to the selected FY, but a deliberately-selected
+        // month stays checked/visible even with zero bills this reload
+        // (e.g. day 1 of a new working month, nothing entered yet yet) -
+        // mirrors the FY dropdown's own rule above. The fyFilter change
+        // handler already clears selectedMonths on an actual FY switch, so
+        // anything still selected here was a real pick, not stale leftovers.
+        const monthsForPanel = [...new Set([...months, ...selectedMonths])]
+            .sort((a, b) => FY_MONTH_ORDER.indexOf(a) - FY_MONTH_ORDER.indexOf(b));
+        renderMonthPanel(monthsForPanel);
+        updateMonthButtonLabel();
     }
 
     function escapeHtml(text) {
@@ -1341,13 +1414,13 @@ document.addEventListener('DOMContentLoaded', () => {
     function calculateAuditCounts() {
         const __fyMonthRaw = getFyMonthFilterRaw();
         const fyValue = __fyMonthRaw.fy.trim();
-        const monthValue = __fyMonthRaw.month.trim().toLowerCase();
+        const monthValues = __fyMonthRaw.months.map(m => m.trim().toLowerCase());
         const paymentMonthValue = paymentMonthFilter ? paymentMonthFilter.value : '';
 
         // Filter invoices by the selected FY and Month period
         const periodInvoices = invoices.filter(inv => {
             const matchesFy = !fyValue || String(inv.financial_year || '').trim() === fyValue;
-            const matchesMonth = !monthValue || String(inv.month || '').trim().toLowerCase() === monthValue;
+            const matchesMonth = monthValues.length === 0 || monthValues.includes(String(inv.month || '').trim().toLowerCase());
             const matchesPaymentMonth = paymentDateInFilterMonth(inv.payment_date, paymentMonthValue);
             return matchesFy && matchesMonth && matchesPaymentMonth;
         });
@@ -1452,11 +1525,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const __fyMonthRaw = getFyMonthFilterRaw();
         const fyValue = __fyMonthRaw.fy.trim();
-        const monthValue = __fyMonthRaw.month.trim().toLowerCase();
+        const monthValues = __fyMonthRaw.months.map(m => m.trim().toLowerCase());
         const paymentMonthValue = paymentMonthFilter ? paymentMonthFilter.value : '';
         const periodInvoices = invoices.filter(inv => {
             const matchesFy = !fyValue || String(inv.financial_year || '').trim() === fyValue;
-            const matchesMonth = !monthValue || String(inv.month || '').trim().toLowerCase() === monthValue;
+            const matchesMonth = monthValues.length === 0 || monthValues.includes(String(inv.month || '').trim().toLowerCase());
             const matchesPaymentMonth = paymentDateInFilterMonth(inv.payment_date, paymentMonthValue);
             return matchesFy && matchesMonth && matchesPaymentMonth;
         });
@@ -1567,7 +1640,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const query = searchInput ? searchInput.value.toLowerCase().trim() : '';
         const __fyMonthRaw = getFyMonthFilterRaw();
         const fyValue = __fyMonthRaw.fy.trim();
-        const monthValue = __fyMonthRaw.month.trim().toLowerCase();
+        const monthValues = __fyMonthRaw.months.map(m => m.trim().toLowerCase());
         const paymentMonthValue = paymentMonthFilter ? paymentMonthFilter.value : '';
 
         return invoices.filter(inv => {
@@ -1585,7 +1658,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // 2. Financial Year, Month & Payment Month Filters
             if (fyValue && String(inv.financial_year || '').trim() !== fyValue) return false;
-            if (monthValue && String(inv.month || '').trim().toLowerCase() !== monthValue) return false;
+            if (monthValues.length > 0 && !monthValues.includes(String(inv.month || '').trim().toLowerCase())) return false;
             if (!paymentDateInFilterMonth(inv.payment_date, paymentMonthValue)) return false;
 
             // 3. Quick Audit Rectification filter
@@ -1668,11 +1741,11 @@ document.addEventListener('DOMContentLoaded', () => {
         const query = searchInput ? searchInput.value.toLowerCase().trim() : '';
         const __fyMonthRaw = getFyMonthFilterRaw();
         const fyValue = __fyMonthRaw.fy.trim();
-        const monthValue = __fyMonthRaw.month.trim().toLowerCase();
+        const monthValues = __fyMonthRaw.months.map(m => m.trim().toLowerCase());
         const paymentMonthValue = paymentMonthFilter ? paymentMonthFilter.value : '';
         const periodInvoices = invoices.filter(inv => {
             const matchesFy = !fyValue || String(inv.financial_year || '').trim() === fyValue;
-            const matchesMonth = !monthValue || String(inv.month || '').trim().toLowerCase() === monthValue;
+            const matchesMonth = monthValues.length === 0 || monthValues.includes(String(inv.month || '').trim().toLowerCase());
             const matchesPaymentMonth = paymentDateInFilterMonth(inv.payment_date, paymentMonthValue);
             return matchesFy && matchesMonth && matchesPaymentMonth;
         });
@@ -1683,7 +1756,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     <td colspan="${colCount}">
                         <div class="empty-state">
                             <i class="fa-solid fa-receipt"></i>
-                            <p>${(query || currentAuditFilter !== 'all' || Object.keys(columnFilters).length > 0 || fyValue || monthValue) ? 'No matching invoices found for the selected filter.' : 'No invoices processed yet. Drag & drop or upload files above.'}</p>
+                            <p>${(query || currentAuditFilter !== 'all' || Object.keys(columnFilters).length > 0 || fyValue || monthValues.length > 0) ? 'No matching invoices found for the selected filter.' : 'No invoices processed yet. Drag & drop or upload files above.'}</p>
                         </div>
                     </td>
                 </tr>
@@ -1952,9 +2025,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 // worth of bills is fetched from the server at a time, a row
                 // that no longer belongs here has to be dropped from view
                 // instead of lingering until the next full reload.
-                const { fy: scopedFy, month: scopedMonth } = getFyMonthFilterRaw();
+                const { fy: scopedFy, months: scopedMonths } = getFyMonthFilterRaw();
                 const outOfScope = (scopedFy && data.financial_year !== scopedFy) ||
-                    (scopedMonth && data.month !== scopedMonth);
+                    (scopedMonths.length > 0 && !scopedMonths.includes(data.month));
                 if (outOfScope) {
                     invoices.splice(index, 1);
                     populateFilters();
@@ -2031,13 +2104,13 @@ document.addEventListener('DOMContentLoaded', () => {
     function updateMetrics() {
         const __fyMonthRaw = getFyMonthFilterRaw();
         const fyValue = __fyMonthRaw.fy;
-        const monthValue = __fyMonthRaw.month;
+        const monthValues = __fyMonthRaw.months;
         const paymentMonthValue = paymentMonthFilter ? paymentMonthFilter.value : '';
 
         // Filter invoices by the active FY and Month period
         const periodInvoices = invoices.filter(inv => {
             const matchesFy = !fyValue || inv.financial_year === fyValue;
-            const matchesMonth = !monthValue || inv.month === monthValue;
+            const matchesMonth = monthValues.length === 0 || monthValues.includes(inv.month);
             const matchesPaymentMonth = paymentDateInFilterMonth(inv.payment_date, paymentMonthValue);
             return matchesFy && matchesMonth && matchesPaymentMonth;
         });
@@ -2084,7 +2157,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (metricsPeriodLabel) {
             const labelParts = [];
             if (fyValue) labelParts.push(`FY ${fyValue}`);
-            if (monthValue) labelParts.push(monthValue);
+            if (monthValues.length > 0) labelParts.push(monthValues.join(', '));
             if (paymentMonthValue) {
                 const [py, pm] = paymentMonthValue.split('-');
                 const paymentMonthName = new Date(Number(py), Number(pm) - 1, 1).toLocaleString('en-IN', { month: 'long', year: 'numeric' });
@@ -2098,7 +2171,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         if (btnResetPeriod) {
-            btnResetPeriod.style.display = (fyValue || monthValue || paymentMonthValue) ? 'inline-flex' : 'none';
+            btnResetPeriod.style.display = (fyValue || monthValues.length > 0 || paymentMonthValue) ? 'inline-flex' : 'none';
         }
     }
 
@@ -2120,19 +2193,16 @@ document.addEventListener('DOMContentLoaded', () => {
         fyFilter.addEventListener('change', () => {
             // A real pick by the user -- it's no longer just mirroring Payment Month.
             delete fyFilter.dataset.autoSynced;
-            if (monthFilter) monthFilter.value = '';
+            // A new FY invalidates any months picked under the old one.
+            selectedMonths = [];
+            monthAutoSynced = false;
             populateFilters();
             loadInvoices();
         });
     }
 
-    // Month filter dropdown -- re-fetches scoped to the new period
-    if (monthFilter) {
-        monthFilter.addEventListener('change', () => {
-            delete monthFilter.dataset.autoSynced;
-            loadInvoices();
-        });
-    }
+    // Month checkbox panel's own change listener (registered where the
+    // panel is defined) already re-fetches on every toggle.
 
     // Payment Month filter (calendar month-picker) -- syncing FY/Month blanks
     // their filter value (see getFyMonthFilterRaw), so this naturally widens
@@ -2150,7 +2220,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (btnResetPeriod) {
         btnResetPeriod.addEventListener('click', () => {
             if (fyFilter) { fyFilter.value = ''; delete fyFilter.dataset.autoSynced; }
-            if (monthFilter) { monthFilter.value = ''; delete monthFilter.dataset.autoSynced; }
+            selectedMonths = [];
+            monthAutoSynced = false;
             if (paymentMonthFilter) paymentMonthFilter.value = '';
             populateFilters();
             loadInvoices();

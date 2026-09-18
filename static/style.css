@@ -800,6 +800,82 @@ body {
     border-radius: 2px;
 }
 
+/* Month multi-select (FY stays single-select; multiple months within one
+   FY can be checked at once) */
+.multiselect {
+    position: relative;
+}
+
+.multiselect-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    text-align: left;
+}
+
+.multiselect-toggle span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.multiselect-toggle i {
+    color: #64748b;
+    font-size: 11px;
+    flex-shrink: 0;
+}
+
+.multiselect-panel {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    min-width: 190px;
+    max-height: 260px;
+    overflow-y: auto;
+    background: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 10px;
+    box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.15), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+    z-index: 1050;
+    display: none;
+    padding: 4px 0;
+}
+
+.multiselect-panel.show {
+    display: block;
+}
+
+.multiselect-option {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 8px 14px;
+    font-size: 13px;
+    font-weight: 600;
+    color: #1e293b;
+    cursor: pointer;
+    transition: background-color 0.15s ease;
+}
+
+.multiselect-option:hover {
+    background-color: #eff6ff;
+}
+
+.multiselect-option input[type="checkbox"] {
+    width: 15px;
+    height: 15px;
+    accent-color: var(--accent-blue);
+    cursor: pointer;
+}
+
+.multiselect-empty {
+    padding: 10px 14px;
+    font-size: 12.5px;
+    color: #94a3b8;
+    font-style: italic;
+}
+
 .autocomplete-badge {
     font-size: 11px;
     font-weight: 600;

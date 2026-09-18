@@ -173,10 +173,14 @@
                             </select>
                         </div>
                         <div class="filter-group">
-                            <label for="month-filter"><i class="fa-solid fa-calendar-days"></i> Month</label>
-                            <select id="month-filter" class="form-control period-select" title="Filter metrics and invoices by month">
-                                <option value="">All Months</option>
-                            </select>
+                            <label for="month-filter-btn"><i class="fa-solid fa-calendar-days"></i> Month</label>
+                            <div class="multiselect" id="month-filter-multiselect">
+                                <button type="button" class="form-control period-select multiselect-toggle" id="month-filter-btn" title="Filter metrics and invoices by one or more months, within the selected financial year">
+                                    <span id="month-filter-label">All Months</span>
+                                    <i class="fa-solid fa-chevron-down"></i>
+                                </button>
+                                <div class="multiselect-panel" id="month-filter-panel"></div>
+                            </div>
                         </div>
                         <button type="button" class="btn btn-secondary btn-sm" id="btn-reset-period" title="Reset all period filters" style="display: none; padding: 6px 12px; font-size: 12.5px;">
                             <i class="fa-solid fa-rotate-left"></i> Reset

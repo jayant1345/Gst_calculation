@@ -1807,7 +1807,10 @@ def get_invoices():
     is_admin = is_admin_user()
     client_id = get_current_client_id()
     fy_filter = request.args.get('financial_year', '').strip()
-    month_filter = request.args.get('month', '').strip()
+    # Accepts one or more repeated ?month= params (a multi-month selection,
+    # always within one financial year from the frontend) -- empty list
+    # means "all months", matching the old single-value behavior exactly.
+    month_filters = [m.strip() for m in request.args.getlist('month') if m.strip()]
     try:
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -1837,9 +1840,9 @@ def get_invoices():
         if fy_filter:
             query += ' AND financial_year = %s'
             params.append(fy_filter)
-        if month_filter:
-            query += ' AND month = %s'
-            params.append(month_filter)
+        if month_filters:
+            query += ' AND month = ANY(%s)'
+            params.append(month_filters)
         query += ' ORDER BY invoices.created_at DESC' if is_admin else ' ORDER BY created_at DESC'
         cur.execute(query, params)
         rows = cur.fetchall()
@@ -2905,6 +2908,53 @@ def _extract_bills_for_page(file_bytes, filename, p_idx, high_accuracy):
     return bills
 
 
+def _merge_multipage_bill(page_bills):
+    """Merges the independently-scanned per-page bill(s) of ONE multi-page
+    bill into a single consolidated bill dict. Header fields come from
+    whichever page found them first (normally page 1); amount fields come
+    from the LAST page that reports a non-zero total, per the CA's rule
+    that a multi-page bill's final/total amount always sits on its last
+    page -- with a fallback to an earlier page if the very last page's own
+    extraction came back empty. Returns (merged_dict, conflict_note_or_None)."""
+    header_fields = ['invoice_number', 'vendor_name', 'gstin', 'invoice_date', 'payment_date']
+    merged = {f: None for f in header_fields}
+    for pb in page_bills:
+        for f in header_fields:
+            val = pb.get(f)
+            if val and str(val).strip() not in ('', 'N/A', '-', 'None') and not merged.get(f):
+                merged[f] = val
+
+    # Detect conflicting invoice numbers across pages -- a real signal these
+    # pages might NOT actually be one bill. Surfaced as a warning for the
+    # operator to check, never silently resolved one way or the other.
+    seen_inv_numbers = {str(pb.get('invoice_number')).strip() for pb in page_bills
+                        if pb.get('invoice_number') and str(pb.get('invoice_number')).strip() not in ('', 'N/A', '-')}
+    conflict_note = None
+    if len(seen_inv_numbers) > 1:
+        conflict_note = f"Pages disagree on invoice number: {', '.join(sorted(seen_inv_numbers))}"
+
+    amount_fields = ['taxable_value', 'cgst', 'sgst', 'igst']
+    for f in amount_fields:
+        merged[f] = 0.0
+    for pb in reversed(page_bills):
+        try:
+            total = sum(float(pb.get(f) or 0.0) for f in amount_fields)
+        except (TypeError, ValueError):
+            total = 0.0
+        if total > 0:
+            for f in amount_fields:
+                try:
+                    merged[f] = float(pb.get(f) or 0.0)
+                except (TypeError, ValueError):
+                    merged[f] = 0.0
+            break
+
+    merged['itc_blocked'] = any(pb.get('itc_blocked') for pb in page_bills)
+    merged['remark'] = next((pb.get('remark') for pb in page_bills if pb.get('remark')), '')
+    merged['_ai_model'] = next((pb.get('_ai_model') for pb in page_bills if pb.get('_ai_model')), None)
+    return merged, conflict_note
+
+
 def _parse_single_invoice_file(filename, file_bytes, batch_branch, batch_state, high_accuracy):
     """Processes a single uploaded bill file (PDF, Image, Excel/CSV) and returns
     its parsed invoice records, file storage buffers, and error state. Thread-safe."""
@@ -2986,8 +3036,6 @@ def _parse_single_invoice_file(filename, file_bytes, batch_branch, batch_state, 
             def _process_pdf_page(p_idx):
                 try:
                     p_doc = pymupdf.open(stream=file_bytes, filetype="pdf")
-                    page_text = p_doc[p_idx].get_text()
-
                     # Extract this single page as a standalone PDF for individual bill storage
                     single_doc = pymupdf.open()
                     single_doc.insert_pdf(p_doc, from_page=p_idx, to_page=p_idx)
@@ -2995,36 +3043,7 @@ def _parse_single_invoice_file(filename, file_bytes, batch_branch, batch_state, 
                     single_doc.close()
                     p_doc.close()
 
-                    if not high_accuracy and len(page_text.strip()) > 100:
-                        bills = extract_from_text(page_text)
-                        if len(bills) == 1:
-                            inv = bills[0]
-                            needs_gstin = not inv.get('gstin') or inv.get('gstin') == 'N/A'
-                            if needs_gstin:
-                                gstin_match = re.search(r'\b[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}\b', page_text)
-                                if gstin_match:
-                                    inv['gstin'] = gstin_match.group(0)
-                                    needs_gstin = False
-
-                            needs_payment_date = not inv.get('payment_date') or inv.get('payment_date') == inv.get('invoice_date')
-                            payment_date_markers = ('rtgs', 'neft', 'p.o. no', 'po no', 'cheque',
-                                                     'sanctioned', 'please pay', 'paid on', 'demand draft')
-                            has_payment_voucher_section = any(m in page_text.lower() for m in payment_date_markers)
-
-                            if needs_gstin or (needs_payment_date and has_payment_voucher_section):
-                                try:
-                                    vision_bills = extract_from_pdf_binary(file_bytes, page_index=p_idx)
-                                    vision_inv = vision_bills[0] if vision_bills else {}
-                                    if needs_payment_date and vision_inv.get('payment_date'):
-                                        inv['payment_date'] = vision_inv['payment_date']
-                                    if needs_gstin and vision_inv.get('gstin'):
-                                        inv['gstin'] = vision_inv['gstin']
-                                    inv['_ai_model'] = vision_inv.get('_ai_model', inv.get('_ai_model'))
-                                except Exception as ex:
-                                    print(f"Vision fallback failed for {filename} page {p_idx+1}: {ex}")
-                            bills = [inv]
-                    else:
-                        bills = extract_from_pdf_binary(file_bytes, page_index=p_idx)
+                    bills = _extract_bills_for_page(file_bytes, filename, p_idx, high_accuracy)
 
                     multi = len(bills) > 1
                     suffix = f" (Page {p_idx+1})" + (f" - Bill {b_idx+1} of {len(bills)}" if multi else "")
@@ -3368,6 +3387,219 @@ def process_invoices():
         if batch_branch:
             desc += f' for branch {batch_branch}'
         desc += f' via {scan_mode}'
+        log_activity(user_id, 'bill_upload', desc, record_count=success_count)
+
+    return jsonify({
+        "invoices": results,
+        "success_count": success_count,
+        "duplicate_count": duplicate_count,
+        "failed_count": failed_count
+    })
+
+@app.route('/api/process-multipage-bill', methods=['POST'])
+@login_required
+def process_multipage_bill():
+    """Dedicated upload path for a SINGLE bill that spans multiple physical
+    pages (e.g. a 3-page tax invoice) -- kept entirely separate from the
+    regular bulk-upload path, where every page of a PDF is instead treated
+    as its own independent bill (the common case: a scanned stack of many
+    one-page bills in one file). Here, ALL pages of each uploaded PDF are
+    merged into ONE bill record via _merge_multipage_bill. Per-page scanning
+    itself is byte-for-byte the same extraction the regular upload path uses
+    (_extract_bills_for_page) -- only what happens to the results afterward
+    differs, so the AI vision models/prompts are untouched."""
+    user_id = session['user_id']
+    client_id = get_current_client_id()
+    if 'files[]' not in request.files:
+        return jsonify({"error": "No files uploaded"}), 400
+
+    files = request.files.getlist('files[]')
+    batch_branch = request.form.get('branch', '').strip()
+    batch_state = request.form.get('state', '').strip()
+
+    file_payloads = [(f.filename, f.read()) for f in files]
+
+    def _worker(fname, fbytes):
+        try:
+            ext = fname.split('.')[-1].lower()
+            if ext != 'pdf':
+                return {"filename": fname, "error": "Multi-page bill upload only accepts PDF files."}
+
+            doc = pymupdf.open(stream=fbytes, filetype="pdf")
+            num_pages = len(doc)
+            doc.close()
+            if num_pages == 0:
+                return {"filename": fname, "error": "Could not open this PDF."}
+
+            page_bills_lists = [None] * num_pages
+            with ThreadPoolExecutor(max_workers=min(num_pages, 6)) as executor:
+                futures = {executor.submit(_extract_bills_for_page, fbytes, fname, i, False): i for i in range(num_pages)}
+                for fut in as_completed(futures):
+                    i = futures[fut]
+                    try:
+                        page_bills_lists[i] = fut.result()
+                    except Exception as ex:
+                        print(f"Error scanning page {i+1} of {fname}: {ex}")
+                        page_bills_lists[i] = []
+
+            # Flatten to one "bill" per page (first found, if a page somehow
+            # yields more than one) in page order -- a genuine multi-page
+            # bill has exactly one logical bill spread across its pages.
+            page_bills = [bills[0] for bills in page_bills_lists if bills]
+
+            if not page_bills:
+                return {"filename": fname, "error": "No readable bill data found on any page."}
+
+            merged, conflict_note = _merge_multipage_bill(page_bills)
+            merged['_store_file_bytes'] = fbytes
+            merged['_store_mime_type'] = "application/pdf"
+            merged['_store_file_name'] = fname
+            merged['_merge_conflict'] = conflict_note
+            merged['_num_pages'] = num_pages
+            return {"filename": fname, "bill": merged, "error": None}
+        except Exception as e:
+            print(f"Error processing multi-page bill {fname}: {e}")
+            return {"filename": fname, "error": str(e)}
+
+    max_workers = min(8, max(1, len(file_payloads)))
+    file_results = [None] * len(file_payloads)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(_worker, fname, fbytes): idx for idx, (fname, fbytes) in enumerate(file_payloads)}
+        for fut in as_completed(futures):
+            file_results[futures[fut]] = fut.result()
+
+    results = []
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        for file_res in file_results:
+            filename = file_res["filename"]
+            if file_res.get("error"):
+                results.append({
+                    "id": None, "is_duplicate": False, "invoice_number": "ERROR",
+                    "invoice_date": "-", "payment_date": None,
+                    "vendor_name": f"Failed to parse {filename}", "gstin": "N/A",
+                    "branch": batch_branch or "Unassigned", "state": batch_state or "Unassigned",
+                    "taxable_value": 0.0, "cgst": 0.0, "sgst": 0.0, "igst": 0.0,
+                    "itc_blocked": False, "remark": "", "has_file": False,
+                    "eligible_itc": 0.0, "ineligible_itc": 0.0, "filename": filename,
+                    "message": file_res["error"]
+                })
+                continue
+
+            inv = file_res["bill"]
+            inv["invoice_number"] = str(inv.get("invoice_number") or "N/A")[:100]
+            inv["invoice_date"] = normalize_date_ddmmyyyy(str(inv.get("invoice_date") or "N/A"))[:50]
+            inv["payment_date"] = normalize_date_ddmmyyyy(str(inv["payment_date"]))[:50] if inv.get("payment_date") else None
+            inv["vendor_name"] = str(inv.get("vendor_name") or "Unknown Vendor")[:255]
+            inv["gstin"] = normalize_gstin(str(inv.get("gstin") or "N/A")[:50], inv["vendor_name"])
+            inv["branch"] = str(inv.get("branch") or batch_branch or "Unassigned")[:100]
+            inv["state"] = str(inv.get("state") or batch_state or "Unassigned")[:100]
+            if (inv["state"] == 'Unassigned' or not inv["state"]) and inv["branch"] != 'Unassigned':
+                inv["state"] = get_branch_state(inv["branch"])
+            inv["itc_blocked"] = bool(inv.get("itc_blocked", False))
+            inv["remark"] = str(inv.get("remark") or "").strip()[:500]
+            for field in ("taxable_value", "cgst", "sgst", "igst"):
+                try:
+                    inv[field] = float(inv.get(field) or 0.0)
+                except (TypeError, ValueError):
+                    inv[field] = 0.0
+
+            total_gst = inv["cgst"] + inv["sgst"] + inv["igst"]
+            if inv["itc_blocked"]:
+                eligible = 0.0
+                ineligible = round(total_gst, 2)
+            else:
+                eligible = round(total_gst * 0.5, 2)
+                ineligible = round(total_gst * 0.5, 2)
+
+            fy, m = compute_billing_period(inv["invoice_date"], inv["payment_date"])
+
+            dup_id, dup_reason = find_duplicate_invoice(
+                cur, user_id, inv["gstin"], inv["invoice_number"],
+                inv["vendor_name"], inv["invoice_date"], inv["taxable_value"], fy
+            )
+
+            merge_warning = f"WARNING: {inv['_merge_conflict']}" if inv.get('_merge_conflict') else None
+
+            if dup_id:
+                results.append({
+                    "id": None, "is_duplicate": True,
+                    "duplicate_of_id": dup_id if isinstance(dup_id, int) else None,
+                    "invoice_number": inv["invoice_number"], "invoice_date": inv["invoice_date"],
+                    "payment_date": inv["payment_date"], "vendor_name": inv["vendor_name"],
+                    "gstin": inv["gstin"], "branch": inv["branch"], "state": inv["state"],
+                    "taxable_value": inv["taxable_value"], "cgst": inv["cgst"], "sgst": inv["sgst"], "igst": inv["igst"],
+                    "itc_blocked": inv["itc_blocked"], "remark": inv["remark"], "has_file": False,
+                    "eligible_itc": eligible, "ineligible_itc": ineligible,
+                    "financial_year": fy, "month": m, "filename": filename,
+                    "ai_model_used": inv.get("_ai_model"),
+                    "message": dup_reason + (f" -- {merge_warning}" if merge_warning else ""),
+                    "merge_conflict": inv.get('_merge_conflict')
+                })
+                continue
+
+            try:
+                cur.execute("SAVEPOINT sp_mpb")
+                cur.execute('''
+                    INSERT INTO invoices (user_id, client_id, invoice_number, invoice_date, payment_date, vendor_name, gstin, branch, state, taxable_value, cgst, sgst, igst, itc_blocked, remark, eligible_itc, ineligible_itc, file_data, file_mime_type, file_name, financial_year, month)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
+                ''', (user_id, client_id, inv["invoice_number"], inv["invoice_date"], inv["payment_date"], inv["vendor_name"], inv["gstin"], inv["branch"], inv["state"],
+                      inv["taxable_value"], inv["cgst"], inv["sgst"], inv["igst"], inv["itc_blocked"], inv["remark"],
+                      eligible, ineligible,
+                      psycopg2.Binary(inv['_store_file_bytes']) if inv.get('_store_file_bytes') else None,
+                      inv.get('_store_mime_type'), inv.get('_store_file_name') or filename, fy, m))
+                db_id = cur.fetchone()[0]
+                cur.execute("RELEASE SAVEPOINT sp_mpb")
+                results.append({
+                    "id": db_id, "is_duplicate": False,
+                    "invoice_number": inv["invoice_number"], "invoice_date": inv["invoice_date"],
+                    "payment_date": inv["payment_date"], "vendor_name": inv["vendor_name"],
+                    "gstin": inv["gstin"], "branch": inv["branch"], "state": inv["state"],
+                    "taxable_value": inv["taxable_value"], "cgst": inv["cgst"], "sgst": inv["sgst"], "igst": inv["igst"],
+                    "itc_blocked": inv["itc_blocked"], "remark": inv["remark"],
+                    "has_file": inv.get('_store_file_bytes') is not None,
+                    "eligible_itc": eligible, "ineligible_itc": ineligible,
+                    "financial_year": fy, "month": m,
+                    "filename": inv.get('_store_file_name') or filename,
+                    "username": session.get('username', ''),
+                    "ai_model_used": inv.get("_ai_model"),
+                    "message": merge_warning or f"Merged from {inv.get('_num_pages')} page(s)",
+                    "merge_conflict": inv.get('_merge_conflict'),
+                    "num_pages": inv.get('_num_pages')
+                })
+            except Exception as ins_err:
+                cur.execute("ROLLBACK TO SAVEPOINT sp_mpb")
+                print(f"Insert error for {filename}: {ins_err}")
+                results.append({
+                    "id": None, "is_duplicate": False, "invoice_number": "ERROR",
+                    "invoice_date": inv.get("invoice_date", "-"), "payment_date": None,
+                    "vendor_name": inv.get("vendor_name", f"Failed {filename}"), "gstin": inv.get("gstin", "N/A"),
+                    "branch": inv.get("branch", "Unassigned"), "state": inv.get("state", "Unassigned"),
+                    "taxable_value": 0.0, "cgst": 0.0, "sgst": 0.0, "igst": 0.0,
+                    "itc_blocked": False, "remark": inv.get("remark", ""), "has_file": False,
+                    "eligible_itc": 0.0, "ineligible_itc": 0.0, "filename": filename,
+                    "message": f"Database save error: {ins_err}"
+                })
+
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print(f"Database error during multi-page bill insert: {e}")
+
+    success_count = sum(1 for r in results if r.get("id") is not None)
+    duplicate_count = sum(1 for r in results if r.get("is_duplicate"))
+    failed_count = len(results) - success_count - duplicate_count
+
+    if success_count > 0 or duplicate_count > 0:
+        desc = f'Processed {len(results)} multi-page bill(s): {success_count} uploaded'
+        if duplicate_count > 0:
+            desc += f', {duplicate_count} duplicate(s) skipped'
+        if batch_branch:
+            desc += f' for branch {batch_branch}'
+        desc += ' via Multi-Page Bill Upload'
         log_activity(user_id, 'bill_upload', desc, record_count=success_count)
 
     return jsonify({
