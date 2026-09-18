@@ -244,6 +244,20 @@ document.addEventListener('DOMContentLoaded', () => {
     const mbPreview = document.getElementById('mb-preview');
     const mbRate = document.getElementById('mb-rate');
     const mbCustomRateField = document.getElementById('mb-custom-rate-field');
+    const manualBillModalTitle = document.getElementById('manual-bill-modal-title');
+    const manualBillSaveLabel = document.getElementById('manual-bill-save-label');
+    let editingInvoiceId = null;
+
+    // Converts a stored DD/MM/YYYY date string to the YYYY-MM-DD format
+    // native <input type="date"> elements require to pre-fill correctly.
+    function ddmmyyyyToInputDate(str) {
+        if (!str) return '';
+        const parts = str.trim().split('/');
+        if (parts.length !== 3) return '';
+        const [d, m, y] = parts;
+        if (!d || !m || !y) return '';
+        return `${y.padStart(4, '0')}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+    }
 
     // High Accuracy Scan Elements
     const highAccuracyToggle = document.getElementById('high-accuracy-toggle');
@@ -1873,6 +1887,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 <td class="numeric ineligible-column" id="row-ineligible-${inv.id}">₹${(inv.ineligible_itc || 0).toFixed(2)}</td>
                 ${window.IS_ADMIN ? `<td class="col-owner">${inv.username || window.CURRENT_USERNAME || ''}</td>` : ''}
                 <td class="actions-cell">
+                    ${inv.id ? `
+                    <button class="btn-edit-row" title="Edit this bill" data-id="${inv.id}">
+                        <i class="fa-solid fa-pencil"></i>
+                    </button>` : ''}
                     ${inv.has_file ? `
                     <button class="btn-rescan-row" title="Re-scan this bill with Higher Accuracy AI" data-id="${inv.id}">
                         <i class="fa-solid fa-arrows-rotate"></i>
@@ -1972,6 +1990,14 @@ document.addEventListener('DOMContentLoaded', () => {
             tr.querySelector('.btn-delete').addEventListener('click', () => {
                 deleteInvoice(inv.id);
             });
+
+            const editBtn = tr.querySelector('.btn-edit-row');
+            if (editBtn) {
+                editBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    openEditBillModal(inv);
+                });
+            }
 
             const rescanBtn = tr.querySelector('.btn-rescan-row');
             if (rescanBtn) {
@@ -2490,6 +2516,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // ---- Manual Bill Entry (no physical/soft copy available) ----
     function openManualBillModal() {
+        editingInvoiceId = null;
+        if (manualBillModalTitle) manualBillModalTitle.textContent = 'Add Manual Bill';
+        if (manualBillSaveLabel) manualBillSaveLabel.textContent = 'Save Bill';
         manualBillForm.reset();
         if (stateInput && document.getElementById('mb-state')) document.getElementById('mb-state').value = stateInput.value.trim();
         if (branchInput && document.getElementById('mb-branch')) document.getElementById('mb-branch').value = branchInput.value.trim();
@@ -2500,6 +2529,44 @@ document.addEventListener('DOMContentLoaded', () => {
         mbCustomRateField.style.display = 'none';
         manualBillOverlay.style.display = 'flex';
         document.getElementById('mb-branch').focus();
+    }
+
+    // Opens the same Manual Bill modal pre-filled with an existing row's
+    // current values, so a bill can be edited from one screen instead of
+    // scrolling across the table's columns. Always shows the Direct-entry
+    // fields (not Auto-split) so the form reflects the bill's actual stored
+    // taxable/CGST/SGST/IGST split rather than re-deriving one.
+    function openEditBillModal(inv) {
+        editingInvoiceId = inv.id;
+        if (manualBillModalTitle) manualBillModalTitle.textContent = 'Edit Bill';
+        if (manualBillSaveLabel) manualBillSaveLabel.textContent = 'Update Bill';
+        manualBillForm.reset();
+
+        document.getElementById('mb-invoice-number').value = inv.invoice_number || '';
+        document.getElementById('mb-state').value = inv.state || '';
+        document.getElementById('mb-branch').value = inv.branch || '';
+        document.getElementById('mb-party').value = inv.vendor_name || '';
+        document.getElementById('mb-gstin').value = inv.gstin || '';
+        document.getElementById('mb-date').value = ddmmyyyyToInputDate(inv.invoice_date);
+        document.getElementById('mb-payment-date').value = ddmmyyyyToInputDate(inv.payment_date);
+        document.getElementById('mb-itc-blocked').checked = !!inv.itc_blocked;
+        document.getElementById('mb-remark').value = inv.remark || '';
+        document.getElementById('mb-gl-code').value = inv.gl_code || '';
+
+        // Force Direct-entry mode with the bill's actual stored amounts.
+        const directModeRadio = manualBillForm.querySelector('input[name="mb-mode"][value="direct"]');
+        if (directModeRadio) directModeRadio.checked = true;
+        mbRate.value = '';
+        mbCustomRateField.style.display = 'none';
+        mbDirectFields.style.display = 'grid';
+        mbAutoFields.style.display = 'none';
+        mbPreview.style.display = 'none';
+        document.getElementById('mb-taxable').value = (inv.taxable_value || 0).toFixed(2);
+        document.getElementById('mb-cgst').value = (inv.cgst || 0).toFixed(2);
+        document.getElementById('mb-sgst').value = (inv.sgst || 0).toFixed(2);
+        document.getElementById('mb-igst').value = (inv.igst || 0).toFixed(2);
+
+        manualBillOverlay.style.display = 'flex';
     }
 
     function closeManualBillModal() {
@@ -2878,8 +2945,10 @@ document.addEventListener('DOMContentLoaded', () => {
         const itcBlocked = document.getElementById('mb-itc-blocked').checked;
         const totalGst = cgst + sgst + igst;
 
+        const wasEditing = editingInvoiceId;
+
         const newInvoice = {
-            id: null,
+            id: wasEditing,
             state: document.getElementById('mb-state').value.trim() || 'Unassigned',
             branch: document.getElementById('mb-branch').value.trim() || 'Unassigned',
             gstin: document.getElementById('mb-gstin').value.trim() || 'N/A',
@@ -2900,7 +2969,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const saveBtn = document.getElementById('manual-bill-save');
         saveBtn.disabled = true;
-        saveBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving...';
+        saveBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> ${wasEditing ? 'Updating...' : 'Saving...'}`;
 
         fetch('/api/save-invoice', {
             method: 'POST',
@@ -2921,7 +2990,19 @@ document.addEventListener('DOMContentLoaded', () => {
                 newInvoice.month = data.month;
                 newInvoice.invoice_date = data.invoice_date;
                 newInvoice.payment_date = data.payment_date;
-                invoices = [newInvoice, ...invoices];
+
+                if (wasEditing) {
+                    const idx = invoices.findIndex(i => i.id === wasEditing);
+                    if (idx !== -1) {
+                        newInvoice.has_file = invoices[idx].has_file;
+                        newInvoice.username = invoices[idx].username;
+                        invoices[idx] = newInvoice;
+                    }
+                } else {
+                    invoices = [newInvoice, ...invoices];
+                }
+                editingInvoiceId = null;
+
                 populateFilters();
                 renderTable();
                 updateMetrics();
@@ -2931,11 +3012,11 @@ document.addEventListener('DOMContentLoaded', () => {
         })
         .catch(error => {
             console.error('Error saving manual bill:', error);
-            alert(error.message || 'Failed to save the manual bill. Check your connection and try again.');
+            alert(error.message || `Failed to ${wasEditing ? 'update' : 'save'} the bill. Check your connection and try again.`);
         })
         .finally(() => {
             saveBtn.disabled = false;
-            saveBtn.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Save Bill';
+            saveBtn.innerHTML = `<i class="fa-solid fa-floppy-disk"></i> ${wasEditing ? 'Update Bill' : 'Save Bill'}`;
         });
     });
 

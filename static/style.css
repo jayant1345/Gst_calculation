@@ -1789,7 +1789,7 @@ body.table-fullscreen-active {
     gap: 4px;
 }
 
-.btn-delete, .btn-view-file, .btn-view-bill-copy {
+.btn-delete, .btn-view-file, .btn-view-bill-copy, .btn-edit-row {
     background: transparent;
     border: none;
     color: #94a3b8;
@@ -1808,6 +1808,11 @@ body.table-fullscreen-active {
 .btn-view-file:hover, .btn-view-bill-copy:hover {
     color: var(--accent-blue);
     background-color: rgba(37, 99, 235, 0.08);
+}
+
+.btn-edit-row:hover {
+    color: #7c3aed;
+    background-color: rgba(124, 58, 237, 0.1);
 }
 
 .manual-entry-badge {

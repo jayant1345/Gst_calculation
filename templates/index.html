@@ -413,7 +413,9 @@
                                 <th width="6%" title="Section 17(5) blocked credit / fully ineligible" data-col="itc_blocked">
                                     <div class="th-content"><span>Blocked</span><button type="button" class="col-filter-trigger" data-col="itc_blocked" title="Filter Blocked"><i class="fa-solid fa-filter"></i></button></div>
                                 </th>
-                                <th width="10%" title="e.g. GSTIN not mentioned on bill">Remark</th>
+                                <th width="10%" title="e.g. GSTIN not mentioned on bill" data-col="remark">
+                                    <div class="th-content"><span>Remark</span><button type="button" class="col-filter-trigger" data-col="remark" title="Filter Remark"><i class="fa-solid fa-filter"></i></button></div>
+                                </th>
                                 <th width="9%" title="Branch expense head, for the branch PL voucher tally" data-col="gl_code">
                                     <div class="th-content"><span>PL Code</span><button type="button" class="col-filter-trigger" data-col="gl_code" title="Filter PL Code"><i class="fa-solid fa-filter"></i></button></div>
                                 </th>
@@ -598,7 +600,7 @@
     <div class="modal-overlay" id="manual-bill-overlay" style="display: none;">
         <div class="modal-card">
             <div class="modal-header">
-                <h3><i class="fa-solid fa-pen-to-square"></i> Add Manual Bill</h3>
+                <h3><i class="fa-solid fa-pen-to-square"></i> <span id="manual-bill-modal-title">Add Manual Bill</span></h3>
                 <button type="button" class="modal-close" id="manual-bill-close" aria-label="Close">
                     <i class="fa-solid fa-xmark"></i>
                 </button>
@@ -748,7 +750,7 @@
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" id="manual-bill-cancel">Cancel</button>
                     <button type="submit" class="btn btn-primary" id="manual-bill-save">
-                        <i class="fa-solid fa-floppy-disk"></i> Save Bill
+                        <i class="fa-solid fa-floppy-disk"></i> <span id="manual-bill-save-label">Save Bill</span>
                     </button>
                 </div>
             </form>
