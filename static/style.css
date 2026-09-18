@@ -1212,6 +1212,7 @@ body {
 .progress-status.success { color: var(--accent-green); }
 .progress-status.error { color: var(--accent-red); }
 .progress-status.duplicate { color: #b45309; }
+.progress-status.warning { color: #dc2626; font-weight: 700; }
 
 /* Table Toolbar */
 .panel-toolbar {

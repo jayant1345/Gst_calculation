@@ -508,6 +508,49 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
 
+        // 2b. Multi-Page Bill modal Branch input (same behavior as above)
+        const mpbBranchInput = document.getElementById('mpb-branch');
+        const mpbBranchDropdown = document.getElementById('mpb-branch-dropdown');
+        const mpbStateSelect = document.getElementById('mpb-state');
+        if (mpbBranchInput && mpbBranchDropdown) {
+            setupAutocomplete({
+                inputEl: mpbBranchInput,
+                dropdownEl: mpbBranchDropdown,
+                getItems: (query) => {
+                    let branches = getAllBranches();
+                    const currentMpbState = mpbStateSelect ? mpbStateSelect.value.trim() : '';
+                    if (currentMpbState) {
+                        branches = branches.filter(b => b.state === currentMpbState);
+                    }
+                    if (query) {
+                        branches = branches.filter(b => b.name.toLowerCase().includes(query));
+                    }
+                    return branches.map(b => ({
+                        text: b.name,
+                        subtext: '',
+                        badge: b.state,
+                        badgeClass: b.state.toLowerCase()
+                    }));
+                },
+                onSelect: (item) => {
+                    if (mpbStateSelect) mpbStateSelect.value = item.badge;
+                }
+            });
+
+            if (mpbStateSelect) {
+                mpbStateSelect.addEventListener('change', () => {
+                    const st = mpbStateSelect.value.trim();
+                    if (st && mpbBranchInput.value.trim()) {
+                        const val = mpbBranchInput.value.trim().toUpperCase();
+                        const bObj = getAllBranches().find(b => b.name === val);
+                        if (bObj && bObj.state !== st) {
+                            mpbBranchInput.value = '';
+                        }
+                    }
+                });
+            }
+        }
+
         // 3. Manual Bill modal Party Name input
         const mbPartyInput = document.getElementById('mb-party');
         const mbPartyDropdown = document.getElementById('mb-party-dropdown');
@@ -1239,8 +1282,10 @@ document.addEventListener('DOMContentLoaded', () => {
             progressList.appendChild(progressItem);
         });
 
-        // Send to Flask backend
-        fetch('/api/process-invoices', {
+        // Send to Flask backend -- options.endpoint lets callers (e.g. the
+        // dedicated Multi-Page Bill upload) reuse this entire progress
+        // UI/summary flow against a different route.
+        fetch(options.endpoint || '/api/process-invoices', {
             method: 'POST',
             body: formData
         })
@@ -1310,8 +1355,20 @@ document.addEventListener('DOMContentLoaded', () => {
                         statusSpan.title = inv.message || 'Duplicate invoice already recorded';
                     } else if (inv.id !== null) {
                         newlyAddedCount++;
-                        statusSpan.className = 'progress-status success';
-                        statusSpan.innerHTML = '<i class="fa-solid fa-circle-check"></i> 1 bill processed';
+                        if (inv.merge_conflict) {
+                            // Multi-page bill upload: pages disagreed on the
+                            // invoice number -- saved, but flagged for a
+                            // human to verify rather than silently guessed.
+                            statusSpan.className = 'progress-status warning';
+                            statusSpan.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i> Saved -- verify pages';
+                            statusSpan.title = inv.merge_conflict;
+                        } else if (inv.num_pages > 1) {
+                            statusSpan.className = 'progress-status success';
+                            statusSpan.innerHTML = `<i class="fa-solid fa-circle-check"></i> Merged from ${inv.num_pages} pages`;
+                        } else {
+                            statusSpan.className = 'progress-status success';
+                            statusSpan.innerHTML = '<i class="fa-solid fa-circle-check"></i> 1 bill processed';
+                        }
                     } else {
                         failedCount++;
                         statusSpan.className = 'progress-status error';
@@ -2484,6 +2541,63 @@ document.addEventListener('DOMContentLoaded', () => {
     manualBillOverlay.addEventListener('click', (e) => {
         if (e.target === manualBillOverlay) closeManualBillModal();
     });
+
+    // ---- Multi-Page Bill Upload (a single bill spanning several physical
+    // pages, e.g. a 3-page tax invoice) -- entirely separate from the
+    // regular bulk-upload panel above, which instead treats every PDF page
+    // as its own independent bill. Reuses handleFileUpload()'s whole
+    // progress/summary UI against the dedicated /api/process-multipage-bill
+    // route via options.endpoint. ----
+    const btnMultipageBill = document.getElementById('btn-multipage-bill');
+    const multipageBillOverlay = document.getElementById('multipage-bill-overlay');
+    const multipageBillClose = document.getElementById('multipage-bill-close');
+    const multipageBillCancel = document.getElementById('multipage-bill-cancel');
+    const mpbFileInput = document.getElementById('mpb-file-input');
+    const mpbStateSelect = document.getElementById('mpb-state');
+    const mpbUploadBtn = document.getElementById('multipage-bill-upload-btn');
+
+    function openMultipageBillModal() {
+        if (mpbFileInput) mpbFileInput.value = '';
+        if (mpbStateSelect && stateInput) mpbStateSelect.value = stateInput.value.trim();
+        const mpbBranchInput = document.getElementById('mpb-branch');
+        if (mpbBranchInput && branchInput) mpbBranchInput.value = branchInput.value.trim();
+        if (multipageBillOverlay) multipageBillOverlay.style.display = 'flex';
+    }
+
+    function closeMultipageBillModal() {
+        if (multipageBillOverlay) multipageBillOverlay.style.display = 'none';
+    }
+
+    if (btnMultipageBill) btnMultipageBill.addEventListener('click', openMultipageBillModal);
+    if (multipageBillClose) multipageBillClose.addEventListener('click', closeMultipageBillModal);
+    if (multipageBillCancel) multipageBillCancel.addEventListener('click', closeMultipageBillModal);
+    if (multipageBillOverlay) {
+        multipageBillOverlay.addEventListener('click', (e) => {
+            if (e.target === multipageBillOverlay) closeMultipageBillModal();
+        });
+    }
+
+    if (mpbUploadBtn) {
+        mpbUploadBtn.addEventListener('click', () => {
+            const files = mpbFileInput ? mpbFileInput.files : null;
+            if (!files || files.length === 0) {
+                alert('Please choose at least one PDF file.');
+                return;
+            }
+            const nonPdf = Array.from(files).some(f => !f.name.toLowerCase().endsWith('.pdf'));
+            if (nonPdf) {
+                alert('Multi-page bill upload only accepts PDF files.');
+                return;
+            }
+            const mpbBranchInput = document.getElementById('mpb-branch');
+            closeMultipageBillModal();
+            handleFileUpload(files, {
+                endpoint: '/api/process-multipage-bill',
+                branch: mpbBranchInput ? mpbBranchInput.value.trim() : '',
+                state: mpbStateSelect ? mpbStateSelect.value.trim() : ''
+            });
+        });
+    }
 
     // Toggle between "enter taxable value, auto-calculate GST from Rate" and
     // "enter total, auto-split into taxable + GST" - the GST Rate / Supply Type

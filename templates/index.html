@@ -321,6 +321,9 @@
                         <button class="btn btn-secondary" id="btn-add-manual">
                             <i class="fa-solid fa-pen-to-square"></i> Add Manual Bill
                         </button>
+                        <button class="btn btn-secondary" id="btn-multipage-bill" title="For a single bill that spans several physical pages -- all pages are scanned and merged into one bill, with the final amount from the last page">
+                            <i class="fa-solid fa-file-lines"></i> Multi-Page Bill
+                        </button>
                         <button class="btn btn-secondary" id="btn-vendor-directory" title="See which vendors each branch has actually billed from, with GSTIN and totals">
                             <i class="fa-solid fa-address-book"></i> Vendor Directory
                         </button>
@@ -749,6 +752,58 @@
                     </button>
                 </div>
             </form>
+        </div>
+    </div>
+
+    <!-- Multi-Page Bill Upload Modal - kept entirely separate from the
+         regular bulk-upload panel, where every PDF page is treated as its
+         own independent bill (a scanned stack of many one-page bills).
+         Here, ALL pages of each uploaded PDF are merged into ONE bill
+         record, with the final amount taken from the last page. -->
+    <div class="modal-overlay" id="multipage-bill-overlay" style="display: none;">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3><i class="fa-solid fa-file-lines"></i> Upload Multi-Page Bill</h3>
+                <button type="button" class="modal-close" id="multipage-bill-close" aria-label="Close">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+
+            <div class="modal-body">
+                <p class="panel-subtitle" style="margin-bottom: 16px;">
+                    For a single bill that spans several physical pages (e.g. a 3-page tax invoice). Each PDF you pick here is treated as ONE bill, not several &mdash; all its pages are scanned and merged, with the final amount taken from the last page. Upload multiple PDFs at once if you have several such bills.
+                </p>
+
+                <div class="form-grid">
+                    <div class="form-field">
+                        <label for="mpb-state">State</label>
+                        <select id="mpb-state">
+                            <option value="">-- Select State --</option>
+                            <option value="Gujarat">Gujarat</option>
+                            <option value="Maharashtra">Maharashtra</option>
+                        </select>
+                    </div>
+                    <div class="form-field">
+                        <label for="mpb-branch">Branch</label>
+                        <div class="autocomplete-wrapper" id="mpb-branch-wrapper">
+                            <input type="text" id="mpb-branch" placeholder="Select or type branch (e.g. Ashram Road)" autocomplete="off">
+                            <ul class="autocomplete-dropdown" id="mpb-branch-dropdown"></ul>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="form-field">
+                    <label for="mpb-file-input">Multi-page bill PDF(s)</label>
+                    <input type="file" id="mpb-file-input" accept="application/pdf" multiple>
+                </div>
+
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" id="multipage-bill-cancel">Cancel</button>
+                    <button type="button" class="btn btn-primary" id="multipage-bill-upload-btn">
+                        <i class="fa-solid fa-arrow-up-from-bracket"></i> Scan &amp; Save
+                    </button>
+                </div>
+            </div>
         </div>
     </div>
 
