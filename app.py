@@ -2697,6 +2697,155 @@ def clear_invoices():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+# Every table this app owns, in a dependency-friendly order (users before
+# tables that reference a user_id, etc.) for both backup and restore.
+BACKUP_TABLES = [
+    'users', 'invoices', 'purchase_gl_vouchers', 'gstr2b_entries',
+    'activity_log', 'income_entries', 'income_code_catalog',
+    'gst_payable_ledger', 'exempt_income_ledger', 'cash_ledger_balances',
+    'vendor_master', 'remark_master'
+]
+
+@app.route('/admin/backup-data', methods=['GET'])
+@login_required
+def backup_data():
+    """Admin-only full database export -- every table this app owns, as one
+    downloadable JSON snapshot, so there's always a way back if something
+    ever goes wrong. Purely read-only: safe to run at any time."""
+    user_id = session['user_id']
+    if not is_admin_user():
+        return jsonify({"error": "Backup is restricted to Administrator users only."}), 403
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        backup = {"backup_created_at": datetime.datetime.now().isoformat(), "tables": {}}
+        total_rows = 0
+        for table in BACKUP_TABLES:
+            cur.execute(f'SELECT * FROM {table}')
+            rows = [dict(r) for r in cur.fetchall()]
+            backup["tables"][table] = rows
+            total_rows += len(rows)
+        cur.close()
+        conn.close()
+
+        log_activity(user_id, 'database_backup', f'Downloaded full database backup ({total_rows} rows across {len(BACKUP_TABLES)} tables)')
+
+        payload = json.dumps(backup, default=str, indent=2).encode('utf-8')
+        filename = f"gst_backup_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        return send_file(
+            io.BytesIO(payload),
+            mimetype="application/json",
+            as_attachment=True,
+            download_name=filename
+        )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/admin/restore-data', methods=['POST'])
+@login_required
+def restore_data():
+    """Admin-only full database restore from a backup produced by
+    /admin/backup-data. Requires re-entering the account password (same
+    pattern as Password-Protected Clear All above) since this overwrites
+    live data. Runs as ONE transaction -- any failure rolls back
+    everything, so the database is never left partially restored."""
+    user_id = session['user_id']
+    if not is_admin_user():
+        return jsonify({"error": "Restore is restricted to Administrator users only."}), 403
+
+    password = request.form.get('password', '').strip()
+    backup_file = request.files.get('backup_file')
+
+    if not password:
+        return jsonify({"error": "Password confirmation is required to authorize a restore."}), 400
+    if not backup_file:
+        return jsonify({"error": "No backup file uploaded."}), 400
+
+    conn = None
+    cur = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        cur.execute('SELECT password_hash FROM users WHERE id = %s', (user_id,))
+        user_row = cur.fetchone()
+        if not user_row or not check_password_hash(user_row['password_hash'], password):
+            cur.close()
+            conn.close()
+            return jsonify({"error": "Incorrect password. Restore aborted."}), 401
+
+        try:
+            backup = json.loads(backup_file.read())
+        except Exception:
+            cur.close()
+            conn.close()
+            return jsonify({"error": "Uploaded file is not a valid backup JSON."}), 400
+
+        tables = backup.get('tables')
+        if not isinstance(tables, dict):
+            cur.close()
+            conn.close()
+            return jsonify({"error": "Uploaded file doesn't look like a valid backup (missing 'tables')."}), 400
+
+        restored_counts = {}
+        # Only tables actually present in the uploaded backup are touched,
+        # so an older/partial backup never wipes a table it doesn't know
+        # about (e.g. one taken before a newer table existed).
+        tables_to_restore = [t for t in BACKUP_TABLES if t in tables]
+
+        # Delete in REVERSE dependency order first (e.g. invoices/activity_log
+        # /cash_ledger_balances etc. before users) -- several tables carry a
+        # foreign key to users.id, so deleting users first would violate
+        # those constraints even though we're about to re-delete everything.
+        for table in reversed(tables_to_restore):
+            cur.execute(f'DELETE FROM {table}')
+
+        # Insert in FORWARD dependency order (users first, then anything
+        # that references users.id) so every foreign key resolves.
+        for table in tables_to_restore:
+            rows = tables[table] or []
+            for row in rows:
+                if not row:
+                    continue
+                cols = list(row.keys())
+                col_list = ', '.join(f'"{c}"' for c in cols)
+                placeholders = ', '.join(['%s'] * len(cols))
+                cur.execute(
+                    f'INSERT INTO {table} ({col_list}) VALUES ({placeholders})',
+                    [row[c] for c in cols]
+                )
+            # Restored rows keep their original ids, so the auto-increment
+            # sequence must be pushed past the highest restored id -- else
+            # the next new row inserted after restore collides with one
+            # that was just restored.
+            if rows and any('id' in r for r in rows):
+                cur.execute(
+                    "SELECT setval(pg_get_serial_sequence(%s, 'id'), COALESCE((SELECT MAX(id) FROM " + table + "), 1))",
+                    (table,)
+                )
+            restored_counts[table] = len(rows)
+
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        log_activity(user_id, 'database_restore', f'Restored database from uploaded backup: {restored_counts}')
+        return jsonify({"success": True, "restored": restored_counts})
+    except Exception as e:
+        if conn:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        try:
+            if cur:
+                cur.close()
+            if conn:
+                conn.close()
+        except Exception:
+            pass
+        return jsonify({"error": f"Restore failed and was rolled back -- no data was changed: {e}"}), 500
+
 def _insert_before_ext(filename, suffix):
     """Inserts a descriptive suffix before the file extension, e.g.
     ("Invoice.pdf", " (Page 1)") -> "Invoice (Page 1).pdf" - so the stored
@@ -2706,6 +2855,55 @@ def _insert_before_ext(filename, suffix):
     if not ext:
         ext = '.pdf'
     return f"{base}{suffix}{ext}"
+
+def _extract_bills_for_page(file_bytes, filename, p_idx, high_accuracy):
+    """Scans ONE page of a PDF exactly as the existing per-page batch path
+    does: text-extraction + vision gap-fill when a text layer exists and
+    high_accuracy is off, else a full vision pass. Returns the list of bill
+    dict(s) found on that page, with no assumption about how many pages the
+    source document has -- callers decide what to do with multiple pages."""
+    p_doc = pymupdf.open(stream=file_bytes, filetype="pdf")
+    page_text = p_doc[p_idx].get_text()
+    p_doc.close()
+
+    if not high_accuracy and len(page_text.strip()) > 100:
+        bills = extract_from_text(page_text)
+
+        # Gap-fill vision only applies cleanly when the page held exactly
+        # one bill -- with multiple bills detected from text, there's no
+        # single "this page's GSTIN/payment date" to fill in, so those
+        # bills are accepted as extracted rather than second-guessed.
+        if len(bills) == 1:
+            inv = bills[0]
+            needs_gstin = not inv.get('gstin') or inv.get('gstin') == 'N/A'
+            if needs_gstin:
+                gstin_match = re.search(r'\b[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}\b', page_text)
+                if gstin_match:
+                    inv['gstin'] = gstin_match.group(0)
+                    needs_gstin = False
+
+            needs_payment_date = not inv.get('payment_date') or inv.get('payment_date') == inv.get('invoice_date')
+            payment_date_markers = ('rtgs', 'neft', 'p.o. no', 'po no', 'cheque',
+                                     'sanctioned', 'please pay', 'paid on', 'demand draft')
+            has_payment_voucher_section = any(m in page_text.lower() for m in payment_date_markers)
+
+            if needs_gstin or (needs_payment_date and has_payment_voucher_section):
+                try:
+                    vision_bills = extract_from_pdf_binary(file_bytes, page_index=p_idx)
+                    vision_inv = vision_bills[0] if vision_bills else {}
+                    if needs_payment_date and vision_inv.get('payment_date'):
+                        inv['payment_date'] = vision_inv['payment_date']
+                    if needs_gstin and vision_inv.get('gstin'):
+                        inv['gstin'] = vision_inv['gstin']
+                    inv['_ai_model'] = vision_inv.get('_ai_model', inv.get('_ai_model'))
+                except Exception as ex:
+                    print(f"Vision fallback failed for {filename} page {p_idx+1}: {ex}")
+            bills = [inv]
+    else:
+        bills = extract_from_pdf_binary(file_bytes, page_index=p_idx)
+
+    return bills
+
 
 def _parse_single_invoice_file(filename, file_bytes, batch_branch, batch_state, high_accuracy):
     """Processes a single uploaded bill file (PDF, Image, Excel/CSV) and returns

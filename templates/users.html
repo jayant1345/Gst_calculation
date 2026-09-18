@@ -367,6 +367,38 @@
                     </form>
                 </div>
 
+                <!-- Database Backup & Restore Card -->
+                <div class="user-card">
+                    <div class="panel-header" style="margin-bottom: 18px;">
+                        <h2 style="font-size: 17px;"><i class="fa-solid fa-database" style="color: var(--accent-blue);"></i> Database Backup &amp; Restore</h2>
+                        <p class="panel-subtitle">Download a full snapshot of every bill and record, or restore from one if something ever needs to be undone</p>
+                    </div>
+
+                    <a href="/admin/backup-data" class="btn btn-secondary" style="width: 100%; justify-content: center; text-decoration: none;">
+                        <i class="fa-solid fa-download"></i> Download Full Backup (.json)
+                    </a>
+
+                    <div style="margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border-color);">
+                        <p style="font-size: 12.5px; color: #b91c1c; font-weight: 600; margin: 0 0 10px;">
+                            <i class="fa-solid fa-triangle-exclamation"></i> Restoring replaces ALL current data with the backup's contents. This cannot be undone -- only use it to recover from a real problem.
+                        </p>
+                        <form id="restore-form" action="/admin/restore-data" method="POST" enctype="multipart/form-data" onsubmit="return confirmRestore();">
+                            <div class="form-group">
+                                <label for="restore-file">Backup file</label>
+                                <input type="file" id="restore-file" name="backup_file" class="form-control" accept="application/json" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="restore-password">Your account password</label>
+                                <input type="password" id="restore-password" name="password" class="form-control" placeholder="Confirm your password" required>
+                            </div>
+                            <button type="submit" class="btn" style="width: 100%; justify-content: center; background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca;">
+                                <i class="fa-solid fa-clock-rotate-left"></i> Restore From This Backup
+                            </button>
+                        </form>
+                        <div id="restore-status" style="margin-top: 10px; font-size: 13px;"></div>
+                    </div>
+                </div>
+
                 <!-- User List & Work Tracking Table -->
                 <div class="user-card" style="padding: 0; overflow: hidden;">
                     <div style="padding: 20px 24px; border-bottom: 1px solid var(--border-color); display: flex; align-items: center; justify-content: space-between;">
@@ -474,6 +506,38 @@
             if (box) {
                 box.classList.toggle('active');
             }
+        }
+
+        function confirmRestore() {
+            return confirm('This will PERMANENTLY REPLACE all current bills and records with the contents of the uploaded backup file. This cannot be undone. Are you absolutely sure?');
+        }
+
+        const restoreForm = document.getElementById('restore-form');
+        if (restoreForm) {
+            restoreForm.addEventListener('submit', (e) => {
+                e.preventDefault();
+                if (!confirmRestore()) return;
+
+                const statusEl = document.getElementById('restore-status');
+                const submitBtn = restoreForm.querySelector('button[type="submit"]');
+                statusEl.style.color = 'var(--text-muted)';
+                statusEl.textContent = 'Restoring... please do not close this tab.';
+                submitBtn.disabled = true;
+
+                fetch('/admin/restore-data', { method: 'POST', body: new FormData(restoreForm) })
+                    .then(res => res.json().then(data => ({ ok: res.ok, data })))
+                    .then(({ ok, data }) => {
+                        if (!ok) throw new Error(data.error || 'Restore failed.');
+                        statusEl.style.color = '#16a34a';
+                        statusEl.textContent = 'Restore complete: ' + JSON.stringify(data.restored) + '. Reloading...';
+                        setTimeout(() => location.reload(), 2000);
+                    })
+                    .catch(err => {
+                        statusEl.style.color = '#b91c1c';
+                        statusEl.textContent = err.message || 'Restore failed.';
+                        submitBtn.disabled = false;
+                    });
+            });
         }
     </script>
 </body>
