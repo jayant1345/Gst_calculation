@@ -5,6 +5,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentAuditFilter = 'all';
     const columnFilters = {};
     let activeFilterPopup = null;
+    let tableRenderRunId = 0;
     
     // DOM Elements
     const dropZone = document.getElementById('drop-zone');
@@ -387,8 +388,12 @@ document.addEventListener('DOMContentLoaded', () => {
                     invoicePeriods = data.periods || [];
                     populateFilters();
                     calculateAuditCounts();
-                    renderTable();
+                    // Metrics/counts are cheap (a single pass over already-
+                    // fetched data) -- computed and painted BEFORE the table,
+                    // whose row-by-row DOM build is the genuinely slow part,
+                    // so the money figures never sit stuck behind it.
                     updateMetrics();
+                    renderTable();
                     updateBranchSuggestions();
                 }
             })
@@ -1879,7 +1884,15 @@ document.addEventListener('DOMContentLoaded', () => {
         invoiceCountText.textContent = `${filteredInvoices.length} of ${periodInvoices.length} Invoice(s) Loaded`;
         tableBody.innerHTML = '';
 
-        filteredInvoices.forEach((inv) => {
+        // The PL-code dropdown's option list is the exact same catalog for
+        // every row -- built once here instead of re-sorted and
+        // re-stringified per row (previously the single biggest per-row cost
+        // with hundreds of rows).
+        const glCodeOptionsHtml = '<option value="">-- No PL code --</option>' +
+            (window.glPlCodes || []).slice().sort((a, b) => a.code.localeCompare(b.code))
+                .map(c => `<option value="${c.code}">${c.code} - ${c.particulars}</option>`).join('');
+
+        function buildRow(inv) {
             const tr = document.createElement('tr');
             tr.dataset.id = inv.id;
             const isRowSelected = inv.id && selectedInvoiceIds.has(inv.id);
@@ -1948,12 +1961,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 </td>
             `;
 
-            // Populate this row's GL code dropdown from the shared expense catalog
+            // Populate this row's GL code dropdown from the pre-built shared catalog HTML
             const glCodeSelect = tr.querySelector('.field-gl-code');
             if (glCodeSelect) {
-                glCodeSelect.innerHTML = '<option value="">-- No PL code --</option>' +
-                    (window.glPlCodes || []).slice().sort((a, b) => a.code.localeCompare(b.code))
-                        .map(c => `<option value="${c.code}">${c.code} - ${c.particulars}</option>`).join('');
+                glCodeSelect.innerHTML = glCodeOptionsHtml;
                 glCodeSelect.value = inv.gl_code || '';
             }
 
@@ -2058,10 +2069,47 @@ document.addEventListener('DOMContentLoaded', () => {
                 });
             }
 
-            tableBody.appendChild(tr);
-        });
+            return tr;
+        }
 
-        updateDeleteSelectedState();
+        // Renders in progressive chunks instead of building all rows in one
+        // blocking pass -- with hundreds of rows (each ~14 live input/select
+        // fields plus several event listeners), a single synchronous loop is
+        // what previously produced the multi-second "blank, then everything
+        // suddenly appears" delay: the browser can't paint anything until the
+        // whole loop finishes either way. Appending the first batch, then
+        // yielding to the browser (requestAnimationFrame) between the rest,
+        // lets the first rows actually paint immediately, with the remainder
+        // filling in behind them a moment later instead of a single stall.
+        const FIRST_BATCH_SIZE = 40;
+        const CHUNK_SIZE = 60;
+        const renderRunId = ++tableRenderRunId;
+
+        const firstBatch = document.createDocumentFragment();
+        const firstBatchInvoices = filteredInvoices.slice(0, FIRST_BATCH_SIZE);
+        firstBatchInvoices.forEach(inv => firstBatch.appendChild(buildRow(inv)));
+        tableBody.appendChild(firstBatch);
+
+        if (filteredInvoices.length <= FIRST_BATCH_SIZE) {
+            updateDeleteSelectedState();
+            return;
+        }
+
+        let cursor = FIRST_BATCH_SIZE;
+        function renderNextChunk() {
+            if (renderRunId !== tableRenderRunId) return; // a newer render superseded this one
+            const chunkFragment = document.createDocumentFragment();
+            const chunk = filteredInvoices.slice(cursor, cursor + CHUNK_SIZE);
+            chunk.forEach(inv => chunkFragment.appendChild(buildRow(inv)));
+            tableBody.appendChild(chunkFragment);
+            cursor += CHUNK_SIZE;
+            if (cursor < filteredInvoices.length) {
+                requestAnimationFrame(renderNextChunk);
+            } else {
+                updateDeleteSelectedState();
+            }
+        }
+        requestAnimationFrame(renderNextChunk);
     }
 
     // Sync input values with invoice state, calculate 50% split, and POST update to database
