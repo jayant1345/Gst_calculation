@@ -366,9 +366,37 @@ document.addEventListener('DOMContentLoaded', () => {
     // screen if the older request happens to resolve after the newer one -
     // only the response matching the most recently issued request is ever
     // applied.
+    // Clears the metric cards AND the "X of Y Invoice(s) Loaded" count back
+    // to "Loading..." the instant a new period is requested, rather than
+    // leaving the PREVIOUS period's real (but now stale-for-what's-selected)
+    // numbers on screen until the new ones arrive. A correct-looking figure
+    // must never be visible for a period it doesn't actually belong to, even
+    // for the ~1-2 seconds a fetch takes -- individual bill rows are allowed
+    // to stream in progressively, but every summary number must always match
+    // the currently selected month, with no in-between wrong value.
+    function resetMetricsToLoading() {
+        [billingMetric, taxableMetric, eligibleMetric, ineligibleMetric].forEach(el => {
+            if (!el) return;
+            el.textContent = 'Loading…';
+            el.classList.add('is-loading');
+        });
+        if (invoiceCountText) {
+            invoiceCountText.classList.add('is-loading');
+            invoiceCountText.textContent = 'Loading…';
+        }
+        // Quick Rectification pills (All Bills, Missing GST No, etc.) are the
+        // same class of summary number -- cleared for the same reason.
+        ['count-pill-all', 'count-pill-incomplete', 'count-pill-gstin', 'count-pill-inv',
+         'count-pill-branch', 'count-pill-payment', 'count-pill-date', 'count-pill-tax'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = '…';
+        });
+    }
+
     let loadInvoicesRequestId = 0;
     function loadInvoices() {
         const requestId = ++loadInvoicesRequestId;
+        resetMetricsToLoading();
         const params = new URLSearchParams({ client_id: currentClientId });
         const { fy, months } = getFyMonthFilterRaw();
         if (fy) params.set('financial_year', fy);
@@ -392,7 +420,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     // fetched data) -- computed and painted BEFORE the table,
                     // whose row-by-row DOM build is the genuinely slow part,
                     // so the money figures never sit stuck behind it.
+                    console.log('DEBUGPERF before-updateMetrics id=' + requestId + ' t=' + performance.now().toFixed(0));
                     updateMetrics();
+                    console.log('DEBUGPERF after-updateMetrics id=' + requestId + ' t=' + performance.now().toFixed(0));
                     renderTable();
                     updateBranchSuggestions();
                 }
