@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sort CA Material - Naimish N. Shah & Co.</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="{{ asset_url('style.css') }}">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <style>
+        .sorter-wrap { max-width: 900px; }
+        .sorter-intro {
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+            color: #fff; border-radius: 16px; padding: 26px 28px; margin-bottom: 28px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+        }
+        .sorter-intro h2 { font-size: 19px; font-weight: 800; margin-bottom: 8px; display: flex; align-items: center; gap: 10px; }
+        .sorter-intro p { font-size: 13.5px; color: #cbd5e1; line-height: 1.6; }
+        .sorter-card {
+            background: #fff; border: 1px solid var(--border-color); border-radius: 14px;
+            padding: 22px 24px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.03);
+        }
+        .sorter-card h3 { font-size: 15px; font-weight: 700; color: #0f172a; margin-bottom: 12px; }
+        .sorter-form-row { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 14px; }
+        .sorter-form-field { flex: 1; min-width: 180px; }
+        .sorter-form-field label { display: block; font-size: 12px; font-weight: 700; color: #475569; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.3px; }
+        .sorter-form-field select, .sorter-form-field input[type="file"] {
+            width: 100%; padding: 9px 12px; border-radius: 8px; border: 1px solid var(--border-color); font-size: 13.5px;
+        }
+        #sorter-summary { margin-top: 16px; }
+        .sorter-bucket { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-radius: 8px; margin-bottom: 8px; font-size: 13.5px; }
+        .sorter-bucket.purchase { background: #eff6ff; color: #1d4ed8; }
+        .sorter-bucket.income { background: #f0fdf4; color: #166534; }
+        .sorter-bucket.unclassified { background: #fef2f2; color: #dc2626; }
+        #sorter-unclassified-list { margin-top: 10px; font-size: 12.5px; color: #64748b; max-height: 220px; overflow-y: auto; }
+        #sorter-unclassified-list div { padding: 4px 0; border-bottom: 1px solid #f1f5f9; }
+    </style>
+</head>
+<body>
+    <div class="app-container">
+        <aside class="sidebar">
+            <div class="sidebar-top">
+                <div class="sidebar-brand">
+                    <div class="agency-logo-container">
+                        <img src="/static/nn_shah_logo_3d.png" alt="Naimish N. Shah & Co." class="agency-full-logo" onerror="this.onerror=null; this.src='/static/nn_shah_logo.png';">
+                    </div>
+                </div>
+                <nav class="sidebar-nav">
+                    <a href="/" class="nav-item">
+                        <i class="fa-solid fa-chart-pie"></i>
+                        <span>ITC Dashboard</span>
+                    </a>
+                    <a href="/reconciliation" class="nav-item">
+                        <i class="fa-solid fa-scale-balanced"></i>
+                        <span>Reconciliation</span>
+                    </a>
+                    <a href="/income" class="nav-item">
+                        <i class="fa-solid fa-coins"></i>
+                        <span>Income & Output GST</span>
+                    </a>
+                    <a href="/users" class="nav-item">
+                        <i class="fa-solid fa-users-gear"></i>
+                        <span>User Management</span>
+                    </a>
+                    <a href="/settings" class="nav-item">
+                        <i class="fa-solid fa-sliders"></i>
+                        <span>Portal Settings</span>
+                    </a>
+                    <a href="/filing-history" class="nav-item">
+                        <i class="fa-solid fa-clock-rotate-left"></i>
+                        <span>Filing History</span>
+                    </a>
+                    <a href="/sort-material" class="nav-item active">
+                        <i class="fa-solid fa-folder-tree"></i>
+                        <span>Sort CA Material</span>
+                    </a>
+                    <a href="/workflow-guide" class="nav-item">
+                        <i class="fa-solid fa-map-signs"></i>
+                        <span>Workflow Guide</span>
+                    </a>
+                    <a href="/logout" class="nav-item">
+                        <i class="fa-solid fa-arrow-right-from-bracket"></i>
+                        <span>Logout</span>
+                    </a>
+                </nav>
+            </div>
+            <div class="sidebar-footer">
+                <div class="badge-status">
+                    <span class="status-dot"></span>
+                    <span id="api-status">API Connected</span>
+                </div>
+            </div>
+        </aside>
+
+        <main class="main-content">
+            <header class="top-header">
+                <div class="header-left">
+                    <h1>Sort CA Material</h1>
+                    <p class="subtitle">Split a mixed branch-wise folder into clean Purchase Bill / Income Ledger folders</p>
+                </div>
+                <div class="header-right">
+                    <div class="user-profile">
+                        <div class="user-info">
+                            <span class="user-name">{{ session['username'] }}</span>
+                            <span class="user-role">N. N. Shah & Co. (Auditor)</span>
+                        </div>
+                        <div class="avatar">
+                            {% if user_avatar %}
+                            <img src="{{ user_avatar }}" alt="{{ session['username'] }}" class="user-avatar-img">
+                            {% else %}
+                            <i class="fa-solid fa-user-tie"></i>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+            </header>
+
+            <div class="sorter-wrap">
+                <div class="sorter-intro">
+                    <h2><i class="fa-solid fa-folder-tree"></i> What this tool does</h2>
+                    <p>
+                        Pick the mixed folder you receive every period (each branch has its own INCOME CODE / PURCHASE BILL subfolder,
+                        with some naming variations). This tool sorts every file into two clean, branch-wise folders you can then use
+                        directly -- and flags anything it isn't sure about instead of guessing. <strong>Nothing is uploaded anywhere</strong> --
+                        this runs entirely in your browser, and produces a ZIP file for you to download.
+                    </p>
+                </div>
+
+                <div class="sorter-card">
+                    <h3>1. Select period</h3>
+                    <div class="sorter-form-row">
+                        <div class="sorter-form-field">
+                            <label for="sorter-fy">Financial Year</label>
+                            <select id="sorter-fy">
+                                <option value="2024-25">FY 2024-25</option>
+                                <option value="2025-26">FY 2025-26</option>
+                                <option value="2026-27" selected>FY 2026-27</option>
+                                <option value="2027-28">FY 2027-28</option>
+                            </select>
+                        </div>
+                        <div class="sorter-form-field">
+                            <label for="sorter-month">Month</label>
+                            <select id="sorter-month">
+                                <option value="April">April</option>
+                                <option value="May">May</option>
+                                <option value="June">June</option>
+                                <option value="July">July</option>
+                                <option value="August" selected>August</option>
+                                <option value="September">September</option>
+                                <option value="October">October</option>
+                                <option value="November">November</option>
+                                <option value="December">December</option>
+                                <option value="January">January</option>
+                                <option value="February">February</option>
+                                <option value="March">March</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <h3>2. Select the source folder</h3>
+                    <div class="sorter-form-row">
+                        <div class="sorter-form-field" style="flex: 2;">
+                            <input type="file" id="sorter-folder-input" webkitdirectory directory multiple>
+                        </div>
+                    </div>
+
+                    <button type="button" class="btn btn-primary" id="sorter-run-btn" disabled>
+                        <i class="fa-solid fa-wand-magic-sparkles"></i> Sort &amp; Save to Folder
+                    </button>
+
+                    <div id="sorter-summary"></div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="{{ asset_url('sort_material.js') }}"></script>
+</body>
+</html>

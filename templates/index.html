@@ -60,6 +60,10 @@
                     <i class="fa-solid fa-clock-rotate-left"></i>
                     <span>Filing History</span>
                 </a>
+                <a href="/sort-material" class="nav-item">
+                    <i class="fa-solid fa-folder-tree"></i>
+                    <span>Sort CA Material</span>
+                </a>
                 <a href="/workflow-guide" class="nav-item">
                     <i class="fa-solid fa-map-signs"></i>
                     <span>Workflow Guide</span>
@@ -338,6 +342,9 @@
                         </button>
                         <button class="btn btn-gold" id="btn-export-excel">
                             <i class="fa-solid fa-file-excel"></i> Export Reconciled Excel
+                        </button>
+                        <button class="btn btn-secondary" id="btn-payment-period-report" title="See which invoice-month bills make up a given payment period">
+                            <i class="fa-solid fa-calendar-check"></i> Payment Period Report
                         </button>
                     </div>
                 </div>
@@ -643,11 +650,19 @@
                     </div>
                     <div class="form-field">
                         <label for="mb-date">Invoice Date</label>
-                        <input type="date" id="mb-date" autocomplete="off">
+                        <div class="date-input-wrapper">
+                            <input type="text" id="mb-date" placeholder="DD/MM/YYYY" autocomplete="off">
+                            <button type="button" class="date-picker-btn" data-picker-for="mb-date" title="Open calendar"><i class="fa-solid fa-calendar-days"></i></button>
+                            <input type="date" id="mb-date-native" class="date-native-hidden" tabindex="-1">
+                        </div>
                     </div>
                     <div class="form-field">
                         <label for="mb-payment-date">Payment Date <span class="field-hint">(optional)</span></label>
-                        <input type="date" id="mb-payment-date" autocomplete="off">
+                        <div class="date-input-wrapper">
+                            <input type="text" id="mb-payment-date" placeholder="DD/MM/YYYY" autocomplete="off">
+                            <button type="button" class="date-picker-btn" data-picker-for="mb-payment-date" title="Open calendar"><i class="fa-solid fa-calendar-days"></i></button>
+                            <input type="date" id="mb-payment-date-native" class="date-native-hidden" tabindex="-1">
+                        </div>
                     </div>
                 </div>
 
@@ -805,6 +820,61 @@
                         <i class="fa-solid fa-arrow-up-from-bracket"></i> Scan &amp; Save
                     </button>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Payment-Period Reconciliation Report Modal - shows which invoice-month
+         bills make up a given PAYMENT period, since financial_year/month are
+         payment-date-driven. Fully separate from Export Reconciled Excel. -->
+    <div class="modal-overlay" id="payment-period-report-overlay" style="display: none;">
+        <div class="modal-card" style="max-width: 720px;">
+            <div class="modal-header">
+                <h3><i class="fa-solid fa-calendar-check"></i> Payment Period Report</h3>
+                <button type="button" class="modal-close" id="payment-period-report-close" aria-label="Close">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+
+            <div class="modal-body">
+                <p class="panel-subtitle" style="margin-bottom: 16px;">
+                    Bills are recognized by the month they were PAID in, not invoiced in. This shows, for one payment period, which invoice-months its bills actually came from &mdash; e.g. "August-26 payment: 4 bills invoiced July, 200 invoiced August."
+                </p>
+
+                <div class="form-grid">
+                    <div class="form-field">
+                        <label for="ppr-fy">Financial Year</label>
+                        <select id="ppr-fy"></select>
+                    </div>
+                    <div class="form-field">
+                        <label for="ppr-month">Month</label>
+                        <select id="ppr-month">
+                            <option value="April">April</option>
+                            <option value="May">May</option>
+                            <option value="June">June</option>
+                            <option value="July">July</option>
+                            <option value="August">August</option>
+                            <option value="September">September</option>
+                            <option value="October">October</option>
+                            <option value="November">November</option>
+                            <option value="December">December</option>
+                            <option value="January">January</option>
+                            <option value="February">February</option>
+                            <option value="March">March</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="modal-footer" style="justify-content: flex-start; border-top: none; padding-top: 0;">
+                    <button type="button" class="btn btn-primary" id="ppr-generate-btn">
+                        <i class="fa-solid fa-magnifying-glass-chart"></i> Generate
+                    </button>
+                    <button type="button" class="btn btn-secondary" id="ppr-export-btn" style="display: none;">
+                        <i class="fa-solid fa-file-excel"></i> Export this report
+                    </button>
+                </div>
+
+                <div id="ppr-results" style="margin-top: 16px;"></div>
             </div>
         </div>
     </div>

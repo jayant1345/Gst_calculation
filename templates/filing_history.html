@@ -60,6 +60,10 @@
                     <i class="fa-solid fa-clock-rotate-left"></i>
                     <span>Filing History</span>
                 </a>
+                <a href="/sort-material" class="nav-item">
+                    <i class="fa-solid fa-folder-tree"></i>
+                    <span>Sort CA Material</span>
+                </a>
                 <a href="/workflow-guide" class="nav-item">
                     <i class="fa-solid fa-map-signs"></i>
                     <span>Workflow Guide</span>
@@ -195,6 +199,57 @@
                             <i class="fa-solid fa-chevron-left"></i> Newer
                         </button>
                         <button type="button" id="history-next-btn" class="btn-secondary" style="padding: 6px 14px; border-radius: 8px; font-size: 12.5px; font-weight: 700; border: 1px solid var(--border-color); background: #fff; cursor: pointer;">
+                            Older <i class="fa-solid fa-chevron-right"></i>
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <section class="dashboard-panel" style="margin-top: 1.5rem;">
+                <div class="panel-header">
+                    <h2><i class="fa-solid fa-clone"></i> Duplicate Bills Rejected</h2>
+                    <p class="panel-subtitle">Every bill rejected as a duplicate during scanning/upload{% if is_admin %} across all users{% endif %} - filter or page through below</p>
+                </div>
+
+                <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 14px;">
+                    <select id="dup-rejections-source-filter" style="padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border-color); font-size: 13px;">
+                        <option value="ALL">All Sources</option>
+                    </select>
+                    <input type="text" id="dup-rejections-search" placeholder="Search vendor, GSTIN, invoice number..." style="padding: 8px 14px; border-radius: 8px; border: 1px solid var(--border-color); font-size: 13px; width: 280px; flex: 1; min-width: 200px;">
+                </div>
+
+                <div id="dup-rejections-status" class="section-desc" style="padding: 12px 0;">Loading duplicate rejections&hellip;</div>
+
+                <div class="table-container" style="display:none;" id="dup-rejections-table-wrapper">
+                    <table class="invoice-table" id="dup-rejections-table">
+                        <thead>
+                            <tr>
+                                <th>Date &amp; Time</th>
+                                <th>Vendor Name</th>
+                                <th>GSTIN</th>
+                                <th>Invoice Number</th>
+                                <th>Invoice Date</th>
+                                <th class="text-right">Taxable Value</th>
+                                <th>Duplicate Of</th>
+                                <th>Reason</th>
+                                <th>Source</th>
+                                <th>Filename</th>
+                                {% if is_admin %}
+                                <th>User</th>
+                                {% endif %}
+                            </tr>
+                        </thead>
+                        <tbody id="dup-rejections-table-body"></tbody>
+                    </table>
+                </div>
+
+                <div id="dup-rejections-pagination" style="display:none; justify-content: space-between; align-items: center; margin-top: 14px; flex-wrap: wrap; gap: 10px;">
+                    <span id="dup-rejections-pagination-label" style="font-size: 12.5px; color: #64748b;"></span>
+                    <div style="display: flex; gap: 8px;">
+                        <button type="button" id="dup-rejections-prev-btn" class="btn-secondary" style="padding: 6px 14px; border-radius: 8px; font-size: 12.5px; font-weight: 700; border: 1px solid var(--border-color); background: #fff; cursor: pointer;">
+                            <i class="fa-solid fa-chevron-left"></i> Newer
+                        </button>
+                        <button type="button" id="dup-rejections-next-btn" class="btn-secondary" style="padding: 6px 14px; border-radius: 8px; font-size: 12.5px; font-weight: 700; border: 1px solid var(--border-color); background: #fff; cursor: pointer;">
                             Older <i class="fa-solid fa-chevron-right"></i>
                         </button>
                     </div>

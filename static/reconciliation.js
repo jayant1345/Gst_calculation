@@ -265,6 +265,46 @@ document.addEventListener('DOMContentLoaded', function() {
                 updateMonthPillsWithGstr2b(batches);
             })
             .catch(err => console.error('Error fetching GSTR-2B status:', err));
+
+        loadInvoiceMonthCounts();
+    }
+
+    // Purchase-bill availability indicator (Part 5) -- a second, blue dot
+    // alongside the existing green GSTR-2B dot, so the month pill row shows
+    // reconciliation-readiness for every month at a glance.
+    let lastGstr2bMonths = new Set();
+    let invoiceMonthCounts = {};
+
+    function loadInvoiceMonthCounts() {
+        const fy = fySelect ? fySelect.value : '';
+        if (!fy) return;
+
+        fetch(`/api/invoice-month-counts?financial_year=${encodeURIComponent(fy)}`)
+            .then(res => res.json())
+            .then(data => {
+                invoiceMonthCounts = {};
+                (data.counts || []).forEach(row => { invoiceMonthCounts[row.month] = row.count; });
+                renderMonthPillIndicators();
+            })
+            .catch(err => console.error('Error fetching invoice month counts:', err));
+    }
+
+    function renderMonthPillIndicators() {
+        monthChecks.forEach(cb => {
+            const pillSpan = cb.parentElement.querySelector('span');
+            if (!pillSpan) return;
+            const originalShort = cb.value.slice(0, 3);
+            const hasGstr2b = lastGstr2bMonths.has(cb.value);
+            const billCount = invoiceMonthCounts[cb.value] || 0;
+            let dots = '';
+            if (hasGstr2b) {
+                dots += `<span style="display: inline-block; width: 6px; height: 6px; background-color: #22c55e; border-radius: 50%; margin-left: 2px;" title="GSTR-2B Uploaded for ${cb.value}"></span>`;
+            }
+            if (billCount > 0) {
+                dots += `<span style="display: inline-block; width: 6px; height: 6px; background-color: #3b82f6; border-radius: 50%; margin-left: 2px;" title="${billCount} purchase bill(s) uploaded for ${cb.value}"></span>`;
+            }
+            pillSpan.innerHTML = dots ? `${originalShort} ${dots}` : originalShort;
+        });
     }
 
     function updateStateGstr2bPanel(stateName, suffix, stateBatches) {
@@ -342,17 +382,8 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     function updateMonthPillsWithGstr2b(batches) {
-        const loadedMonths = new Set(batches.map(b => b.month));
-        monthChecks.forEach(cb => {
-            const pillSpan = cb.parentElement.querySelector('span');
-            if (!pillSpan) return;
-            const originalShort = cb.value.slice(0, 3);
-            if (loadedMonths.has(cb.value)) {
-                pillSpan.innerHTML = `${originalShort} <span style="display: inline-block; width: 6px; height: 6px; background-color: #22c55e; border-radius: 50%; margin-left: 2px;" title="GSTR-2B Uploaded for ${cb.value}"></span>`;
-            } else {
-                pillSpan.textContent = originalShort;
-            }
-        });
+        lastGstr2bMonths = new Set(batches.map(b => b.month));
+        renderMonthPillIndicators();
     }
 
     // Handle GSTR-2B Upload for one state's panel
@@ -433,11 +464,106 @@ document.addEventListener('DOMContentLoaded', function() {
             }
             reconData = data.items || [];
             updateKPIsForActiveState();
+            updateFilterPillCounts();
             applyFilters();
+            renderResolvedProvisionalBanner(data.resolved_provisional_items || []);
         })
         .catch(err => {
             renderEmptyLedger("Failed to load reconciliation dataset.");
             console.error(err);
+        });
+    }
+
+    // Part 6 -- shows a count on every State/Status filter pill, the same
+    // way the main dashboard's Quick Rectification pills already do. Always
+    // computed against the FULL period's reconData (not cross-filtered by
+    // whichever other pill is currently active), so clicking one pill never
+    // shifts the other row's numbers underneath the user.
+    function updateFilterPillCounts() {
+        const statusCounts = { matched: 0, mismatched: 0, possible_match: 0, missing_in_portal: 0, missing_in_books: 0 };
+        const stateCounts = { Gujarat: 0, Maharashtra: 0, Unassigned: 0 };
+        reconData.forEach(item => {
+            if (item.status === 'Matched') statusCounts.matched++;
+            else if (item.status === 'Value Mismatched') statusCounts.mismatched++;
+            else if (item.status === 'Possible Match') statusCounts.possible_match++;
+            else if (item.status === 'Missing in GSTR-2B') statusCounts.missing_in_portal++;
+            else if (item.status === 'Missing in Books') statusCounts.missing_in_books++;
+
+            const state = item.book?.state || item.portal?.state || 'Unassigned';
+            stateCounts[state] = (stateCounts[state] || 0) + 1;
+        });
+
+        const setPillLabel = (btn, count) => {
+            if (!btn) return;
+            if (!btn.dataset.baseLabel) btn.dataset.baseLabel = btn.textContent.trim();
+            btn.textContent = `${btn.dataset.baseLabel} (${count})`;
+        };
+
+        statusBtns.forEach(btn => {
+            const status = btn.dataset.status;
+            if (status === 'all') setPillLabel(btn, reconData.length);
+            else if (status === 'Matched') setPillLabel(btn, statusCounts.matched);
+            else if (status === 'Value Mismatched') setPillLabel(btn, statusCounts.mismatched);
+            else if (status === 'Possible Match') setPillLabel(btn, statusCounts.possible_match);
+            else if (status === 'Missing in GSTR-2B') setPillLabel(btn, statusCounts.missing_in_portal);
+            else if (status === 'Missing in Books') setPillLabel(btn, statusCounts.missing_in_books);
+        });
+
+        stateFilterBtns.forEach(btn => {
+            const state = btn.dataset.state;
+            if (state === 'all') setPillLabel(btn, reconData.length);
+            else if (state === 'Gujarat') setPillLabel(btn, stateCounts.Gujarat);
+            else if (state === 'Maharashtra') setPillLabel(btn, stateCounts.Maharashtra);
+            else if (state === 'Unassigned') setPillLabel(btn, stateCounts.Unassigned);
+        });
+    }
+
+    // Part 10 -- surfaces provisional items that now find a match in the
+    // currently-viewed period, so the assistant doesn't have to remember to
+    // manually re-check an old cross-month note. Never auto-resolves; the
+    // human still clicks "Mark Resolved" to confirm.
+    function renderResolvedProvisionalBanner(resolvedItems) {
+        let banner = document.getElementById('provisional-resolved-banner');
+        if (!resolvedItems.length) {
+            if (banner) banner.style.display = 'none';
+            return;
+        }
+        if (!banner) {
+            banner = document.createElement('div');
+            banner.id = 'provisional-resolved-banner';
+            banner.style.cssText = 'background:#eff6ff; border:1px solid #bfdbfe; border-radius:10px; padding:14px 16px; margin-bottom:16px;';
+            const kpiSection = document.querySelector('.kpi-scroll-container');
+            if (kpiSection && kpiSection.parentNode) {
+                kpiSection.parentNode.insertBefore(banner, kpiSection);
+            }
+        }
+        const fy = fySelect.value;
+        const month = (Array.from(monthChecks).find(cb => cb.checked) || {}).value || '';
+        banner.style.display = 'block';
+        banner.innerHTML = `<strong><i class="fa-solid fa-clock-rotate-left"></i> ${resolvedItems.length} provisional item(s) now resolved this period:</strong>` +
+            resolvedItems.map(item => `
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-top:8px; background:#fff; border-radius:6px; padding:8px 12px;">
+                    <span>${escapeHtml(item.vendor_name || '-')} &middot; Invoice #${escapeHtml(item.invoice_number || '-')} &middot; flagged ${escapeHtml(item.flagged_month || '')} ${escapeHtml(item.flagged_financial_year || '')}</span>
+                    <button type="button" class="btn-action-small approve" data-resolve-id="${item.id}">Mark Resolved</button>
+                </div>
+            `).join('');
+        banner.querySelectorAll('[data-resolve-id]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                fetch(`/api/provisional-itc/${btn.dataset.resolveId}/resolve`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ resolved_financial_year: fy, resolved_month: month })
+                })
+                .then(res => res.json())
+                .then(data => {
+                    if (data.success) {
+                        btn.closest('div').remove();
+                    } else {
+                        alert(data.error || 'Failed to mark resolved.');
+                    }
+                })
+                .catch(() => alert('Failed to mark resolved.'));
+            });
         });
     }
 
@@ -565,9 +691,13 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (item.status === 'Value Mismatched' && item.book && item.book.has_file) {
                     actionBtn += `<button class="btn-action-small view" data-action="view-bill" title="View original bill"><i class="fa-solid fa-file-lines"></i></button>`;
                 }
+                if (item.status === 'Missing in GSTR-2B') {
+                    actionBtn += `<button class="btn-action-small hold" data-action="mark-provisional" title="Mark as Provisional -- re-check automatically against a later month"><i class="fa-solid fa-clock-rotate-left"></i></button>`;
+                }
             } else if (item.status === 'Missing in Books') {
                 actionBtn = `
                     <button class="btn-action-small hold" data-action="hold" title="Put on Hold"><i class="fa-solid fa-pause"></i></button>
+                    <button class="btn-action-small hold" data-action="mark-provisional" title="Mark as Provisional -- re-check automatically against a later month"><i class="fa-solid fa-clock-rotate-left"></i></button>
                     <button class="btn-action-small delete" data-action="delete-portal-entry" data-id="${item.portal ? item.portal.id : ''}" title="Delete GSTR-2B Entry" style="background: #fef2f2; color: #dc2626; border: 1px solid #fca5a5;"><i class="fa-solid fa-trash"></i></button>
                 `;
             } else {
@@ -606,6 +736,36 @@ document.addEventListener('DOMContentLoaded', function() {
                     else if (kind === 'rescan') rescanInvoice(item.book.id, actionEl);
                     else if (kind === 'view-bill') openBillPreview(item.book.id, supplier, bInv);
                     else if (kind === 'notify') alert(`Sending follow-up to vendor: ${supplier}`);
+                    else if (kind === 'mark-provisional') {
+                        const reason = item.status === 'Missing in Books' ? 'missing_in_books' : 'missing_in_portal';
+                        const src = item.book || item.portal;
+                        const payload = {
+                            reason: reason,
+                            vendor_name: supplier,
+                            gstin: gstin,
+                            invoice_number: src ? src.invoice_number : '',
+                            invoice_date: src ? src.invoice_date : '',
+                            amount: src ? src.total_gst : 0,
+                            flagged_financial_year: fySelect.value,
+                            flagged_month: (Array.from(monthChecks).find(cb => cb.checked) || {}).value || ''
+                        };
+                        fetch('/api/provisional-itc', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload)
+                        })
+                        .then(res => res.json())
+                        .then(data => {
+                            if (data.success) {
+                                actionEl.disabled = true;
+                                actionEl.title = 'Marked as Provisional';
+                                actionEl.innerHTML = '<i class="fa-solid fa-check"></i>';
+                            } else {
+                                alert(data.error || 'Failed to mark as provisional.');
+                            }
+                        })
+                        .catch(() => alert('Failed to mark as provisional.'));
+                    }
                     else if (kind === 'delete-portal-entry') {
                         const entryId = actionEl.dataset.id;
                         if (!entryId) return;

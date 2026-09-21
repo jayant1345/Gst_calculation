@@ -33,7 +33,16 @@
     };
 
     var historyState = { page: 1, pageSize: 100, action: 'ALL', search: '', totalCount: 0, actionsPopulated: false };
+    var dupRejectionsState = { page: 1, pageSize: 100, source: 'ALL', search: '', totalCount: 0, sourcesPopulated: false };
     var searchDebounceTimer = null;
+    var dupRejectionsSearchDebounceTimer = null;
+
+    var SOURCE_LABELS = {
+        bulk_upload: 'Bulk Upload',
+        multipage_bill_upload: 'Multi-Page Bill Upload',
+        manual_entry: 'Manual Entry (New)',
+        manual_edit: 'Manual Entry (Edit)'
+    };
 
     function formatDateTime(iso) {
         if (!iso) return '-';
@@ -151,6 +160,116 @@
             .catch(function (err) {
                 statusEl.textContent = 'Failed to load activity log. Please refresh the page.';
                 console.error('Filing history load error:', err);
+            });
+    }
+
+    function sourceDisplayLabel(source) {
+        return SOURCE_LABELS[source] || source;
+    }
+
+    function populateSourceFilter(availableSources) {
+        var select = document.getElementById('dup-rejections-source-filter');
+        if (!select || dupRejectionsState.sourcesPopulated) return;
+        dupRejectionsState.sourcesPopulated = true;
+        (availableSources || []).forEach(function (source) {
+            var opt = document.createElement('option');
+            opt.value = source;
+            opt.textContent = sourceDisplayLabel(source);
+            select.appendChild(opt);
+        });
+    }
+
+    function renderDupRejectionsRows(rejections, isAdmin) {
+        var tbody = document.getElementById('dup-rejections-table-body');
+        if (!rejections.length) {
+            var colspan = isAdmin ? 11 : 10;
+            tbody.innerHTML = '<tr class="empty-state-row"><td colspan="' + colspan + '">' +
+                '<div class="empty-state"><i class="fa-solid fa-circle-check"></i>' +
+                '<p>No duplicate bills rejected yet.</p></div></td></tr>';
+            return;
+        }
+
+        var rows = rejections.map(function (entry) {
+            var userCell = isAdmin ? '<td>' + escapeHtml(entry.username) + '</td>' : '';
+            var dupOf = entry.matched_invoice_id ? ('Bill ID #' + entry.matched_invoice_id) : 'Same batch';
+            var taxable = (entry.taxable_value !== null && entry.taxable_value !== undefined)
+                ? Number(entry.taxable_value).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                : '-';
+            return '<tr>' +
+                '<td>' + escapeHtml(formatDateTime(entry.created_at)) + '</td>' +
+                '<td>' + escapeHtml(entry.vendor_name || '-') + '</td>' +
+                '<td>' + escapeHtml(entry.gstin || '-') + '</td>' +
+                '<td>' + escapeHtml(entry.invoice_number || '-') + '</td>' +
+                '<td>' + escapeHtml(entry.invoice_date || '-') + '</td>' +
+                '<td class="text-right">' + escapeHtml(taxable) + '</td>' +
+                '<td>' + escapeHtml(dupOf) + '</td>' +
+                '<td>' + escapeHtml(entry.reason || '-') + '</td>' +
+                '<td>' + escapeHtml(sourceDisplayLabel(entry.source)) + '</td>' +
+                '<td>' + escapeHtml(entry.filename || '-') + '</td>' +
+                userCell +
+                '</tr>';
+        });
+
+        tbody.innerHTML = rows.join('');
+    }
+
+    function renderDupRejectionsPagination() {
+        var wrap = document.getElementById('dup-rejections-pagination');
+        var label = document.getElementById('dup-rejections-pagination-label');
+        var prevBtn = document.getElementById('dup-rejections-prev-btn');
+        var nextBtn = document.getElementById('dup-rejections-next-btn');
+        var total = dupRejectionsState.totalCount;
+
+        if (total === 0) {
+            wrap.style.display = 'none';
+            return;
+        }
+        wrap.style.display = 'flex';
+
+        var start = (dupRejectionsState.page - 1) * dupRejectionsState.pageSize + 1;
+        var end = Math.min(total, dupRejectionsState.page * dupRejectionsState.pageSize);
+        label.textContent = 'Showing ' + start + '–' + end + ' of ' + total + ' rejections';
+
+        prevBtn.disabled = dupRejectionsState.page <= 1;
+        prevBtn.style.opacity = prevBtn.disabled ? '0.5' : '1';
+        prevBtn.style.cursor = prevBtn.disabled ? 'not-allowed' : 'pointer';
+
+        var hasMore = end < total;
+        nextBtn.disabled = !hasMore;
+        nextBtn.style.opacity = nextBtn.disabled ? '0.5' : '1';
+        nextBtn.style.cursor = nextBtn.disabled ? 'not-allowed' : 'pointer';
+    }
+
+    function loadDuplicateRejections() {
+        var statusEl = document.getElementById('dup-rejections-status');
+        var wrapperEl = document.getElementById('dup-rejections-table-wrapper');
+        var table = document.getElementById('dup-rejections-table');
+        var isAdmin = table.querySelectorAll('thead th').length === 11;
+
+        var params = new URLSearchParams({
+            page: dupRejectionsState.page,
+            page_size: dupRejectionsState.pageSize,
+            source: dupRejectionsState.source,
+            search: dupRejectionsState.search
+        });
+
+        fetch('/api/duplicate-rejections?' + params.toString())
+            .then(function (res) { return res.json(); })
+            .then(function (data) {
+                if (data.error) {
+                    statusEl.textContent = 'Failed to load duplicate rejections: ' + data.error;
+                    return;
+                }
+                populateSourceFilter(data.available_sources);
+                dupRejectionsState.totalCount = data.total_count || 0;
+                renderDupRejectionsRows(data.rejections || [], isAdmin);
+                renderDupRejectionsPagination();
+                statusEl.style.display = 'none';
+                wrapperEl.style.display = '';
+            })
+            .catch(function (err) {
+                statusEl.textContent = 'Failed to load duplicate rejections. Please refresh the page.';
+                console.error('Duplicate rejections load error:', err);
             });
     }
 
@@ -283,7 +402,43 @@
             }
         });
 
+        var dupSourceFilter = document.getElementById('dup-rejections-source-filter');
+        var dupSearchInput = document.getElementById('dup-rejections-search');
+        var dupPrevBtn = document.getElementById('dup-rejections-prev-btn');
+        var dupNextBtn = document.getElementById('dup-rejections-next-btn');
+
+        dupSourceFilter.addEventListener('change', function () {
+            dupRejectionsState.source = dupSourceFilter.value;
+            dupRejectionsState.page = 1;
+            loadDuplicateRejections();
+        });
+
+        dupSearchInput.addEventListener('input', function () {
+            clearTimeout(dupRejectionsSearchDebounceTimer);
+            dupRejectionsSearchDebounceTimer = setTimeout(function () {
+                dupRejectionsState.search = dupSearchInput.value.trim();
+                dupRejectionsState.page = 1;
+                loadDuplicateRejections();
+            }, 350);
+        });
+
+        dupPrevBtn.addEventListener('click', function () {
+            if (dupRejectionsState.page > 1) {
+                dupRejectionsState.page -= 1;
+                loadDuplicateRejections();
+            }
+        });
+
+        dupNextBtn.addEventListener('click', function () {
+            var end = dupRejectionsState.page * dupRejectionsState.pageSize;
+            if (end < dupRejectionsState.totalCount) {
+                dupRejectionsState.page += 1;
+                loadDuplicateRejections();
+            }
+        });
+
         loadHistory();
+        loadDuplicateRejections();
         loadMonthlySummary();
     });
 })();

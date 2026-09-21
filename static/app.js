@@ -249,7 +249,9 @@ document.addEventListener('DOMContentLoaded', () => {
     let editingInvoiceId = null;
 
     // Converts a stored DD/MM/YYYY date string to the YYYY-MM-DD format
-    // native <input type="date"> elements require to pre-fill correctly.
+    // native <input type="date"> elements require, so the hidden calendar
+    // picker opens on the right date -- the visible text field itself
+    // always stays DD/MM/YYYY regardless of browser/OS locale.
     function ddmmyyyyToInputDate(str) {
         if (!str) return '';
         const parts = str.trim().split('/');
@@ -258,6 +260,41 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!d || !m || !y) return '';
         return `${y.padStart(4, '0')}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
     }
+
+    // Inverse: native <input type="date">'s YYYY-MM-DD value -> DD/MM/YYYY
+    // for display in the visible text field.
+    function inputDateToDdmmyyyy(str) {
+        if (!str) return '';
+        const parts = str.split('-');
+        if (parts.length !== 3) return '';
+        const [y, m, d] = parts;
+        return `${d}/${m}/${y}`;
+    }
+
+    // Wires a visible DD/MM/YYYY text field to a paired hidden native
+    // <input type="date"> calendar picker: the icon button opens the native
+    // picker, and picking a date writes it back as DD/MM/YYYY into the
+    // visible field -- typing directly into the text field still works too.
+    function wireDatePicker(textId, nativeId, buttonSelector) {
+        const textInput = document.getElementById(textId);
+        const nativeInput = document.getElementById(nativeId);
+        const btn = document.querySelector(buttonSelector);
+        if (!textInput || !nativeInput || !btn) return;
+        btn.addEventListener('click', () => {
+            nativeInput.value = ddmmyyyyToInputDate(textInput.value.trim());
+            if (typeof nativeInput.showPicker === 'function') {
+                nativeInput.showPicker();
+            } else {
+                nativeInput.click();
+            }
+        });
+        nativeInput.addEventListener('change', () => {
+            textInput.value = inputDateToDdmmyyyy(nativeInput.value);
+            textInput.dispatchEvent(new Event('change', { bubbles: true }));
+        });
+    }
+    wireDatePicker('mb-date', 'mb-date-native', '[data-picker-for="mb-date"]');
+    wireDatePicker('mb-payment-date', 'mb-payment-date-native', '[data-picker-for="mb-payment-date"]');
 
     // High Accuracy Scan Elements
     const highAccuracyToggle = document.getElementById('high-accuracy-toggle');
@@ -2547,8 +2584,8 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('mb-branch').value = inv.branch || '';
         document.getElementById('mb-party').value = inv.vendor_name || '';
         document.getElementById('mb-gstin').value = inv.gstin || '';
-        document.getElementById('mb-date').value = ddmmyyyyToInputDate(inv.invoice_date);
-        document.getElementById('mb-payment-date').value = ddmmyyyyToInputDate(inv.payment_date);
+        document.getElementById('mb-date').value = inv.invoice_date || '';
+        document.getElementById('mb-payment-date').value = inv.payment_date || '';
         document.getElementById('mb-itc-blocked').checked = !!inv.itc_blocked;
         document.getElementById('mb-remark').value = inv.remark || '';
         document.getElementById('mb-gl-code').value = inv.gl_code || '';
@@ -3064,6 +3101,133 @@ document.addEventListener('DOMContentLoaded', () => {
             btnExportExcel.disabled = false;
         });
     });
+
+    // =========================================================
+    // Payment-Period Reconciliation Report (Part 3) -- fully separate from
+    // Export Reconciled Excel. Shows which invoice-month bills make up a
+    // given PAYMENT period, since financial_year/month are payment-driven.
+    // =========================================================
+    const btnPaymentPeriodReport = document.getElementById('btn-payment-period-report');
+    const pprOverlay = document.getElementById('payment-period-report-overlay');
+    const pprClose = document.getElementById('payment-period-report-close');
+    const pprFySelect = document.getElementById('ppr-fy');
+    const pprMonthSelect = document.getElementById('ppr-month');
+    const pprGenerateBtn = document.getElementById('ppr-generate-btn');
+    const pprExportBtn = document.getElementById('ppr-export-btn');
+    const pprResults = document.getElementById('ppr-results');
+    let pprLastReport = null;
+
+    function openPaymentPeriodReportModal() {
+        if (!pprOverlay) return;
+        const years = [...new Set(invoicePeriods.map(p => p.financial_year).filter(Boolean))].sort((a, b) => b.localeCompare(a));
+        pprFySelect.innerHTML = years.map(fy => `<option value="${fy}">FY ${fy}</option>`).join('');
+        const { fy, months } = getFyMonthFilterRaw();
+        if (fy) pprFySelect.value = fy;
+        if (months.length > 0) pprMonthSelect.value = months[0];
+        pprResults.innerHTML = '';
+        pprExportBtn.style.display = 'none';
+        pprLastReport = null;
+        pprOverlay.style.display = 'flex';
+    }
+
+    function closePaymentPeriodReportModal() {
+        if (pprOverlay) pprOverlay.style.display = 'none';
+    }
+
+    if (btnPaymentPeriodReport) btnPaymentPeriodReport.addEventListener('click', openPaymentPeriodReportModal);
+    if (pprClose) pprClose.addEventListener('click', closePaymentPeriodReportModal);
+    if (pprOverlay) pprOverlay.addEventListener('click', (e) => { if (e.target === pprOverlay) closePaymentPeriodReportModal(); });
+
+    function renderPaymentPeriodReport(data) {
+        const formatCurrency = (val) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 2 }).format(val || 0);
+        if (!data.groups || data.groups.length === 0) {
+            pprResults.innerHTML = '<p class="section-desc">No bills found for this payment period.</p>';
+            pprExportBtn.style.display = 'none';
+            return;
+        }
+        let html = `<p style="margin-bottom: 12px;"><strong>${data.total_bills}</strong> bills, totaling <strong>${formatCurrency(data.total_amount)}</strong>, recognized in ${data.target_month} FY ${data.target_fy}'s payment period.</p>`;
+        data.groups.forEach(group => {
+            html += `
+                <div style="margin-bottom: 14px; border: 1px solid var(--border-color); border-radius: 8px; overflow: hidden;">
+                    <div style="background: #f1f5f9; padding: 8px 14px; font-weight: 700; display: flex; justify-content: space-between;">
+                        <span>Invoiced in ${group.invoice_month} FY ${group.invoice_fy}</span>
+                        <span>${group.count} bill${group.count === 1 ? '' : 's'} &middot; ${formatCurrency(group.total_amount)}</span>
+                    </div>
+                    <table class="invoice-table" style="width: 100%;">
+                        <thead><tr><th>Vendor</th><th>Invoice #</th><th>Invoice Date</th><th>Payment Date</th><th class="text-right">Amount</th><th></th></tr></thead>
+                        <tbody>
+                            ${group.bills.map(b => `
+                                <tr>
+                                    <td>${b.vendor_name || '-'}</td>
+                                    <td>${b.invoice_number || '-'}</td>
+                                    <td>${b.invoice_date || '-'}</td>
+                                    <td>${b.payment_date || '-'}</td>
+                                    <td class="text-right">${formatCurrency(b.amount)}</td>
+                                    <td><a href="#" class="ppr-view-bill" data-id="${b.id}" title="View this bill"><i class="fa-solid fa-eye"></i></a></td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>`;
+        });
+        pprResults.innerHTML = html;
+        pprResults.querySelectorAll('.ppr-view-bill').forEach(link => {
+            link.addEventListener('click', (e) => {
+                e.preventDefault();
+                window.open(`/api/invoice-file/${link.dataset.id}`, '_blank');
+            });
+        });
+        pprExportBtn.style.display = 'inline-flex';
+    }
+
+    if (pprGenerateBtn) {
+        pprGenerateBtn.addEventListener('click', () => {
+            const fy = pprFySelect.value;
+            const month = pprMonthSelect.value;
+            if (!fy || !month) {
+                alert('Please select a Financial Year and Month.');
+                return;
+            }
+            pprGenerateBtn.disabled = true;
+            pprResults.innerHTML = '<p class="section-desc">Loading&hellip;</p>';
+            fetch(`/api/payment-period-report?financial_year=${encodeURIComponent(fy)}&month=${encodeURIComponent(month)}`)
+                .then(res => res.json())
+                .then(data => {
+                    if (data.error) throw new Error(data.error);
+                    pprLastReport = data;
+                    renderPaymentPeriodReport(data);
+                })
+                .catch(err => {
+                    pprResults.innerHTML = `<p class="section-desc" style="color: var(--accent-red);">${err.message || 'Failed to load report.'}</p>`;
+                })
+                .finally(() => { pprGenerateBtn.disabled = false; });
+        });
+    }
+
+    if (pprExportBtn) {
+        pprExportBtn.addEventListener('click', () => {
+            if (!pprLastReport) return;
+            pprExportBtn.disabled = true;
+            fetch('/api/export-payment-period-report', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(pprLastReport)
+            })
+            .then(res => { if (!res.ok) throw new Error('Export failed'); return res.blob(); })
+            .then(blob => {
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `Payment_Period_Report_${pprLastReport.target_fy}_${pprLastReport.target_month}.xlsx`;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                window.URL.revokeObjectURL(url);
+            })
+            .catch(() => alert('Failed to export report.'))
+            .finally(() => { pprExportBtn.disabled = false; });
+        });
+    }
 
     // =========================================================
     // AI Re-Scan Feature & Interactive Comparison Report Modal

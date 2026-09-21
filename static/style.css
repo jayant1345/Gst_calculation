@@ -2095,6 +2095,39 @@ body.table-fullscreen-active {
     color: #475569;
 }
 
+.date-input-wrapper {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+.date-input-wrapper input[type="text"] {
+    width: 100%;
+    padding-right: 34px;
+}
+.date-picker-btn {
+    position: absolute;
+    right: 6px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: none;
+    border: none;
+    color: #64748b;
+    cursor: pointer;
+    padding: 4px 6px;
+    font-size: 14px;
+}
+.date-picker-btn:hover {
+    color: var(--accent-blue);
+}
+.date-native-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    pointer-events: none;
+    right: 8px;
+}
+
 .field-hint {
     font-weight: 400;
     color: #94a3b8;

@@ -429,6 +429,54 @@ def init_db():
             );
         ''')
 
+        # Permanent record of every bill rejected as a duplicate during
+        # scanning/upload -- the live upload panel only shows this
+        # transiently, so without this table there's no way to look back
+        # and see which bills were rejected or why.
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS duplicate_rejections (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                client_id VARCHAR(50) NOT NULL DEFAULT 'nutan_nagrik',
+                vendor_name VARCHAR(255),
+                gstin VARCHAR(50),
+                invoice_number VARCHAR(100),
+                invoice_date VARCHAR(20),
+                taxable_value NUMERIC(15,2),
+                matched_invoice_id INTEGER REFERENCES invoices(id) ON DELETE SET NULL,
+                reason VARCHAR(500),
+                source VARCHAR(30),
+                filename VARCHAR(255),
+                financial_year VARCHAR(10),
+                month VARCHAR(20),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        ''')
+
+        # Tracks "Missing in Books"/"Missing in Portal" reconciliation items
+        # the CA's office has manually flagged as a timing difference to
+        # re-check next month, instead of keeping that list outside the app.
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS provisional_itc_items (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                client_id VARCHAR(50) NOT NULL DEFAULT 'nutan_nagrik',
+                reason VARCHAR(20) NOT NULL,
+                vendor_name VARCHAR(255),
+                gstin VARCHAR(50),
+                invoice_number VARCHAR(100),
+                invoice_date VARCHAR(20),
+                amount NUMERIC(15,2),
+                flagged_financial_year VARCHAR(10),
+                flagged_month VARCHAR(20),
+                status VARCHAR(20) NOT NULL DEFAULT 'pending',
+                resolved_financial_year VARCHAR(10),
+                resolved_month VARCHAR(20),
+                notes VARCHAR(500),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        ''')
+
 
 
         # Income Statements & Output GST Module Table
@@ -721,6 +769,46 @@ def log_activity(user_id, action, description=None, fy=None, month=None, record_
         conn.close()
     except Exception as e:
         print(f"Error logging activity: {e}")
+
+def log_duplicate_rejection(user_id, client_id, inv, dup_id, dup_reason, source, filename=None, fy=None, month=None):
+    """Best-effort permanent record of a rejected duplicate bill, for the
+    Filing History page's Duplicate Bills Rejected section. Never raises."""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute('''
+            INSERT INTO duplicate_rejections
+                (user_id, client_id, vendor_name, gstin, invoice_number, invoice_date,
+                 taxable_value, matched_invoice_id, reason, source, filename, financial_year, month)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ''', (user_id, client_id, inv.get('vendor_name'), inv.get('gstin'),
+              inv.get('invoice_number'), inv.get('invoice_date'), inv.get('taxable_value'),
+              dup_id if isinstance(dup_id, int) else None, dup_reason, source, filename, fy, month))
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print(f"Error logging duplicate rejection: {e}")
+
+def friendly_error_message(e):
+    """Translates a caught exception into a human-readable sentence for the
+    browser, so a raw Postgres/Python error is never shown to the user. Always
+    falls back to a safe generic message for anything unrecognized -- the raw
+    text is still printed server-side (see call sites) for diagnosis."""
+    msg = str(e)
+    if "value too long for type character varying" in msg:
+        return "One of the fields you entered is too long. Please shorten it and try again."
+    if "duplicate key value violates unique constraint" in msg:
+        return "This record already exists."
+    if "violates foreign key constraint" in msg:
+        return "This action isn't allowed because other records still depend on it."
+    if "violates not-null constraint" in msg:
+        return "A required field is missing. Please fill in all required fields."
+    if "invalid input syntax for type" in msg:
+        return "One of the fields has an invalid value. Please check the numbers/dates entered."
+    if "could not connect" in msg or "connection" in msg.lower():
+        return "Could not connect to the database. Please try again in a moment."
+    return "Something went wrong while saving. Please try again, and contact support if this keeps happening."
 
 def call_claude_api(payload):
     """Utility to make direct HTTP requests to the Anthropic Claude API."""
@@ -1324,7 +1412,8 @@ def register():
                     error = f"Username '{username}' already exists"
                 else:
                     hashed_pw = generate_password_hash(password)
-                    cur.execute('INSERT INTO users (username, password_hash, is_admin) VALUES (%s, %s, %s)', (username, hashed_pw, make_admin))
+                    cur.execute('INSERT INTO users (username, password_hash, is_admin) VALUES (%s, %s, %s) RETURNING id', (username, hashed_pw, make_admin))
+                    new_user_id = cur.fetchone()[0]
                     conn.commit()
                     cur.close()
                     conn.close()
@@ -1334,6 +1423,7 @@ def register():
                         flash(f"User '{username}' registered successfully!", "success")
                         return redirect(url_for('admin_users'))
                     else:
+                        log_activity(new_user_id, 'CREATE_USER', f"Self-registered new user '{username}'")
                         flash("Registration successful! You can now log in.", "success")
                         return redirect(url_for('login'))
                 cur.close()
@@ -1379,6 +1469,7 @@ def settings():
                 conn.close()
 
                 if not error:
+                    log_activity(session['user_id'], 'CHANGE_OWN_PASSWORD', f"User '{session.get('username')}' changed their own password")
                     flash("Password updated successfully.", "success")
                     return redirect(url_for('settings'))
             except Exception as e:
@@ -1695,9 +1786,12 @@ def add_vendor_master():
         cur.close()
         conn.close()
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        print(f"Error: {e}")
+        return jsonify({"error": friendly_error_message(e)}), 500
 
     load_vendor_master_overrides()
+    log_activity(session['user_id'], 'ADD_VENDOR' if not existing else 'EDIT_VENDOR',
+                 f"{'Added' if not existing else 'Updated'} vendor '{name}' (GSTIN: {gstin or 'N/A'})")
     return jsonify({"success": True, "vendor": {"id": vendor_id, "client_id": client_id, "name": name, "gstin": gstin, "state": state}})
 
 @app.route('/api/vendor-master/<int:vendor_id>', methods=['DELETE'])
@@ -1708,13 +1802,18 @@ def delete_vendor_master(vendor_id):
     try:
         conn = get_db_connection()
         cur = conn.cursor()
+        cur.execute('SELECT name FROM vendor_master WHERE id = %s', (vendor_id,))
+        row = cur.fetchone()
+        vendor_name = row[0] if row else f"ID #{vendor_id}"
         cur.execute('DELETE FROM vendor_master WHERE id = %s', (vendor_id,))
         conn.commit()
         cur.close()
         conn.close()
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        print(f"Error: {e}")
+        return jsonify({"error": friendly_error_message(e)}), 500
     load_vendor_master_overrides()
+    log_activity(session['user_id'], 'DELETE_VENDOR', f"Deleted vendor '{vendor_name}' (ID: {vendor_id})")
     return jsonify({"success": True})
 
 @app.route('/api/branch-vendor-history', methods=['GET'])
@@ -1753,7 +1852,8 @@ def branch_vendor_history():
         conn.close()
         return jsonify({"vendors": rows})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        print(f"Error: {e}")
+        return jsonify({"error": friendly_error_message(e)}), 500
 
 @app.route('/bill-copy/<int:invoice_id>')
 @login_required
@@ -1867,7 +1967,150 @@ def get_invoices():
         conn.close()
         return jsonify({"invoices": rows, "periods": periods, "client_id": client_id, "client": get_client_config(client_id)})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        print(f"Error fetching invoices: {e}")
+        return jsonify({"error": friendly_error_message(e)}), 500
+
+@app.route('/api/invoice-month-counts', methods=['GET'])
+@login_required
+def invoice_month_counts():
+    """Per-month purchase-bill counts for one FY, used to draw the second
+    (blue) availability dot on the Reconciliation page's month pills,
+    alongside the existing green GSTR-2B dot."""
+    user_id = session['user_id']
+    is_admin = is_admin_user()
+    client_id = get_current_client_id()
+    fy = request.args.get('financial_year', '').strip()
+    if not fy:
+        return jsonify({"error": "Financial Year is required"}), 400
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        if is_admin:
+            cur.execute('SELECT month, COUNT(*) AS count FROM invoices WHERE client_id = %s AND financial_year = %s GROUP BY month', (client_id, fy))
+        else:
+            cur.execute('SELECT month, COUNT(*) AS count FROM invoices WHERE user_id = %s AND client_id = %s AND financial_year = %s GROUP BY month', (user_id, client_id, fy))
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        return jsonify({"counts": rows})
+    except Exception as e:
+        print(f"Error fetching invoice month counts: {e}")
+        return jsonify({"error": friendly_error_message(e)}), 500
+
+@app.route('/api/payment-period-report', methods=['GET'])
+@login_required
+def payment_period_report():
+    """Groups a single target FY+Month's bills (already recognized in that
+    period by PAYMENT date, per compute_billing_period's rule) by the
+    calendar month they were actually INVOICED in -- answers "of the bills
+    recognized in this payment period, which were invoiced earlier?" which
+    the stored financial_year/month columns alone can't answer since they
+    reflect the payment period, not the invoice period."""
+    user_id = session['user_id']
+    is_admin = is_admin_user()
+    client_id = get_current_client_id()
+    fy = request.args.get('financial_year', '').strip()
+    month = request.args.get('month', '').strip()
+
+    if not fy or not month:
+        return jsonify({"error": "Financial Year and Month are required"}), 400
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        if is_admin:
+            cur.execute('''
+                SELECT id, vendor_name, invoice_number, invoice_date, payment_date,
+                       taxable_value::float, cgst::float, sgst::float, igst::float
+                FROM invoices
+                WHERE client_id = %s AND financial_year = %s AND month = %s
+            ''', (client_id, fy, month))
+        else:
+            cur.execute('''
+                SELECT id, vendor_name, invoice_number, invoice_date, payment_date,
+                       taxable_value::float, cgst::float, sgst::float, igst::float
+                FROM invoices
+                WHERE user_id = %s AND client_id = %s AND financial_year = %s AND month = %s
+            ''', (user_id, client_id, fy, month))
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+
+        groups_map = {}
+        total_amount = 0.0
+        for r in rows:
+            amount = round((r['taxable_value'] or 0) + (r['cgst'] or 0) + (r['sgst'] or 0) + (r['igst'] or 0), 2)
+            total_amount += amount
+            inv_fy, inv_month = parse_date_to_fy_and_month(r['invoice_date'])
+            key = (inv_fy or 'Unknown', inv_month or 'Unknown')
+            if key not in groups_map:
+                groups_map[key] = {"invoice_fy": key[0], "invoice_month": key[1], "count": 0, "total_amount": 0.0, "bills": []}
+            groups_map[key]["count"] += 1
+            groups_map[key]["total_amount"] = round(groups_map[key]["total_amount"] + amount, 2)
+            groups_map[key]["bills"].append({
+                "id": r['id'], "vendor_name": r['vendor_name'], "invoice_number": r['invoice_number'],
+                "invoice_date": r['invoice_date'], "payment_date": r['payment_date'], "amount": amount
+            })
+
+        groups = sorted(groups_map.values(), key=lambda g: (g["invoice_fy"], month_sort_key(g["invoice_month"])))
+
+        return jsonify({
+            "target_fy": fy, "target_month": month,
+            "total_bills": len(rows), "total_amount": round(total_amount, 2),
+            "groups": groups
+        })
+    except Exception as e:
+        print(f"Error building payment period report: {e}")
+        return jsonify({"error": friendly_error_message(e)}), 500
+
+@app.route('/api/export-payment-period-report', methods=['POST'])
+@login_required
+def export_payment_period_report():
+    """Own, separate Excel export for the Payment Period Report -- never
+    merged into /api/export-excel's workbook."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+
+    data = request.json or {}
+    target_fy = data.get('target_fy', '')
+    target_month = data.get('target_month', '')
+    groups = data.get('groups', [])
+
+    try:
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Payment Period Report"[:31]
+        ws.append([f"Payment Period Report - FY {target_fy}, {target_month}"])
+        ws['A1'].font = Font(bold=True, size=13)
+        ws.append([])
+        headers = ["Invoice Month", "Vendor Name", "Invoice Number", "Invoice Date", "Payment Date", "Amount"]
+        ws.append(headers)
+        for cell in ws[ws.max_row]:
+            cell.font = Font(bold=True)
+
+        for group in groups:
+            inv_month_label = f"{group.get('invoice_month', 'Unknown')} FY {group.get('invoice_fy', 'Unknown')}"
+            for bill in group.get('bills', []):
+                ws.append([inv_month_label, bill.get('vendor_name', ''), bill.get('invoice_number', ''),
+                           bill.get('invoice_date', ''), bill.get('payment_date', '') or '', bill.get('amount', 0)])
+
+        for col_cells in ws.columns:
+            max_len = max((len(str(c.value)) for c in col_cells if c.value is not None), default=10)
+            ws.column_dimensions[col_cells[0].column_letter].width = min(40, max_len + 2)
+
+        output = io.BytesIO()
+        wb.save(output)
+        output.seek(0)
+        return send_file(
+            output,
+            as_attachment=True,
+            download_name=f"Payment_Period_Report_{target_fy}_{target_month}.xlsx",
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+    except Exception as e:
+        print(f"Error exporting payment period report: {e}")
+        return jsonify({"error": friendly_error_message(e)}), 500
 
 def find_duplicate_invoice(cur, user_id, gstin, inv_num, vendor_name, inv_date, taxable_value, financial_year=None, exclude_id=None, client_id='nutan_nagrik'):
     """Checks if a matching invoice already exists in the database for the user.
@@ -1963,6 +2206,13 @@ def save_invoice():
     remark = (inv.get('remark') or '').strip()[:500]
     gl_code = (inv.get('gl_code') or '').strip()[:50] or None
 
+    if len(inv_num) > 50:
+        return jsonify({"error": f"Invoice Number is too long ({len(inv_num)} characters) — please shorten it to 50 characters or fewer."}), 400
+    if len(gstin) > 20:
+        return jsonify({"error": f"GST Number is too long ({len(gstin)} characters) — please check it (a valid GSTIN is 15 characters)."}), 400
+    if len(state) > 50:
+        return jsonify({"error": "State value is invalid — please pick from the dropdown."}), 400
+
     client_id = inv.get('client_id') or get_current_client_id()
     cfg = get_client_config(client_id)
     total_gst = cgst + sgst + igst
@@ -1984,12 +2234,16 @@ def save_invoice():
         conn = get_db_connection()
         cur = conn.cursor()
 
+        inv_for_log = {"vendor_name": vendor, "gstin": gstin, "invoice_number": inv_num,
+                       "invoice_date": inv_date, "taxable_value": taxable}
+
         if db_id:
             # Check if updated values duplicate another existing invoice
             dup_id, dup_reason = find_duplicate_invoice(cur, user_id, gstin, inv_num, vendor, inv_date, taxable, fy, exclude_id=db_id)
             if dup_id:
                 cur.close()
                 conn.close()
+                log_duplicate_rejection(user_id, client_id, inv_for_log, dup_id, dup_reason, 'manual_edit', fy=fy, month=m)
                 return jsonify({"error": f"Cannot update: {dup_reason} (Bill ID #{dup_id})."}), 409
 
             # Update existing invoice (admins may edit any user's invoice)
@@ -2016,6 +2270,7 @@ def save_invoice():
             if dup_id:
                 cur.close()
                 conn.close()
+                log_duplicate_rejection(user_id, client_id, inv_for_log, dup_id, dup_reason, 'manual_entry', fy=fy, month=m)
                 return jsonify({"error": f"Duplicate bill detected: {dup_reason} (Bill ID #{dup_id})."}), 409
 
             # Insert new invoice
@@ -2041,6 +2296,9 @@ def save_invoice():
         if not db_id:
             desc = f'Added bill from {vendor or "Unknown Vendor"}' + (f' (Invoice #{inv_num})' if inv_num else '')
             log_activity(user_id, 'bill_added', desc, fy, m, 1)
+        else:
+            desc = f'Edited bill from {vendor or "Unknown Vendor"}' + (f' (Invoice #{inv_num})' if inv_num else '') + f' (Bill ID #{db_id})'
+            log_activity(user_id, 'bill_edited', desc, fy, m, 1)
 
         return jsonify({
             "success": True,
@@ -2054,7 +2312,8 @@ def save_invoice():
             "payment_date": payment_date
         })
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        print(f"Error saving invoice: {e}")
+        return jsonify({"error": friendly_error_message(e)}), 500
 
 @app.route('/api/delete-invoice', methods=['POST'])
 @login_required
@@ -2071,15 +2330,22 @@ def delete_invoice():
         conn = get_db_connection()
         cur = conn.cursor()
         if is_admin:
-            cur.execute('DELETE FROM invoices WHERE id = %s', (db_id,))
+            cur.execute('DELETE FROM invoices WHERE id = %s RETURNING vendor_name, invoice_number, financial_year, month', (db_id,))
         else:
-            cur.execute('DELETE FROM invoices WHERE id = %s AND user_id = %s AND client_id = %s', (db_id, user_id, get_current_client_id()))
+            cur.execute('DELETE FROM invoices WHERE id = %s AND user_id = %s AND client_id = %s RETURNING vendor_name, invoice_number, financial_year, month', (db_id, user_id, get_current_client_id()))
+        deleted_row = cur.fetchone()
         conn.commit()
         cur.close()
         conn.close()
+
+        if deleted_row:
+            vendor_name, invoice_number, fy, month = deleted_row
+            log_activity(user_id, 'bill_deleted', f'Deleted bill #{db_id}: {vendor_name} / Invoice #{invoice_number}', fy=fy, month=month)
+
         return jsonify({"success": True})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        print(f"Error deleting invoice: {e}")
+        return jsonify({"error": friendly_error_message(e)}), 500
 
 @app.route('/api/delete-selected-invoices', methods=['POST'])
 @login_required
@@ -2118,7 +2384,7 @@ def delete_selected_invoices():
         return jsonify({"success": True, "count": deleted_count})
     except Exception as e:
         print(f"Error deleting selected invoices: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": friendly_error_message(e)}), 500
 
 @app.route('/api/apply-book-correction', methods=['POST'])
 @login_required
@@ -2156,7 +2422,8 @@ def apply_book_correction():
         log_activity(user_id, 'bill_corrected', f'Corrected invoice #{invoice_number} to match GSTR-2B (Stage 3 review)', record_count=1)
         return jsonify({"success": True})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        print(f"Error: {e}")
+        return jsonify({"error": friendly_error_message(e)}), 500
 
 @app.route('/api/rescan-invoice', methods=['POST'])
 @login_required
@@ -2252,7 +2519,7 @@ def rescan_invoice():
         })
     except Exception as e:
         print(f"Error rescanning invoice: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": friendly_error_message(e)}), 500
 
 @app.route('/api/rescan-invoices-batch', methods=['POST'])
 @login_required
@@ -2543,7 +2810,7 @@ def rescan_invoices_batch():
         })
     except Exception as e:
         print(f"Error in rescan_invoices_batch: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": friendly_error_message(e)}), 500
 
 @app.route('/api/apply-rescan-results', methods=['POST'])
 @login_required
@@ -2626,7 +2893,7 @@ def apply_rescan_results():
         return jsonify({"success": True, "applied_count": applied_count})
     except Exception as e:
         print(f"Error applying rescan results: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": friendly_error_message(e)}), 500
 
 @app.route('/api/invoice-file/<int:invoice_id>', methods=['GET'])
 @login_required
@@ -2655,7 +2922,8 @@ def get_invoice_file(invoice_id):
             download_name=file_name or f"invoice-{invoice_id}"
         )
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        print(f"Error: {e}")
+        return jsonify({"error": friendly_error_message(e)}), 500
 
 @app.route('/api/clear-invoices', methods=['POST'])
 @login_required
@@ -2698,7 +2966,8 @@ def clear_invoices():
         log_activity(user_id, 'bills_cleared', f'Cleared {deleted} bill(s) via Password-Protected Clear All', record_count=deleted)
         return jsonify({"success": True, "count": deleted})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        print(f"Error: {e}")
+        return jsonify({"error": friendly_error_message(e)}), 500
 
 # Every table this app owns, in a dependency-friendly order (users before
 # tables that reference a user_id, etc.) for both backup and restore.
@@ -2743,7 +3012,8 @@ def backup_data():
             download_name=filename
         )
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        print(f"Error: {e}")
+        return jsonify({"error": friendly_error_message(e)}), 500
 
 @app.route('/admin/restore-data', methods=['POST'])
 @login_required
@@ -3277,6 +3547,7 @@ def process_invoices():
 
                 if dup_id:
                     # Duplicate detected: skip database insertion and flag as duplicate
+                    log_duplicate_rejection(user_id, client_id, inv, dup_id, dup_reason, 'bulk_upload', filename=inv_store_name or filename, fy=fy, month=m)
                     results.append({
                         "id": None,
                         "is_duplicate": True,
@@ -3524,6 +3795,7 @@ def process_multipage_bill():
             merge_warning = f"WARNING: {inv['_merge_conflict']}" if inv.get('_merge_conflict') else None
 
             if dup_id:
+                log_duplicate_rejection(user_id, client_id, inv, dup_id, dup_reason, 'multipage_bill_upload', filename=filename, fy=fy, month=m)
                 results.append({
                     "id": None, "is_duplicate": True,
                     "duplicate_of_id": dup_id if isinstance(dup_id, int) else None,
@@ -3657,17 +3929,13 @@ def export_excel():
             "inelig_igst": round(igst - elig_igst, 2),
         })
 
-    # Group by (state, branch) -- not branch alone, since the same branch name
-    # can exist under both state registrations and would otherwise be silently
-    # merged into one subtotal. Blank/Unassigned sorted last within each level.
-    state_branch_groups = sorted(
-        {(r["state"], r["branch"]) for r in rows},
-        key=lambda sb: (sb[0] == 'Unassigned', sb[0].lower(), sb[1] == 'Unassigned', sb[1].lower())
-    )
-    states_ordered = sorted(
-        {sb[0] for sb in state_branch_groups},
-        key=lambda s: (s == 'Unassigned', s.lower())
-    )
+    # Part 9: same row data reused three ways -- one sheet with every row
+    # (unchanged from before), one with only bills that have eligible ITC,
+    # and one with only bills whose eligible ITC is Rs.0 (itc_blocked bills
+    # or bills with no GST at all) -- so a Rs.0-eligible bill is automatically
+    # visible on its own dedicated sheet instead of only in the combined list.
+    eligible_rows = [r for r in rows if (r["elig_cgst"] + r["elig_sgst"] + r["elig_igst"]) > 0]
+    ineligible_rows = [r for r in rows if (r["elig_cgst"] + r["elig_sgst"] + r["elig_igst"]) == 0]
 
     NUMERIC_FIELDS = ["taxable_value", "cgst", "sgst", "igst", "total_invoice_value",
                        "elig_cgst", "elig_sgst", "elig_igst", "inelig_cgst", "inelig_sgst", "inelig_igst"]
@@ -3676,152 +3944,170 @@ def export_excel():
     # GST rate is meaningless; those rows leave that column blank instead).
 
     workbook = Workbook()
-    worksheet = workbook.active
-    worksheet.title = "GST ITC Reconciled"
 
-    navy_header_fill = PatternFill(start_color="0A2540", end_color="0A2540", fill_type="solid")
-    subtotal_fill = PatternFill(start_color="DCE6F1", end_color="DCE6F1", fill_type="solid")
-    total_fill = PatternFill(start_color="E6F4EA", end_color="E6F4EA", fill_type="solid")
-    white_font = Font(name="Arial", size=11, bold=True, color="FFFFFF")
-    bold_font = Font(name="Arial", size=11, bold=True)
-    regular_font = Font(name="Arial", size=10)
+    def write_reconciliation_sheet(sheet_title, rows_subset, is_first_sheet):
+        # Group by (state, branch) -- not branch alone, since the same branch
+        # name can exist under both state registrations and would otherwise be
+        # silently merged into one subtotal. Blank/Unassigned sorted last.
+        state_branch_groups = sorted(
+            {(r["state"], r["branch"]) for r in rows_subset},
+            key=lambda sb: (sb[0] == 'Unassigned', sb[0].lower(), sb[1] == 'Unassigned', sb[1].lower())
+        )
+        states_ordered = sorted(
+            {sb[0] for sb in state_branch_groups},
+            key=lambda s: (s == 'Unassigned', s.lower())
+        )
 
-    thin_border = Border(
-        left=Side(style='thin', color='DDDDDD'), right=Side(style='thin', color='DDDDDD'),
-        top=Side(style='thin', color='DDDDDD'), bottom=Side(style='thin', color='DDDDDD')
-    )
-    double_bottom_border = Border(
-        top=Side(style='thin', color='000000'), bottom=Side(style='double', color='000000')
-    )
+        worksheet = workbook.active if is_first_sheet else workbook.create_sheet()
+        worksheet.title = sheet_title
 
-    # ---- Header (two rows, with merged ELIGIBLE / INELIGIBLE groups) ----
-    single_headers = [
-        (1, "State"), (2, "Branch"), (3, "GST No"), (4, "Date"), (5, "Payment Date"), (6, "Vendor Name"), (7, "Invoice No"),
-        (8, "Taxable Value (INR)"), (9, "GST Rate"), (10, "CGST (INR)"), (11, "SGST (INR)"), (12, "IGST (INR)"),
-        (13, "Total Invoice Value (INR)")
-    ]
-    for col_idx, label in single_headers:
-        worksheet.merge_cells(start_row=1, start_column=col_idx, end_row=2, end_column=col_idx)
-        worksheet.cell(row=1, column=col_idx, value=label)
+        navy_header_fill = PatternFill(start_color="0A2540", end_color="0A2540", fill_type="solid")
+        subtotal_fill = PatternFill(start_color="DCE6F1", end_color="DCE6F1", fill_type="solid")
+        total_fill = PatternFill(start_color="E6F4EA", end_color="E6F4EA", fill_type="solid")
+        white_font = Font(name="Arial", size=11, bold=True, color="FFFFFF")
+        bold_font = Font(name="Arial", size=11, bold=True)
+        regular_font = Font(name="Arial", size=10)
 
-    worksheet.merge_cells(start_row=1, start_column=14, end_row=1, end_column=16)
-    worksheet.cell(row=1, column=14, value="ELIGIBLE ITC (50%)")
-    worksheet.merge_cells(start_row=1, start_column=17, end_row=1, end_column=19)
-    worksheet.cell(row=1, column=17, value="INELIGIBLE ITC (50%)")
+        thin_border = Border(
+            left=Side(style='thin', color='DDDDDD'), right=Side(style='thin', color='DDDDDD'),
+            top=Side(style='thin', color='DDDDDD'), bottom=Side(style='thin', color='DDDDDD')
+        )
+        double_bottom_border = Border(
+            top=Side(style='thin', color='000000'), bottom=Side(style='double', color='000000')
+        )
 
-    for col_idx, label in [(14, "CGST"), (15, "SGST"), (16, "IGST"), (17, "CGST"), (18, "SGST"), (19, "IGST")]:
-        worksheet.cell(row=2, column=col_idx, value=label)
+        # ---- Header (two rows, with merged ELIGIBLE / INELIGIBLE groups) ----
+        single_headers = [
+            (1, "State"), (2, "Branch"), (3, "GST No"), (4, "Date"), (5, "Payment Date"), (6, "Vendor Name"), (7, "Invoice No"),
+            (8, "Taxable Value (INR)"), (9, "GST Rate"), (10, "CGST (INR)"), (11, "SGST (INR)"), (12, "IGST (INR)"),
+            (13, "Total Invoice Value (INR)")
+        ]
+        for col_idx, label in single_headers:
+            worksheet.merge_cells(start_row=1, start_column=col_idx, end_row=2, end_column=col_idx)
+            worksheet.cell(row=1, column=col_idx, value=label)
 
-    total_cols = 19
-    for row_idx in (1, 2):
-        for col_idx in range(1, total_cols + 1):
-            cell = worksheet.cell(row=row_idx, column=col_idx)
-            cell.fill = navy_header_fill
-            cell.font = white_font
-            cell.alignment = Alignment(horizontal="center", vertical="center")
+        worksheet.merge_cells(start_row=1, start_column=14, end_row=1, end_column=16)
+        worksheet.cell(row=1, column=14, value="ELIGIBLE ITC (50%)")
+        worksheet.merge_cells(start_row=1, start_column=17, end_row=1, end_column=19)
+        worksheet.cell(row=1, column=17, value="INELIGIBLE ITC (50%)")
 
-    # ---- Data rows, grouped by state then branch, with a branch subtotal row
-    # and a state total row -- (state, branch) grouping (not branch alone)
-    # since the same branch name can exist under both state registrations.
-    row_idx = 3
-    grand_totals = {f: 0.0 for f in NUMERIC_FIELDS}
+        for col_idx, label in [(14, "CGST"), (15, "SGST"), (16, "IGST"), (17, "CGST"), (18, "SGST"), (19, "IGST")]:
+            worksheet.cell(row=2, column=col_idx, value=label)
 
-    for state in states_ordered:
-        state_totals = {f: 0.0 for f in NUMERIC_FIELDS}
-        branches_in_state = [sb[1] for sb in state_branch_groups if sb[0] == state]
+        total_cols = 19
+        for row_idx in (1, 2):
+            for col_idx in range(1, total_cols + 1):
+                cell = worksheet.cell(row=row_idx, column=col_idx)
+                cell.fill = navy_header_fill
+                cell.font = white_font
+                cell.alignment = Alignment(horizontal="center", vertical="center")
 
-        for branch in branches_in_state:
-            branch_rows = [r for r in rows if r["state"] == state and r["branch"] == branch]
-            branch_totals = {f: 0.0 for f in NUMERIC_FIELDS}
+        # ---- Data rows, grouped by state then branch, with a branch subtotal row
+        # and a state total row -- (state, branch) grouping (not branch alone)
+        # since the same branch name can exist under both state registrations.
+        row_idx = 3
+        grand_totals = {f: 0.0 for f in NUMERIC_FIELDS}
 
-            for r in branch_rows:
-                values = [
-                    r["state"], r["branch"], r["gstin"], r["invoice_date"], r["payment_date"], r["vendor_name"], r["invoice_number"],
-                    r["taxable_value"], r["gst_rate"], r["cgst"], r["sgst"], r["igst"], r["total_invoice_value"],
-                    r["elig_cgst"], r["elig_sgst"], r["elig_igst"], r["inelig_cgst"], r["inelig_sgst"], r["inelig_igst"]
-                ]
-                for col_idx, val in enumerate(values, start=1):
+        for state in states_ordered:
+            state_totals = {f: 0.0 for f in NUMERIC_FIELDS}
+            branches_in_state = [sb[1] for sb in state_branch_groups if sb[0] == state]
+
+            for branch in branches_in_state:
+                branch_rows = [r for r in rows_subset if r["state"] == state and r["branch"] == branch]
+                branch_totals = {f: 0.0 for f in NUMERIC_FIELDS}
+
+                for r in branch_rows:
+                    values = [
+                        r["state"], r["branch"], r["gstin"], r["invoice_date"], r["payment_date"], r["vendor_name"], r["invoice_number"],
+                        r["taxable_value"], r["gst_rate"], r["cgst"], r["sgst"], r["igst"], r["total_invoice_value"],
+                        r["elig_cgst"], r["elig_sgst"], r["elig_igst"], r["inelig_cgst"], r["inelig_sgst"], r["inelig_igst"]
+                    ]
+                    for col_idx, val in enumerate(values, start=1):
+                        cell = worksheet.cell(row=row_idx, column=col_idx, value=val)
+                        cell.font = regular_font
+                        cell.border = thin_border
+                        if col_idx == 9:
+                            cell.alignment = Alignment(horizontal="right")
+                            cell.number_format = '0.00"%"'
+                        elif col_idx >= 8:
+                            cell.alignment = Alignment(horizontal="right")
+                            cell.number_format = '#,##0.00'
+                        else:
+                            cell.alignment = Alignment(horizontal="left")
+                    for f in NUMERIC_FIELDS:
+                        branch_totals[f] += r[f]
+                        state_totals[f] += r[f]
+                        grand_totals[f] += r[f]
+                    row_idx += 1
+
+                # Branch subtotal row (GST Rate left blank - a "total rate" is meaningless)
+                subtotal_values = ["", f"{branch} - Subtotal", "", "", "", "", "",
+                                    branch_totals["taxable_value"], "", branch_totals["cgst"], branch_totals["sgst"],
+                                    branch_totals["igst"], branch_totals["total_invoice_value"],
+                                    branch_totals["elig_cgst"], branch_totals["elig_sgst"], branch_totals["elig_igst"],
+                                    branch_totals["inelig_cgst"], branch_totals["inelig_sgst"], branch_totals["inelig_igst"]]
+                for col_idx, val in enumerate(subtotal_values, start=1):
                     cell = worksheet.cell(row=row_idx, column=col_idx, value=val)
-                    cell.font = regular_font
+                    cell.font = bold_font
+                    cell.fill = subtotal_fill
                     cell.border = thin_border
-                    if col_idx == 9:
-                        cell.alignment = Alignment(horizontal="right")
-                        cell.number_format = '0.00"%"'
-                    elif col_idx >= 8:
+                    if col_idx >= 8 and col_idx != 9:
                         cell.alignment = Alignment(horizontal="right")
                         cell.number_format = '#,##0.00'
-                    else:
-                        cell.alignment = Alignment(horizontal="left")
-                for f in NUMERIC_FIELDS:
-                    branch_totals[f] += r[f]
-                    state_totals[f] += r[f]
-                    grand_totals[f] += r[f]
                 row_idx += 1
 
-            # Branch subtotal row (GST Rate left blank - a "total rate" is meaningless)
-            subtotal_values = ["", f"{branch} - Subtotal", "", "", "", "", "",
-                                branch_totals["taxable_value"], "", branch_totals["cgst"], branch_totals["sgst"],
-                                branch_totals["igst"], branch_totals["total_invoice_value"],
-                                branch_totals["elig_cgst"], branch_totals["elig_sgst"], branch_totals["elig_igst"],
-                                branch_totals["inelig_cgst"], branch_totals["inelig_sgst"], branch_totals["inelig_igst"]]
-            for col_idx, val in enumerate(subtotal_values, start=1):
+            # State total row
+            state_total_values = [f"{state} - TOTAL", "", "", "", "", "", "",
+                                   state_totals["taxable_value"], "", state_totals["cgst"], state_totals["sgst"],
+                                   state_totals["igst"], state_totals["total_invoice_value"],
+                                   state_totals["elig_cgst"], state_totals["elig_sgst"], state_totals["elig_igst"],
+                                   state_totals["inelig_cgst"], state_totals["inelig_sgst"], state_totals["inelig_igst"]]
+            for col_idx, val in enumerate(state_total_values, start=1):
                 cell = worksheet.cell(row=row_idx, column=col_idx, value=val)
                 cell.font = bold_font
-                cell.fill = subtotal_fill
+                cell.fill = total_fill
                 cell.border = thin_border
                 if col_idx >= 8 and col_idx != 9:
                     cell.alignment = Alignment(horizontal="right")
                     cell.number_format = '#,##0.00'
             row_idx += 1
 
-        # State total row
-        state_total_values = [f"{state} - TOTAL", "", "", "", "", "", "",
-                               state_totals["taxable_value"], "", state_totals["cgst"], state_totals["sgst"],
-                               state_totals["igst"], state_totals["total_invoice_value"],
-                               state_totals["elig_cgst"], state_totals["elig_sgst"], state_totals["elig_igst"],
-                               state_totals["inelig_cgst"], state_totals["inelig_sgst"], state_totals["inelig_igst"]]
-        for col_idx, val in enumerate(state_total_values, start=1):
+        # ---- Grand total row ----
+        grand_total_values = ["GRAND TOTAL", "", "", "", "", "", "",
+                               grand_totals["taxable_value"], "", grand_totals["cgst"], grand_totals["sgst"],
+                               grand_totals["igst"], grand_totals["total_invoice_value"],
+                               grand_totals["elig_cgst"], grand_totals["elig_sgst"], grand_totals["elig_igst"],
+                               grand_totals["inelig_cgst"], grand_totals["inelig_sgst"], grand_totals["inelig_igst"]]
+        for col_idx, val in enumerate(grand_total_values, start=1):
             cell = worksheet.cell(row=row_idx, column=col_idx, value=val)
             cell.font = bold_font
             cell.fill = total_fill
-            cell.border = thin_border
+            cell.border = double_bottom_border
             if col_idx >= 8 and col_idx != 9:
                 cell.alignment = Alignment(horizontal="right")
                 cell.number_format = '#,##0.00'
-        row_idx += 1
 
-    # ---- Grand total row ----
-    grand_total_values = ["GRAND TOTAL", "", "", "", "", "", "",
-                           grand_totals["taxable_value"], "", grand_totals["cgst"], grand_totals["sgst"],
-                           grand_totals["igst"], grand_totals["total_invoice_value"],
-                           grand_totals["elig_cgst"], grand_totals["elig_sgst"], grand_totals["elig_igst"],
-                           grand_totals["inelig_cgst"], grand_totals["inelig_sgst"], grand_totals["inelig_igst"]]
-    for col_idx, val in enumerate(grand_total_values, start=1):
-        cell = worksheet.cell(row=row_idx, column=col_idx, value=val)
-        cell.font = bold_font
-        cell.fill = total_fill
-        cell.border = double_bottom_border
-        if col_idx >= 8 and col_idx != 9:
-            cell.alignment = Alignment(horizontal="right")
-            cell.number_format = '#,##0.00'
+        # ---- Autofit columns ----
+        for col_idx in range(1, total_cols + 1):
+            col_letter = get_column_letter(col_idx)
+            max_len = 0
+            for row in worksheet.iter_rows(min_col=col_idx, max_col=col_idx):
+                for cell in row:
+                    if cell.value is None:
+                        continue
+                    val_to_check = str(cell.value)
+                    if cell.number_format == '#,##0.00' and isinstance(cell.value, (int, float)):
+                        val_to_check = f"{cell.value:,.2f}"
+                    elif cell.number_format == '0.00"%"' and isinstance(cell.value, (int, float)):
+                        val_to_check = f"{cell.value:.2f}%"
+                    max_len = max(max_len, len(val_to_check))
+            worksheet.column_dimensions[col_letter].width = max(max_len + 3, 12)
 
-    # ---- Autofit columns ----
-    for col_idx in range(1, total_cols + 1):
-        col_letter = get_column_letter(col_idx)
-        max_len = 0
-        for row in worksheet.iter_rows(min_col=col_idx, max_col=col_idx):
-            for cell in row:
-                if cell.value is None:
-                    continue
-                val_to_check = str(cell.value)
-                if cell.number_format == '#,##0.00' and isinstance(cell.value, (int, float)):
-                    val_to_check = f"{cell.value:,.2f}"
-                elif cell.number_format == '0.00"%"' and isinstance(cell.value, (int, float)):
-                    val_to_check = f"{cell.value:.2f}%"
-                max_len = max(max_len, len(val_to_check))
-        worksheet.column_dimensions[col_letter].width = max(max_len + 3, 12)
+        worksheet.freeze_panes = "A3"
 
-    worksheet.freeze_panes = "A3"
+    write_reconciliation_sheet("Combined", rows, is_first_sheet=True)
+    write_reconciliation_sheet("Eligible ITC", eligible_rows, is_first_sheet=False)
+    write_reconciliation_sheet("Ineligible - Blocked ITC", ineligible_rows, is_first_sheet=False)
 
     output = io.BytesIO()
     workbook.save(output)
@@ -4230,7 +4516,7 @@ def export_annual_report():
         )
     except Exception as e:
         print(f"Error exporting annual report: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": friendly_error_message(e)}), 500
 
 @app.route('/api/export-filtered-reconciliation', methods=['GET'])
 @login_required
@@ -4398,7 +4684,7 @@ def export_filtered_reconciliation():
         )
     except Exception as e:
         print(f"Error exporting filtered reconciliation: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": friendly_error_message(e)}), 500
 
 @app.route('/api/upload-gstr2b', methods=['POST'])
 @login_required
@@ -4453,7 +4739,7 @@ def upload_gstr2b():
         return jsonify({"success": True, "count": inserted})
     except Exception as e:
         print(f"Error uploading GSTR-2B: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": friendly_error_message(e)}), 500
 
 @app.route('/api/delete-gstr2b', methods=['POST'])
 @login_required
@@ -4484,7 +4770,7 @@ def delete_gstr2b():
         return jsonify({"success": True, "count": deleted})
     except Exception as e:
         print(f"Error deleting GSTR-2B entries: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": friendly_error_message(e)}), 500
 
 @app.route('/api/delete-gstr2b-entry', methods=['POST'])
 @login_required
@@ -4527,7 +4813,7 @@ def delete_gstr2b_entry():
         return jsonify({"success": True, "message": "GSTR-2B entry deleted successfully"})
     except Exception as e:
         print(f"Error deleting single GSTR-2B entry: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": friendly_error_message(e)}), 500
 
 @app.route('/api/gstr2b-status', methods=['GET'])
 @login_required
@@ -4590,7 +4876,7 @@ def gstr2b_status():
         return jsonify({"success": True, "batches": rows})
     except Exception as e:
         print(f"Error fetching GSTR-2B status: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": friendly_error_message(e)}), 500
 
 def execute_reconciliation(fy, months, user_id, is_admin, client_id='nutan_nagrik'):
     conn = get_db_connection()
@@ -4829,6 +5115,38 @@ def execute_reconciliation(fy, months, user_id, is_admin, client_id='nutan_nagri
     return summary, reconciled, books_invoices, portal_entries
 
 
+def _find_resolved_provisional_items(client_id, books_invoices, portal_entries):
+    """Part 10: checks pending provisional items against a period's freshly
+    fetched books/portal data -- if a 'missing_in_portal' item now has a
+    matching GSTIN+invoice-number in this period's GSTR-2B, or a
+    'missing_in_books' item now has a match in this period's books, it's
+    surfaced as a candidate to mark resolved. Never auto-resolves -- the
+    human still decides, per the CA's own SOP wording."""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT * FROM provisional_itc_items WHERE client_id = %s AND status = 'pending'", (client_id,))
+        pending = cur.fetchall()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print(f"Error fetching provisional items: {e}")
+        return []
+
+    portal_keys = {(normalize_gstin(p.get('gstin') or ''), clean_invoice_number(p.get('invoice_number'))) for p in portal_entries}
+    book_keys = {(normalize_gstin(b.get('gstin') or ''), clean_invoice_number(b.get('invoice_number'))) for b in books_invoices}
+
+    resolved_candidates = []
+    for item in pending:
+        key = (normalize_gstin(item.get('gstin') or ''), clean_invoice_number(item.get('invoice_number')))
+        if not key[1]:
+            continue
+        if item['reason'] == 'missing_in_portal' and key in portal_keys:
+            resolved_candidates.append(item)
+        elif item['reason'] == 'missing_in_books' and key in book_keys:
+            resolved_candidates.append(item)
+    return resolved_candidates
+
 @app.route('/api/reconcile-data', methods=['GET'])
 @login_required
 def reconcile_data():
@@ -4846,14 +5164,111 @@ def reconcile_data():
         return jsonify({"error": "At least one month is required"}), 400
 
     try:
-        summary, reconciled, _, _ = execute_reconciliation(fy, months, user_id, is_admin, client_id=client_id)
+        summary, reconciled, books_invoices, portal_entries = execute_reconciliation(fy, months, user_id, is_admin, client_id=client_id)
+        resolved_candidates = _find_resolved_provisional_items(client_id, books_invoices, portal_entries)
+        for r in resolved_candidates:
+            if r.get('created_at'):
+                r['created_at'] = r['created_at'].isoformat()
         return jsonify({
             "summary": summary,
-            "items": reconciled
+            "items": reconciled,
+            "resolved_provisional_items": resolved_candidates
         })
     except Exception as e:
         print(f"Error executing reconciliation: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": friendly_error_message(e)}), 500
+
+@app.route('/api/provisional-itc', methods=['POST'])
+@login_required
+def create_provisional_itc_item():
+    user_id = session['user_id']
+    client_id = get_current_client_id()
+    data = request.json or {}
+
+    reason = data.get('reason')
+    if reason not in ('missing_in_books', 'missing_in_portal'):
+        return jsonify({"error": "reason must be 'missing_in_books' or 'missing_in_portal'"}), 400
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute('''
+            INSERT INTO provisional_itc_items
+                (user_id, client_id, reason, vendor_name, gstin, invoice_number, invoice_date,
+                 amount, flagged_financial_year, flagged_month)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
+        ''', (user_id, client_id, reason, data.get('vendor_name'), data.get('gstin'),
+              data.get('invoice_number'), data.get('invoice_date'), data.get('amount'),
+              data.get('flagged_financial_year'), data.get('flagged_month')))
+        new_id = cur.fetchone()[0]
+        conn.commit()
+        cur.close()
+        conn.close()
+        log_activity(user_id, 'provisional_itc_flagged',
+                     f"Flagged {data.get('vendor_name') or 'a bill'} (Invoice #{data.get('invoice_number') or 'N/A'}) as provisional ({reason})",
+                     data.get('flagged_financial_year'), data.get('flagged_month'))
+        return jsonify({"success": True, "id": new_id})
+    except Exception as e:
+        print(f"Error creating provisional ITC item: {e}")
+        return jsonify({"error": friendly_error_message(e)}), 500
+
+@app.route('/api/provisional-itc', methods=['GET'])
+@login_required
+def list_provisional_itc_items():
+    is_admin = is_admin_user()
+    user_id = session['user_id']
+    client_id = get_current_client_id()
+    status_filter = request.args.get('status', 'pending').strip()
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        where = ['client_id = %s']
+        params = [client_id]
+        if not is_admin:
+            where.append('user_id = %s')
+            params.append(user_id)
+        if status_filter and status_filter != 'ALL':
+            where.append('status = %s')
+            params.append(status_filter)
+        cur.execute(f'SELECT * FROM provisional_itc_items WHERE {" AND ".join(where)} ORDER BY created_at DESC', params)
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        for r in rows:
+            if r.get('created_at'):
+                r['created_at'] = r['created_at'].isoformat()
+        return jsonify({"items": rows})
+    except Exception as e:
+        print(f"Error listing provisional ITC items: {e}")
+        return jsonify({"error": friendly_error_message(e)}), 500
+
+@app.route('/api/provisional-itc/<int:item_id>/resolve', methods=['POST'])
+@login_required
+def resolve_provisional_itc_item(item_id):
+    user_id = session['user_id']
+    client_id = get_current_client_id()
+    data = request.json or {}
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute('''
+            UPDATE provisional_itc_items
+            SET status = 'resolved', resolved_financial_year = %s, resolved_month = %s
+            WHERE id = %s AND client_id = %s
+            RETURNING vendor_name, invoice_number
+        ''', (data.get('resolved_financial_year'), data.get('resolved_month'), item_id, client_id))
+        resolved_row = cur.fetchone()
+        conn.commit()
+        cur.close()
+        conn.close()
+        if resolved_row:
+            log_activity(user_id, 'provisional_itc_resolved', f"Marked provisional item resolved: {resolved_row[0]} (Invoice #{resolved_row[1]})")
+        return jsonify({"success": True})
+    except Exception as e:
+        print(f"Error resolving provisional ITC item: {e}")
+        return jsonify({"error": friendly_error_message(e)}), 500
 
 
 @app.route('/api/vendor-discrepancies', methods=['GET'])
@@ -4930,7 +5345,7 @@ def get_vendor_discrepancies():
         })
     except Exception as e:
         print(f"Error fetching vendor discrepancies: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": friendly_error_message(e)}), 500
 
 
 @app.route('/api/generate-vendor-notice', methods=['POST'])
@@ -5027,7 +5442,7 @@ def generate_vendor_notice():
         })
     except Exception as e:
         print(f"Error generating vendor notice: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": friendly_error_message(e)}), 500
 
 
 @app.route('/api/gstr3b-summary', methods=['GET'])
@@ -5123,7 +5538,7 @@ def get_gstr3b_summary():
         })
     except Exception as e:
         print(f"Error computing GSTR-3B summary: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": friendly_error_message(e)}), 500
 
 
 @app.route('/api/export-vendor-discrepancies', methods=['GET'])
@@ -5222,7 +5637,7 @@ def export_vendor_discrepancies():
         )
     except Exception as e:
         print(f"Error exporting vendor discrepancy excel: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": friendly_error_message(e)}), 500
 
 
 @app.route('/filing-history')
@@ -5234,6 +5649,14 @@ def filing_history():
 @login_required
 def workflow_guide():
     return render_template('workflow_guide.html', is_admin=is_admin_user())
+
+@app.route('/sort-material')
+@login_required
+def sort_material():
+    """Part 4: CA Material Sorter -- a pure client-side, browser-only page.
+    No file content is ever uploaded here; the browser reads the selected
+    folder's relative paths and builds a reorganized ZIP entirely locally."""
+    return render_template('sort_material.html', is_admin=is_admin_user())
 
 @app.route('/api/filing-history', methods=['GET'])
 @login_required
@@ -5315,7 +5738,91 @@ def get_filing_history():
             "available_actions": available_actions,
         })
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        print(f"Error fetching filing history: {e}")
+        return jsonify({"error": friendly_error_message(e)}), 500
+
+@app.route('/api/duplicate-rejections', methods=['GET'])
+@login_required
+def get_duplicate_rejections():
+    user_id = session['user_id']
+    is_admin = is_admin_user()
+    client_id = get_current_client_id()
+
+    source_filter = request.args.get('source', '').strip()
+    search = request.args.get('search', '').strip()
+    try:
+        page = max(1, int(request.args.get('page', 1)))
+    except (TypeError, ValueError):
+        page = 1
+    try:
+        page_size = int(request.args.get('page_size', 100))
+    except (TypeError, ValueError):
+        page_size = 100
+    page_size = min(500, max(25, page_size))
+    offset = (page - 1) * page_size
+
+    where_clauses = ['duplicate_rejections.client_id = %s']
+    params = [client_id]
+    if not is_admin:
+        where_clauses.append('duplicate_rejections.user_id = %s')
+        params.append(user_id)
+    if source_filter and source_filter != 'ALL':
+        where_clauses.append('duplicate_rejections.source = %s')
+        params.append(source_filter)
+    if search:
+        where_clauses.append('(duplicate_rejections.vendor_name ILIKE %s OR duplicate_rejections.gstin ILIKE %s OR duplicate_rejections.invoice_number ILIKE %s)')
+        params.extend([f'%{search}%', f'%{search}%', f'%{search}%'])
+    where_sql = 'WHERE ' + ' AND '.join(where_clauses)
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+        cur.execute(f'SELECT COUNT(*) as total FROM duplicate_rejections {where_sql}', params)
+        total_count = cur.fetchone()['total']
+
+        if is_admin:
+            cur.execute(f'''
+                SELECT duplicate_rejections.id, vendor_name, gstin, invoice_number, invoice_date,
+                       taxable_value::float, matched_invoice_id, reason, source, filename,
+                       financial_year, month, duplicate_rejections.created_at, users.username
+                FROM duplicate_rejections
+                JOIN users ON users.id = duplicate_rejections.user_id
+                {where_sql}
+                ORDER BY duplicate_rejections.created_at DESC
+                LIMIT %s OFFSET %s
+            ''', params + [page_size, offset])
+        else:
+            cur.execute(f'''
+                SELECT id, vendor_name, gstin, invoice_number, invoice_date,
+                       taxable_value::float, matched_invoice_id, reason, source, filename,
+                       financial_year, month, created_at
+                FROM duplicate_rejections
+                {where_sql}
+                ORDER BY created_at DESC
+                LIMIT %s OFFSET %s
+            ''', params + [page_size, offset])
+        rows = cur.fetchall()
+
+        cur.execute('SELECT DISTINCT source FROM duplicate_rejections WHERE client_id = %s ORDER BY source ASC', (client_id,))
+        available_sources = [r['source'] for r in cur.fetchall()]
+
+        cur.close()
+        conn.close()
+        for r in rows:
+            if r.get('created_at'):
+                r['created_at'] = r['created_at'].isoformat()
+        return jsonify({
+            "success": True,
+            "rejections": rows,
+            "total_count": total_count,
+            "page": page,
+            "page_size": page_size,
+            "available_sources": available_sources,
+        })
+    except Exception as e:
+        print(f"Error fetching duplicate rejections: {e}")
+        return jsonify({"error": friendly_error_message(e)}), 500
 
 @app.route('/api/monthly-bill-summary', methods=['GET'])
 @login_required
@@ -5356,7 +5863,8 @@ def get_monthly_bill_summary():
 
         return jsonify({"success": True, "summary": rows})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        print(f"Error: {e}")
+        return jsonify({"error": friendly_error_message(e)}), 500
 
 
 
@@ -6280,7 +6788,7 @@ def delete_income_code_master(code):
         conn.close()
     except Exception as e:
         print(f"Error deleting income code {code}: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": friendly_error_message(e)}), 500
 
     log_activity(session['user_id'], 'DELETE_GL_CODE', f"Deleted GL/PL code {clean} - {affected_count} existing entries re-flagged for review")
 
@@ -6406,7 +6914,8 @@ def upload_gl_voucher():
         cur.close()
         conn.close()
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        print(f"Error: {e}")
+        return jsonify({"error": friendly_error_message(e)}), 500
 
     log_activity(user_id, 'GL_VOUCHER_UPLOAD', f"Uploaded {len(results)} branch GL voucher entr(y/ies) via {mode}", fy, month, len(results))
     return jsonify({"results": results})
@@ -6459,7 +6968,8 @@ def save_gl_voucher_manual():
         cur.close()
         conn.close()
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        print(f"Error: {e}")
+        return jsonify({"error": friendly_error_message(e)}), 500
 
     log_activity(user_id, 'GL_VOUCHER_MANUAL', f"Added manual GL voucher entry for {branch} / {gl_code}", fy, month, 1)
     return jsonify({"success": True, "id": vid})
@@ -6484,7 +6994,8 @@ def get_gl_vouchers():
         conn.close()
         return jsonify({"vouchers": rows})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        print(f"Error: {e}")
+        return jsonify({"error": friendly_error_message(e)}), 500
 
 @app.route('/api/delete-gl-voucher', methods=['POST'])
 @login_required
@@ -6500,9 +7011,11 @@ def delete_gl_voucher():
         conn.commit()
         cur.close()
         conn.close()
+        log_activity(session['user_id'], 'GL_VOUCHER_DELETED', f"Deleted GL voucher entry (ID #{voucher_id})")
         return jsonify({"success": True})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        print(f"Error: {e}")
+        return jsonify({"error": friendly_error_message(e)}), 500
 
 @app.route('/api/gl-tally-report', methods=['GET'])
 @login_required
@@ -6557,7 +7070,8 @@ def gl_tally_report():
         cur.close()
         conn.close()
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        print(f"Error: {e}")
+        return jsonify({"error": friendly_error_message(e)}), 500
 
     all_keys = set(bill_totals.keys()) | set(voucher_totals.keys())
     report = []
@@ -6640,7 +7154,7 @@ def get_income_entries():
         return jsonify({"entries": rows, "client_id": client_id, "branches": INCOME_MASTER_BRANCHES})
     except Exception as e:
         print(f"Error fetching income entries: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": friendly_error_message(e)}), 500
 
 @app.route('/api/income-entries/<int:entry_id>/manual-amount', methods=['POST'])
 @login_required
@@ -6688,10 +7202,11 @@ def set_income_entry_manual_amount(entry_id):
         conn.close()
         if not updated:
             return jsonify({"error": "Income entry not found."}), 404
+        log_activity(session['user_id'], 'INCOME_MANUAL_AMOUNT', f"Set manual income amount for entry #{entry_id} (GL {row['gl_code']}) to Rs.{amount:,.2f}")
         return jsonify({"success": True, "income_amount": round(amount, 2), "cgst": cgst, "sgst": cgst})
     except Exception as e:
         print(f"Error setting manual income amount for entry {entry_id}: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": friendly_error_message(e)}), 500
 
 # GST Payable Ledger (GL 1878/1879/1880-style) and Exempt Income Ledger (CA
 # step 7 codes) share an identical shape and the same manual-balance-entry
@@ -6738,7 +7253,7 @@ def get_ledger_entries(table_key):
         return jsonify({"entries": rows})
     except Exception as e:
         print(f"Error fetching {table}: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": friendly_error_message(e)}), 500
 
 @app.route('/api/ledger-entries/<table_key>/<int:entry_id>/manual-balance', methods=['POST'])
 @login_required
@@ -6773,10 +7288,11 @@ def set_ledger_entry_manual_balance(table_key, entry_id):
         conn.close()
         if not updated:
             return jsonify({"error": "Ledger entry not found."}), 404
+        log_activity(session['user_id'], 'LEDGER_MANUAL_BALANCE', f"Set manual closing balance for {table_key} entry #{entry_id} to Rs.{amount:,.2f}")
         return jsonify({"success": True, "closing_balance": round(amount, 2)})
     except Exception as e:
         print(f"Error setting manual balance for {table} entry {entry_id}: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": friendly_error_message(e)}), 500
 
 @app.route('/api/upload-income', methods=['POST'])
 @login_required
@@ -7011,6 +7527,9 @@ def upload_income_api():
         conn.commit()
         cur.close()
         conn.close()
+        log_activity(user_id, 'income_upload',
+                     f'Uploaded {saved_count} income entries, {ledger_saved_count} GST-payable rows, {exempt_saved_count} exempt-income rows ({review_count} flagged for review)',
+                     record_count=saved_count)
         return jsonify({
             "success": True,
             "saved_count": saved_count,
@@ -7023,7 +7542,7 @@ def upload_income_api():
         })
     except Exception as e:
         print(f"Error saving uploaded income records: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": friendly_error_message(e)}), 500
 
 @app.route('/api/income-summary', methods=['GET'])
 @login_required
@@ -7142,7 +7661,7 @@ def get_income_summary():
         })
     except Exception as e:
         print(f"Error generating income summary: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": friendly_error_message(e)}), 500
 
 
 @app.route('/api/cash-ledger-balance', methods=['GET', 'POST'])
@@ -7161,7 +7680,7 @@ def cash_ledger_balance_api():
                              "updated_at": row['updated_at'].isoformat() if row and row.get('updated_at') else None})
         except Exception as e:
             print(f"Error fetching cash ledger balance: {e}")
-            return jsonify({"error": str(e)}), 500
+            return jsonify({"error": friendly_error_message(e)}), 500
 
     data = request.get_json(silent=True) or {}
     try:
@@ -7185,10 +7704,11 @@ def cash_ledger_balance_api():
         conn.commit()
         cur.close()
         conn.close()
+        log_activity(session['user_id'], 'CASH_LEDGER_BALANCE_UPDATED', f"Updated cash ledger balance to Rs.{balance:,.2f}")
         return jsonify({"success": True, "balance": balance})
     except Exception as e:
         print(f"Error saving cash ledger balance: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": friendly_error_message(e)}), 500
 
 
 @app.route('/api/income-file/<int:entry_id>', methods=['GET'])
@@ -7227,7 +7747,8 @@ def get_income_file(entry_id):
             download_name=fname
         )
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        print(f"Error: {e}")
+        return jsonify({"error": friendly_error_message(e)}), 500
 
 @app.route('/api/delete-income-entry', methods=['POST'])
 @login_required
@@ -7245,9 +7766,11 @@ def delete_income_entry():
         conn.commit()
         cur.close()
         conn.close()
+        log_activity(session['user_id'], 'income_entry_deleted', f'Deleted income entry (ID #{entry_id})', record_count=1)
         return jsonify({"success": True})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        print(f"Error: {e}")
+        return jsonify({"error": friendly_error_message(e)}), 500
 
 @app.route('/api/delete-income-batch', methods=['POST'])
 @login_required
@@ -7266,9 +7789,11 @@ def delete_income_batch():
         conn.commit()
         cur.close()
         conn.close()
+        log_activity(session['user_id'], 'income_entries_deleted_selected', f'Deleted {deleted_count} selected income entries', record_count=deleted_count)
         return jsonify({"success": True, "deleted_count": deleted_count})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        print(f"Error: {e}")
+        return jsonify({"error": friendly_error_message(e)}), 500
 
 @app.route('/api/export-income-working-sheet', methods=['POST', 'GET'])
 @login_required
@@ -7945,7 +8470,7 @@ def export_income_working_sheet():
         )
     except Exception as e:
         print(f"Error exporting working sheet: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": friendly_error_message(e)}), 500
 
 
 if __name__ == '__main__':
