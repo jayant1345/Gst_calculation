@@ -12,7 +12,16 @@
       "Bash(py snapshot_periods.py after after_snapshot.json)",
       "Bash(py \"C:\\\\Users\\\\jayan\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Project-AI-GST-calculation\\\\ffdac58c-7c04-40bc-b82d-a1d5660ab305\\\\scratchpad\\\\test_billing_period.py\")",
       "Bash(py \"C:\\\\Users\\\\jayan\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Project-AI-GST-calculation\\\\ffdac58c-7c04-40bc-b82d-a1d5660ab305\\\\scratchpad\\\\test_payment_period_e2e.py\")",
-      "Bash(py test_maharashtra_igst.py)"
+      "Bash(py test_maharashtra_igst.py)",
+      "Bash(py -c ' *)",
+      "Bash(curl -s -o /dev/null -w \"login: %{http_code}\\\\n\" https://gstcalculation-production.up.railway.app/login)",
+      "Bash(curl -s https://gstcalculation-production.up.railway.app/static/app.js)",
+      "Bash(curl -s https://gstcalculation-production.up.railway.app/static/reconciliation.js)",
+      "Bash(py -c \"import ast\")",
+      "Bash(curl -s -o /dev/null -w \"local server still up: %{http_code}\\\\n\" http://localhost:5588/login)",
+      "Bash(py \"C:\\\\Users\\\\jayan\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Project-AI-GST-calculation\\\\ffdac58c-7c04-40bc-b82d-a1d5660ab305\\\\scratchpad\\\\test_render_perf.py\")",
+      "Bash(py \"C:\\\\Users\\\\jayan\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Project-AI-GST-calculation\\\\ffdac58c-7c04-40bc-b82d-a1d5660ab305\\\\scratchpad\\\\test_metrics_consistency.py\")",
+      "Bash(py \"C:\\\\Users\\\\jayan\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Project-AI-GST-calculation\\\\ffdac58c-7c04-40bc-b82d-a1d5660ab305\\\\scratchpad\\\\test_metric_no_stale_value.py\")"
     ]
   }
 }

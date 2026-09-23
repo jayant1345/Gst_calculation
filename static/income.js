@@ -716,6 +716,75 @@ document.addEventListener('DOMContentLoaded', () => {
         window.location.href = `/api/export-income-working-sheet?client_id=${currentClientId}&financial_year=2026-27&month=July`;
     });
 
+    // 9b. GSTR-1 JSON Generation & Modal
+    const btnExportGstr1Json = document.getElementById('btnExportGstr1Json');
+    const gstr1ModalOverlay = document.getElementById('gstr1ModalOverlay');
+    const gstr1ModalClose = document.getElementById('gstr1ModalClose');
+    const gstr1ModalCancel = document.getElementById('gstr1ModalCancel');
+    const btnConfirmDownloadGstr1 = document.getElementById('btnConfirmDownloadGstr1');
+    const gstr1PeriodDisplay = document.getElementById('gstr1PeriodDisplay');
+    const gstr1GstinInput = document.getElementById('gstr1GstinInput');
+    const gstr1ModalTaxable = document.getElementById('gstr1ModalTaxable');
+    const gstr1ModalTax = document.getElementById('gstr1ModalTax');
+    const gstr1ModalExempt = document.getElementById('gstr1ModalExempt');
+    const gstr1ModalTurnover = document.getElementById('gstr1ModalTurnover');
+
+    if (btnExportGstr1Json) {
+        btnExportGstr1Json.addEventListener('click', async () => {
+            const fy = '2026-27';
+            const month = 'July';
+            
+            if (gstr1ModalOverlay) {
+                gstr1ModalOverlay.style.display = 'flex';
+                if (gstr1PeriodDisplay) gstr1PeriodDisplay.textContent = `${month} ${fy} (Filing Period)`;
+                if (gstr1ModalTaxable) gstr1ModalTaxable.textContent = 'Calculating...';
+                if (gstr1ModalTax) gstr1ModalTax.textContent = 'Calculating...';
+                if (gstr1ModalExempt) gstr1ModalExempt.textContent = 'Calculating...';
+                if (gstr1ModalTurnover) gstr1ModalTurnover.textContent = 'Calculating...';
+            }
+            
+            try {
+                const res = await fetch(`/api/export-gstr1-json?client_id=${currentClientId}&financial_year=${fy}&month=${month}&download=0`);
+                const data = await res.json();
+                if (data.success && data.summary) {
+                    const s = data.summary;
+                    if (gstr1PeriodDisplay) gstr1PeriodDisplay.textContent = `${s.month} ${s.financial_year} (Code: ${s.fp})`;
+                    if (s.gstin && gstr1GstinInput) {
+                        gstr1GstinInput.value = s.gstin;
+                    }
+                    if (gstr1ModalTaxable) gstr1ModalTaxable.textContent = formatINR(s.taxable_amount);
+                    if (gstr1ModalTax) gstr1ModalTax.textContent = formatINR(s.total_gst);
+                    if (gstr1ModalExempt) gstr1ModalExempt.textContent = formatINR(s.exempt_amount);
+                    if (gstr1ModalTurnover) gstr1ModalTurnover.textContent = formatINR(s.total_turnover);
+                }
+            } catch (err) {
+                console.error('Error fetching GSTR-1 preview:', err);
+            }
+        });
+    }
+
+    if (gstr1ModalClose) {
+        gstr1ModalClose.addEventListener('click', () => {
+            if (gstr1ModalOverlay) gstr1ModalOverlay.style.display = 'none';
+        });
+    }
+
+    if (gstr1ModalCancel) {
+        gstr1ModalCancel.addEventListener('click', () => {
+            if (gstr1ModalOverlay) gstr1ModalOverlay.style.display = 'none';
+        });
+    }
+
+    if (btnConfirmDownloadGstr1) {
+        btnConfirmDownloadGstr1.addEventListener('click', () => {
+            const fy = '2026-27';
+            const month = 'July';
+            const gstin = gstr1GstinInput ? gstr1GstinInput.value.trim().toUpperCase() : '';
+            if (gstr1ModalOverlay) gstr1ModalOverlay.style.display = 'none';
+            window.location.href = `/api/export-gstr1-json?client_id=${currentClientId}&financial_year=${fy}&month=${month}&gstin=${encodeURIComponent(gstin)}&download=1`;
+        });
+    }
+
     // 10. Cash Ledger Balance - manual credit adjustment
     // Live preview as the auditor types, before saving.
     inputCashLedgerBalance.addEventListener('input', () => {

@@ -240,7 +240,9 @@ CLIENTS_CONFIG = {
         'eligible_card_title': 'Eligible ITC (50%)',
         'ineligible_card_title': 'Ineligible ITC (50%)',
         'icon': 'fa-building-columns',
-        'tag': 'Active Client'
+        'tag': 'Active Client',
+        'gstin': os.getenv('NUTAN_GSTIN', '24AAACN0279M1ZL'),
+        'state_code': '24'
     },
     'sun_builders': {
         'id': 'sun_builders',
@@ -8470,6 +8472,192 @@ def export_income_working_sheet():
         )
     except Exception as e:
         print(f"Error exporting working sheet: {e}")
+        return jsonify({"error": friendly_error_message(e)}), 500
+
+
+GSTR1_MONTH_MAP = {
+    'JANUARY': '01', 'FEBRUARY': '02', 'MARCH': '03', 'APRIL': '04',
+    'MAY': '05', 'JUNE': '06', 'JULY': '07', 'AUGUST': '08',
+    'SEPTEMBER': '09', 'OCTOBER': '10', 'NOVEMBER': '11', 'DECEMBER': '12'
+}
+
+def get_gstr1_filing_period(month_str, fy_str):
+    """
+    Converts month (e.g. 'July') and financial year (e.g. '2026-27')
+    to GST Portal Filing Period code 'fp' in MMYYYY format (e.g. '072026').
+    """
+    m_num = GSTR1_MONTH_MAP.get(str(month_str).strip().upper(), '07')
+    m_match = re.match(r'^(\d{4})', str(fy_str).strip())
+    if m_match:
+        start_year = int(m_match.group(1))
+        cal_year = start_year if int(m_num) >= 4 else start_year + 1
+    else:
+        cal_year = datetime.datetime.now().year
+    return f"{m_num}{cal_year}"
+
+
+@app.route('/api/export-gstr1-json', methods=['GET', 'POST'])
+@login_required
+def export_gstr1_json():
+    """
+    Generates the official GSTR-1 JSON payload (conforming to GST Portal Offline Schema v3.1+)
+    directly from CBS branch income statements and exempt income records.
+    Supports preview (download=0) and file attachment download (download=1).
+    """
+    month = request.args.get('month') or (request.get_json(silent=True) or {}).get('month') or 'July'
+    fy = request.args.get('financial_year') or (request.get_json(silent=True) or {}).get('financial_year') or '2026-27'
+    client_id = get_current_client_id()
+    client_cfg = get_client_config(client_id)
+
+    custom_gstin = request.args.get('gstin') or (request.get_json(silent=True) or {}).get('gstin')
+    gstin = custom_gstin.strip().upper() if custom_gstin else client_cfg.get('gstin', '24AAACN0279M1ZL')
+    state_code = gstin[:2] if len(gstin) >= 2 and gstin[:2].isdigit() else "24"
+    fp = get_gstr1_filing_period(month, fy)
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+        # 1. Fetch branch taxable, exempt, and tax totals for the period
+        cur.execute('''
+            SELECT 
+                COALESCE(SUM(CASE WHEN is_taxable THEN income_amount ELSE 0 END), 0)::float as taxable_amount,
+                COALESCE(SUM(CASE WHEN NOT is_taxable THEN income_amount ELSE 0 END), 0)::float as exempt_amount,
+                COALESCE(SUM(cgst), 0)::float as total_cgst,
+                COALESCE(SUM(sgst), 0)::float as total_sgst,
+                COALESCE(SUM(igst), 0)::float as total_igst,
+                COALESCE(SUM(CASE WHEN is_taxable AND (igst IS NULL OR igst = 0) THEN income_amount ELSE 0 END), 0)::float as intra_taxable,
+                COALESCE(SUM(CASE WHEN is_taxable AND igst > 0 THEN income_amount ELSE 0 END), 0)::float as inter_taxable
+            FROM income_entries
+            WHERE client_id = %s AND financial_year = %s AND month = %s
+        ''', (client_id, fy, month))
+        inc_totals = cur.fetchone() or {}
+
+        # 2. Fetch exempt ledger balance if available
+        cur.execute('''
+            SELECT COALESCE(SUM(closing_balance), 0)::float as total_exempt_ledger
+            FROM exempt_income_ledger
+            WHERE client_id = %s AND financial_year = %s AND month = %s
+        ''', (client_id, fy, month))
+        ex_led = cur.fetchone()
+        cur.close()
+        conn.close()
+
+        taxable_amt = round(inc_totals.get('taxable_amount', 0.0), 2)
+        intra_taxable = round(inc_totals.get('intra_taxable', 0.0), 2)
+        inter_taxable = round(inc_totals.get('inter_taxable', 0.0), 2)
+        cgst_amt = round(inc_totals.get('total_cgst', 0.0), 2)
+        sgst_amt = round(inc_totals.get('total_sgst', 0.0), 2)
+        igst_amt = round(inc_totals.get('total_igst', 0.0), 2)
+
+        exempt_from_entries = round(inc_totals.get('exempt_amount', 0.0), 2)
+        exempt_from_ledger = round(ex_led['total_exempt_ledger'], 2) if ex_led and ex_led.get('total_exempt_ledger') else 0.0
+        exempt_amt = round(exempt_from_entries + exempt_from_ledger, 2)
+        total_turnover = round(taxable_amt + exempt_amt, 2)
+
+        # Table 7: b2cs (Small B2C Supplies - Retail Banking Services)
+        b2cs_entries = []
+        if intra_taxable > 0 or (cgst_amt > 0 and sgst_amt > 0):
+            b2cs_entries.append({
+                "sply_ty": "INTRA",
+                "pos": state_code,
+                "typ": "OE",
+                "rt": 18.0,
+                "txval": intra_taxable if intra_taxable > 0 else taxable_amt,
+                "camt": cgst_amt,
+                "samt": sgst_amt,
+                "csamt": 0.0
+            })
+        if inter_taxable > 0 or igst_amt > 0:
+            b2cs_entries.append({
+                "sply_ty": "INTER",
+                "pos": state_code,
+                "typ": "OE",
+                "rt": 18.0,
+                "txval": inter_taxable,
+                "iamt": igst_amt,
+                "csamt": 0.0
+            })
+
+        # Table 8: nil (Nil Rated, Exempted & Non-GST Outward Supplies)
+        nil_supplies = {
+            "inv": [
+                {
+                    "sply_ty": "INTRAB2C",
+                    "nil_amt": 0.0,
+                    "expt_amt": exempt_amt,
+                    "ngsup_amt": 0.0
+                }
+            ]
+        }
+
+        # Table 12: hsn (SAC 9971 - Banking & Financial Services)
+        gross_hsn_val = round(taxable_amt + exempt_amt + cgst_amt + sgst_amt + igst_amt, 2)
+        hsn_section = {
+            "data": [
+                {
+                    "num": 1,
+                    "hsn_sc": "9971",
+                    "desc": "Financial and related services",
+                    "uqc": "NA",
+                    "qty": 0,
+                    "val": gross_hsn_val,
+                    "txval": taxable_amt,
+                    "iamt": igst_amt,
+                    "camt": cgst_amt,
+                    "samt": sgst_amt,
+                    "csamt": 0.0
+                }
+            ]
+        }
+
+        # Official GSTR-1 offline utility schema envelope
+        gstr1_payload = {
+            "gstin": gstin,
+            "fp": fp,
+            "gt": 0.0,
+            "cur_gt": total_turnover,
+            "version": "GST3.1.2",
+            "hash": "hash",
+            "b2cs": b2cs_entries,
+            "nil": nil_supplies,
+            "hsn": hsn_section
+        }
+
+        # Preview mode for frontend modal dialog
+        as_download = request.args.get('download', '1') == '1'
+        if not as_download:
+            return jsonify({
+                "success": True,
+                "payload": gstr1_payload,
+                "summary": {
+                    "gstin": gstin,
+                    "fp": fp,
+                    "month": month,
+                    "financial_year": fy,
+                    "taxable_amount": taxable_amt,
+                    "exempt_amount": exempt_amt,
+                    "total_turnover": total_turnover,
+                    "cgst": cgst_amt,
+                    "sgst": sgst_amt,
+                    "igst": igst_amt,
+                    "total_gst": round(cgst_amt + sgst_amt + igst_amt, 2)
+                }
+            })
+
+        json_bytes = json.dumps(gstr1_payload, indent=2).encode('utf-8')
+        buf = io.BytesIO(json_bytes)
+        buf.seek(0)
+        filename = f"GSTR1_{gstin}_{fp}.json"
+
+        return send_file(
+            buf,
+            mimetype="application/json",
+            as_attachment=True,
+            download_name=filename
+        )
+    except Exception as e:
+        print(f"Error generating GSTR-1 JSON: {e}")
         return jsonify({"error": friendly_error_message(e)}), 500
 
 
