@@ -585,6 +585,30 @@ def init_db():
         cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_exempt_income_ledger_branch_code_month ON exempt_income_ledger(client_id, branch, financial_year, month, gl_code);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_exempt_income_ledger_client_fy ON exempt_income_ledger(client_id, financial_year, month);")
 
+        # Table 4 B2B Outward Invoices (Registered Customer Tax Invoices from Bank CBS)
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS b2b_outward_invoices (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                client_id VARCHAR(50) NOT NULL DEFAULT 'nutan_nagrik',
+                financial_year VARCHAR(20) NOT NULL,
+                month VARCHAR(20) NOT NULL,
+                customer_gstin VARCHAR(20) NOT NULL,
+                customer_name VARCHAR(200),
+                invoice_number VARCHAR(100) NOT NULL,
+                invoice_date VARCHAR(20),
+                taxable_value NUMERIC(15,2) DEFAULT 0.0,
+                cgst NUMERIC(15,2) DEFAULT 0.0,
+                sgst NUMERIC(15,2) DEFAULT 0.0,
+                igst NUMERIC(15,2) DEFAULT 0.0,
+                pos VARCHAR(10) DEFAULT '24',
+                file_name VARCHAR(255),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        ''')
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_b2b_outward_client_fy_m ON b2b_outward_invoices(client_id, financial_year, month);")
+        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_b2b_outward_inv ON b2b_outward_invoices(client_id, financial_year, month, customer_gstin, invoice_number);")
+
         # Deduplicate any existing duplicate entries in income_entries
         cur.execute('''
             DELETE FROM income_entries a USING income_entries b
@@ -8496,12 +8520,234 @@ def get_gstr1_filing_period(month_str, fy_str):
     return f"{m_num}{cal_year}"
 
 
+B2B_COLUMN_ALIASES = {
+    'customer_gstin': [
+        'gstin', 'ctin', 'customer gstin', 'party gstin', 'buyer gstin',
+        'recipient gstin', 'gstin of recipient', 'tin', 'client gstin'
+    ],
+    'customer_name': [
+        'customer name', 'party name', 'buyer name', 'recipient name',
+        'name', 'client name', 'trade name', 'legal name'
+    ],
+    'invoice_number': [
+        'invoice number', 'invoice no', 'inv no', 'bill no', 'bill number',
+        'doc no', 'document number', 'voucher no', 'inum'
+    ],
+    'invoice_date': [
+        'invoice date', 'inv date', 'date', 'bill date', 'doc date', 'voucher date', 'idt'
+    ],
+    'taxable_value': [
+        'taxable value', 'taxable amount', 'taxable', 'txval', 'net amount',
+        'base amount', 'basic value', 'amount', 'fee amount'
+    ],
+    'cgst': ['cgst', 'cgst amount', 'central tax', 'camt'],
+    'sgst': ['sgst', 'sgst amount', 'state tax', 'samt'],
+    'igst': ['igst', 'igst amount', 'integrated tax', 'iamt'],
+    'pos': ['pos', 'place of supply', 'state code', 'pos state']
+}
+
+def find_b2b_column(cols, alias_list):
+    for col in cols:
+        clean = re.sub(r'[^a-z0-9]', '', str(col).lower())
+        for alias in alias_list:
+            if clean == re.sub(r'[^a-z0-9]', '', alias.lower()):
+                return col
+    return None
+
+
+@app.route('/api/b2b-invoices-summary', methods=['GET'])
+@login_required
+def get_b2b_invoices_summary():
+    client_id = get_current_client_id()
+    fy = request.args.get('financial_year', '2026-27')
+    month = request.args.get('month', 'July')
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute('''
+            SELECT COUNT(*) as count,
+                   COALESCE(SUM(taxable_value), 0)::float as total_taxable,
+                   COALESCE(SUM(cgst), 0)::float as total_cgst,
+                   COALESCE(SUM(sgst), 0)::float as total_sgst,
+                   COALESCE(SUM(igst), 0)::float as total_igst
+            FROM b2b_outward_invoices
+            WHERE client_id = %s AND financial_year = %s AND month = %s
+        ''', (client_id, fy, month))
+        row = cur.fetchone() or {}
+        cur.close()
+        conn.close()
+        return jsonify({
+            "success": True,
+            "count": int(row.get('count', 0)),
+            "total_taxable": round(row.get('total_taxable', 0.0), 2),
+            "total_gst": round((row.get('total_cgst', 0.0) or 0.0) + (row.get('total_sgst', 0.0) or 0.0) + (row.get('total_igst', 0.0) or 0.0), 2)
+        })
+    except Exception as e:
+        return jsonify({"error": friendly_error_message(e)}), 500
+
+
+@app.route('/api/upload-b2b-invoices', methods=['POST'])
+@login_required
+def upload_b2b_invoices():
+    user_id = session.get('user_id')
+    client_id = request.form.get('client_id') or get_current_client_id()
+    fy = request.form.get('financial_year', '2026-27')
+    month = request.form.get('month', 'July')
+    client_cfg = get_client_config(client_id)
+    default_state = client_cfg.get('state_code', '24')
+
+    file = request.files.get('b2b_file')
+    if not file or not file.filename:
+        return jsonify({"error": "No file uploaded"}), 400
+
+    filename = file.filename
+    ext = filename.lower().split('.')[-1] if '.' in filename else ''
+    if ext not in ('xlsx', 'xls', 'csv'):
+        return jsonify({"error": "Please upload an Excel (.xlsx, .xls) or CSV file"}), 400
+
+    try:
+        fbytes = file.read()
+        # Scan the first 15 rows to automatically detect which row contains the real table headers
+        header_row_idx = 0
+        try:
+            if ext == 'csv':
+                preview_df = pd.read_csv(io.BytesIO(fbytes), header=None, nrows=15)
+            else:
+                preview_df = pd.read_excel(io.BytesIO(fbytes), header=None, nrows=15)
+
+            for idx, r in preview_df.iterrows():
+                row_strs = [re.sub(r'[^a-z0-9]', '', str(v).lower()) for v in r.values if pd.notna(v)]
+                has_gst = any(any(a in v for a in ['gst', 'ctin', 'tin']) for v in row_strs)
+                has_inv = any(any(a in v for a in ['inv', 'bill', 'doc', 'voucher']) for v in row_strs)
+                has_val = any(any(a in v for a in ['tax', 'amount', 'val', 'basic', 'fee']) for v in row_strs)
+                if (has_gst and has_inv) or (has_gst and has_val) or (has_inv and has_val):
+                    header_row_idx = idx
+                    break
+        except Exception:
+            header_row_idx = 0
+
+        if ext == 'csv':
+            df = pd.read_csv(io.BytesIO(fbytes), header=header_row_idx)
+        else:
+            df = pd.read_excel(io.BytesIO(fbytes), header=header_row_idx)
+
+        cols = list(df.columns)
+        c_gstin = find_b2b_column(cols, B2B_COLUMN_ALIASES['customer_gstin'])
+        c_inv = find_b2b_column(cols, B2B_COLUMN_ALIASES['invoice_number'])
+        c_date = find_b2b_column(cols, B2B_COLUMN_ALIASES['invoice_date'])
+        c_val = find_b2b_column(cols, B2B_COLUMN_ALIASES['taxable_value'])
+        c_name = find_b2b_column(cols, B2B_COLUMN_ALIASES['customer_name'])
+        c_cgst = find_b2b_column(cols, B2B_COLUMN_ALIASES['cgst'])
+        c_sgst = find_b2b_column(cols, B2B_COLUMN_ALIASES['sgst'])
+        c_igst = find_b2b_column(cols, B2B_COLUMN_ALIASES['igst'])
+        c_pos = find_b2b_column(cols, B2B_COLUMN_ALIASES['pos'])
+
+        if not c_gstin or not c_inv or not c_val:
+            return jsonify({
+                "error": f"Could not identify required columns in row {header_row_idx + 1}. Please ensure columns for GSTIN, Invoice Number, and Taxable Value are present.",
+                "detected_columns": [str(c) for c in cols],
+                "header_row_checked": int(header_row_idx + 1)
+            }), 400
+
+        conn = get_db_connection()
+        cur = conn.cursor()
+        saved_count = 0
+        total_taxable = 0.0
+
+        for _, row in df.iterrows():
+            raw_gstin = str(row.get(c_gstin, '')).strip().upper()
+            raw_inv = str(row.get(c_inv, '')).strip()
+            if not raw_gstin or raw_gstin in ('NAN', 'NONE', '') or not raw_inv or raw_inv in ('NAN', 'NONE', ''):
+                continue
+
+            # Basic clean of GSTIN
+            clean_gstin = re.sub(r'[^A-Z0-9]', '', raw_gstin)
+            if len(clean_gstin) < 15:
+                continue
+
+            try:
+                txval = float(row.get(c_val, 0) or 0)
+            except (ValueError, TypeError):
+                txval = 0.0
+            if txval <= 0:
+                continue
+
+            name = str(row.get(c_name, '')).strip() if c_name else ''
+            if name in ('nan', 'None'):
+                name = ''
+
+            inv_date = str(row.get(c_date, '')).strip() if c_date else ''
+            if inv_date in ('nan', 'None', ''):
+                inv_date = '01-07-2026'
+
+            pos_val = str(row.get(c_pos, '')).strip() if c_pos else clean_gstin[:2]
+            if not pos_val or pos_val in ('nan', 'None'):
+                pos_val = clean_gstin[:2] or default_state
+
+            # Taxes
+            try:
+                cgst = float(row.get(c_cgst, 0) or 0) if c_cgst else (round(txval * 0.09, 2) if pos_val == default_state else 0.0)
+            except (ValueError, TypeError):
+                cgst = round(txval * 0.09, 2) if pos_val == default_state else 0.0
+
+            try:
+                sgst = float(row.get(c_sgst, 0) or 0) if c_sgst else (round(txval * 0.09, 2) if pos_val == default_state else 0.0)
+            except (ValueError, TypeError):
+                sgst = round(txval * 0.09, 2) if pos_val == default_state else 0.0
+
+            try:
+                igst = float(row.get(c_igst, 0) or 0) if c_igst else (round(txval * 0.18, 2) if pos_val != default_state else 0.0)
+            except (ValueError, TypeError):
+                igst = round(txval * 0.18, 2) if pos_val != default_state else 0.0
+
+            cur.execute('''
+                INSERT INTO b2b_outward_invoices (
+                    user_id, client_id, financial_year, month, customer_gstin, customer_name,
+                    invoice_number, invoice_date, taxable_value, cgst, sgst, igst, pos, file_name
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (client_id, financial_year, month, customer_gstin, invoice_number)
+                DO UPDATE SET
+                    taxable_value = EXCLUDED.taxable_value,
+                    cgst = EXCLUDED.cgst,
+                    sgst = EXCLUDED.sgst,
+                    igst = EXCLUDED.igst,
+                    invoice_date = EXCLUDED.invoice_date,
+                    customer_name = EXCLUDED.customer_name,
+                    pos = EXCLUDED.pos,
+                    file_name = EXCLUDED.file_name;
+            ''', (user_id, client_id, fy, month, clean_gstin, name, raw_inv, inv_date, txval, cgst, sgst, igst, pos_val, filename))
+            saved_count += 1
+            total_taxable += txval
+
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        return jsonify({
+            "success": True,
+            "count": saved_count,
+            "total_taxable": round(total_taxable, 2),
+            "message": f"Successfully imported {saved_count} B2B invoices.",
+            "detected_headers": {
+                "header_row": int(header_row_idx + 1),
+                "gstin": str(c_gstin),
+                "invoice_number": str(c_inv),
+                "invoice_date": str(c_date) if c_date else "Defaulted",
+                "taxable_value": str(c_val),
+                "customer_name": str(c_name) if c_name else "N/A"
+            }
+        })
+    except Exception as e:
+        print(f"Error parsing B2B invoices: {e}")
+        return jsonify({"error": friendly_error_message(e)}), 500
+
+
 @app.route('/api/export-gstr1-json', methods=['GET', 'POST'])
 @login_required
 def export_gstr1_json():
     """
     Generates the official GSTR-1 JSON payload (conforming to GST Portal Offline Schema v3.1+)
-    directly from CBS branch income statements and exempt income records.
+    directly from CBS branch income statements, exempt income records, and optional B2B registered invoices.
     Supports preview (download=0) and file attachment download (download=1).
     """
     month = request.args.get('month') or (request.get_json(silent=True) or {}).get('month') or 'July'
@@ -8540,6 +8786,16 @@ def export_gstr1_json():
             WHERE client_id = %s AND financial_year = %s AND month = %s
         ''', (client_id, fy, month))
         ex_led = cur.fetchone()
+
+        # 3. Fetch B2B outward invoices if uploaded
+        cur.execute('''
+            SELECT customer_gstin, customer_name, invoice_number, invoice_date,
+                   taxable_value::float, cgst::float, sgst::float, igst::float, pos
+            FROM b2b_outward_invoices
+            WHERE client_id = %s AND financial_year = %s AND month = %s
+            ORDER BY customer_gstin ASC, invoice_number ASC
+        ''', (client_id, fy, month))
+        b2b_rows = cur.fetchall()
         cur.close()
         conn.close()
 
@@ -8553,29 +8809,91 @@ def export_gstr1_json():
         exempt_from_entries = round(inc_totals.get('exempt_amount', 0.0), 2)
         exempt_from_ledger = round(ex_led['total_exempt_ledger'], 2) if ex_led and ex_led.get('total_exempt_ledger') else 0.0
         exempt_amt = round(exempt_from_entries + exempt_from_ledger, 2)
-        total_turnover = round(taxable_amt + exempt_amt, 2)
+
+        # Build Table 4: b2b (Registered Customers)
+        b2b_by_gstin = collections.defaultdict(list)
+        # Kept separate from the start (not one blanket total_b2b_taxable) so
+        # each side of Table 7 only ever gets netted against the matching
+        # side of Table 4 - an inter-state B2B invoice must reduce the
+        # inter-state B2C bucket, not the intra-state one, or it silently
+        # shows up twice in the filed JSON.
+        total_b2b_taxable_intra = 0.0
+        total_b2b_taxable_inter = 0.0
+        total_b2b_cgst = 0.0
+        total_b2b_sgst = 0.0
+        total_b2b_igst = 0.0
+
+        for r in b2b_rows:
+            ctin = str(r['customer_gstin']).strip().upper()
+            tx = round(r['taxable_value'] or 0.0, 2)
+            c = round(r['cgst'] or 0.0, 2)
+            s = round(r['sgst'] or 0.0, 2)
+            i = round(r['igst'] or 0.0, 2)
+            tot_val = round(tx + c + s + i, 2)
+            inv_pos = str(r.get('pos') or ctin[:2] or state_code).strip()
+            if inv_pos == state_code:
+                total_b2b_taxable_intra += tx
+            else:
+                total_b2b_taxable_inter += tx
+            total_b2b_cgst += c
+            total_b2b_sgst += s
+            total_b2b_igst += i
+
+            inv_obj = {
+                "inum": str(r['invoice_number']).strip(),
+                "idt": str(r.get('invoice_date') or '01-07-2026').strip(),
+                "val": tot_val,
+                "pos": inv_pos,
+                "rchrg": "N",
+                "inv_typ": "R",
+                "itms": [
+                    {
+                        "num": 1,
+                        "itm_det": {
+                            "txval": tx,
+                            "rt": 18.0,
+                            "camt": c,
+                            "samt": s,
+                            "iamt": i,
+                            "csamt": 0.0
+                        }
+                    }
+                ]
+            }
+            b2b_by_gstin[ctin].append(inv_obj)
+
+        b2b_section = [{"ctin": ctin, "inv": invs} for ctin, invs in b2b_by_gstin.items()]
+        total_b2b_taxable = round(total_b2b_taxable_intra + total_b2b_taxable_inter, 2)
+
+        # Net retail supplies for Table 7 (B2CS): Total CBS Income minus the
+        # B2B portion, netted on the matching intra/inter side each time.
+        net_b2cs_intra = max(0.0, round((intra_taxable if intra_taxable > 0 else taxable_amt) - total_b2b_taxable_intra, 2))
+        net_b2cs_cgst = max(0.0, round(cgst_amt - total_b2b_cgst, 2))
+        net_b2cs_sgst = max(0.0, round(sgst_amt - total_b2b_sgst, 2))
+        net_b2cs_inter = max(0.0, round(inter_taxable - total_b2b_taxable_inter, 2))
+        net_b2cs_igst = max(0.0, round(igst_amt - total_b2b_igst, 2))
 
         # Table 7: b2cs (Small B2C Supplies - Retail Banking Services)
         b2cs_entries = []
-        if intra_taxable > 0 or (cgst_amt > 0 and sgst_amt > 0):
+        if net_b2cs_intra > 0 or (net_b2cs_cgst > 0 and net_b2cs_sgst > 0):
             b2cs_entries.append({
                 "sply_ty": "INTRA",
                 "pos": state_code,
                 "typ": "OE",
                 "rt": 18.0,
-                "txval": intra_taxable if intra_taxable > 0 else taxable_amt,
-                "camt": cgst_amt,
-                "samt": sgst_amt,
+                "txval": net_b2cs_intra,
+                "camt": net_b2cs_cgst,
+                "samt": net_b2cs_sgst,
                 "csamt": 0.0
             })
-        if inter_taxable > 0 or igst_amt > 0:
+        if net_b2cs_inter > 0 or net_b2cs_igst > 0:
             b2cs_entries.append({
                 "sply_ty": "INTER",
                 "pos": state_code,
                 "typ": "OE",
                 "rt": 18.0,
-                "txval": inter_taxable,
-                "iamt": igst_amt,
+                "txval": net_b2cs_inter,
+                "iamt": net_b2cs_igst,
                 "csamt": 0.0
             })
 
@@ -8592,6 +8910,7 @@ def export_gstr1_json():
         }
 
         # Table 12: hsn (SAC 9971 - Banking & Financial Services)
+        total_turnover = round(taxable_amt + exempt_amt, 2)
         gross_hsn_val = round(taxable_amt + exempt_amt + cgst_amt + sgst_amt + igst_amt, 2)
         hsn_section = {
             "data": [
@@ -8623,6 +8942,8 @@ def export_gstr1_json():
             "nil": nil_supplies,
             "hsn": hsn_section
         }
+        if b2b_section:
+            gstr1_payload["b2b"] = b2b_section
 
         # Preview mode for frontend modal dialog
         as_download = request.args.get('download', '1') == '1'
@@ -8641,7 +8962,11 @@ def export_gstr1_json():
                     "cgst": cgst_amt,
                     "sgst": sgst_amt,
                     "igst": igst_amt,
-                    "total_gst": round(cgst_amt + sgst_amt + igst_amt, 2)
+                    "total_gst": round(cgst_amt + sgst_amt + igst_amt, 2),
+                    "b2b_count": len(b2b_rows),
+                    "b2b_taxable": round(total_b2b_taxable, 2),
+                    "b2b_gst": round(total_b2b_cgst + total_b2b_sgst + total_b2b_igst, 2),
+                    "b2cs_taxable": net_b2cs_intra + net_b2cs_inter
                 }
             })
 

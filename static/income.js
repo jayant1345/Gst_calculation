@@ -728,6 +728,76 @@ document.addEventListener('DOMContentLoaded', () => {
     const gstr1ModalTax = document.getElementById('gstr1ModalTax');
     const gstr1ModalExempt = document.getElementById('gstr1ModalExempt');
     const gstr1ModalTurnover = document.getElementById('gstr1ModalTurnover');
+    const gstr1ModalB2B = document.getElementById('gstr1ModalB2B');
+    const btnUploadB2B = document.getElementById('btnUploadB2B');
+    const b2bFileInput = document.getElementById('b2bFileInput');
+    const b2bUploadStatusBadge = document.getElementById('b2bUploadStatusBadge');
+
+    async function loadB2BSummary() {
+        if (!b2bUploadStatusBadge) return;
+        try {
+            const res = await fetch(`/api/b2b-invoices-summary?client_id=${currentClientId}&financial_year=2026-27&month=July`);
+            const data = await res.json();
+            if (data.success) {
+                if (data.count > 0) {
+                    b2bUploadStatusBadge.textContent = `${data.count} Invoices (${formatINR(data.total_taxable)})`;
+                    b2bUploadStatusBadge.style.background = '#dcfce7';
+                    b2bUploadStatusBadge.style.color = '#15803d';
+                } else {
+                    b2bUploadStatusBadge.textContent = '0 Invoices Uploaded';
+                    b2bUploadStatusBadge.style.background = '#f3e8ff';
+                    b2bUploadStatusBadge.style.color = '#7e22ce';
+                }
+            }
+        } catch (e) {
+            console.error('Error loading B2B summary:', e);
+        }
+    }
+
+    if (btnUploadB2B && b2bFileInput) {
+        btnUploadB2B.addEventListener('click', () => b2bFileInput.click());
+        b2bFileInput.addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            const formData = new FormData();
+            formData.append('b2b_file', file);
+            formData.append('client_id', currentClientId);
+            formData.append('financial_year', '2026-27');
+            formData.append('month', 'July');
+            
+            btnUploadB2B.disabled = true;
+            btnUploadB2B.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Uploading...';
+            try {
+                const res = await fetch('/api/upload-b2b-invoices', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await res.json();
+                if (res.ok && data.success) {
+                    const dh = data.detected_headers || {};
+                    const msg = `✅ ${data.message}\n\n` +
+                                `📋 Detected Header Columns:\n` +
+                                ` • Header Row: Row ${dh.header_row || 1}\n` +
+                                ` • GSTIN: "${dh.gstin || 'Auto'}"\n` +
+                                ` • Invoice Number: "${dh.invoice_number || 'Auto'}"\n` +
+                                ` • Taxable Value: "${dh.taxable_value || 'Auto'}"\n\n` +
+                                `💰 Total Taxable Value: ${formatINR(data.total_taxable)}`;
+                    alert(msg);
+                    loadB2BSummary();
+                } else {
+                    alert(`❌ Upload Error: ${data.error || 'Failed to process file'}`);
+                }
+            } catch (err) {
+                alert(`❌ Upload Failed: ${err.message}`);
+            } finally {
+                btnUploadB2B.disabled = false;
+                btnUploadB2B.innerHTML = '<i class="fa-solid fa-file-excel"></i> Upload B2B Register (Excel)';
+                b2bFileInput.value = '';
+            }
+        });
+    }
+
+    loadB2BSummary();
 
     if (btnExportGstr1Json) {
         btnExportGstr1Json.addEventListener('click', async () => {
@@ -737,6 +807,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (gstr1ModalOverlay) {
                 gstr1ModalOverlay.style.display = 'flex';
                 if (gstr1PeriodDisplay) gstr1PeriodDisplay.textContent = `${month} ${fy} (Filing Period)`;
+                if (gstr1ModalB2B) gstr1ModalB2B.textContent = 'Calculating...';
                 if (gstr1ModalTaxable) gstr1ModalTaxable.textContent = 'Calculating...';
                 if (gstr1ModalTax) gstr1ModalTax.textContent = 'Calculating...';
                 if (gstr1ModalExempt) gstr1ModalExempt.textContent = 'Calculating...';
@@ -752,7 +823,12 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (s.gstin && gstr1GstinInput) {
                         gstr1GstinInput.value = s.gstin;
                     }
-                    if (gstr1ModalTaxable) gstr1ModalTaxable.textContent = formatINR(s.taxable_amount);
+                    if (gstr1ModalB2B) {
+                        gstr1ModalB2B.textContent = `${s.b2b_count || 0} Invoices (${formatINR(s.b2b_taxable || 0)})`;
+                    }
+                    if (gstr1ModalTaxable) {
+                        gstr1ModalTaxable.textContent = formatINR(s.b2cs_taxable !== undefined ? s.b2cs_taxable : s.taxable_amount);
+                    }
                     if (gstr1ModalTax) gstr1ModalTax.textContent = formatINR(s.total_gst);
                     if (gstr1ModalExempt) gstr1ModalExempt.textContent = formatINR(s.exempt_amount);
                     if (gstr1ModalTurnover) gstr1ModalTurnover.textContent = formatINR(s.total_turnover);
