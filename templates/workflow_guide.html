@@ -68,13 +68,89 @@
         .guide-badge.purple { background: #ede9fe; color: #5b21b6; }
         .guide-badge.amber { background: #fef3c7; color: #92400e; }
         .guide-badge.green { background: #dcfce7; color: #15803d; }
+        .guide-inputs-box {
+            background: #f8fafc;
+            border-left: 3px solid var(--accent-blue);
+            padding: 9px 14px;
+            border-radius: 0 8px 8px 0;
+            margin: 10px 0 8px 0;
+            font-size: 13px;
+            color: #334155;
+            border-top: 1px solid #f1f5f9;
+            border-right: 1px solid #f1f5f9;
+            border-bottom: 1px solid #f1f5f9;
+        }
+        .guide-inputs-box.green {
+            border-left-color: #10b981;
+            background: #f0fdf4;
+        }
+        .guide-inputs-box.purple {
+            border-left-color: #8b5cf6;
+            background: #faf5ff;
+        }
+        .guide-inputs-box.amber {
+            border-left-color: #d97706;
+            background: #fffbeb;
+        }
+        .guide-inputs-box strong {
+            color: #0f172a;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            margin-bottom: 3px;
+            font-size: 12.5px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .guide-inputs-box ul {
+            margin: 4px 0 0 18px;
+            padding: 0;
+        }
+        .guide-inputs-box li {
+            font-size: 12.5px;
+            color: #475569;
+            line-height: 1.55;
+        }
+        .guide-module-header {
+            background: #f8fafc;
+            border: 1px solid #cbd5e1;
+            border-radius: 12px;
+            padding: 14px 20px;
+            margin: 36px 0 18px 0;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        .guide-module-header h2 {
+            font-size: 17px;
+            font-weight: 800;
+            color: #0f172a;
+            margin: 0;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .guide-module-tag {
+            background: var(--accent-blue);
+            color: #fff;
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .guide-module-tag.green { background: #059669; }
+        .guide-module-tag.purple { background: #7c3aed; }
         .guide-faq {
             background: #fff; border: 1px solid var(--border-color); border-radius: 12px;
             padding: 16px 20px; margin-bottom: 12px;
         }
         .guide-faq h4 { font-size: 13.5px; font-weight: 700; color: #0f172a; margin-bottom: 5px; }
         .guide-faq p { font-size: 13px; color: #64748b; line-height: 1.6; }
-        code.g { background: #f1f5f9; padding: 1px 6px; border-radius: 5px; font-size: 12.5px; color: #0f172a; }
+        code.g { background: #f1f5f9; padding: 1px 6px; border-radius: 5px; font-size: 12.5px; color: #0f172a; font-family: monospace; }
     </style>
 </head>
 <body>
@@ -98,7 +174,7 @@
                     </a>
                     <a href="/income" class="nav-item">
                         <i class="fa-solid fa-coins"></i>
-                        <span>Income & Output GST</span>
+                        <span>Income &amp; Output GST</span>
                     </a>
                     <a href="/users" class="nav-item">
                         <i class="fa-solid fa-users-gear"></i>
@@ -139,7 +215,7 @@
             <header class="top-header">
                 <div class="header-left">
                     <h1>Workflow Guide</h1>
-                    <p class="subtitle">How the Income &amp; Output GST module works, end to end &mdash; including CA Working Sheet &amp; GSTR-1 JSON Creation</p>
+                    <p class="subtitle">Complete end-to-end operational guide: Income, Output GST, GSTR-1 JSON, and GSTR-2B Reconciliation</p>
                 </div>
                 <div class="header-right">
                     <div class="user-profile">
@@ -160,71 +236,118 @@
 
             <div class="guide-wrap">
                 <div class="guide-intro">
-                    <h2><i class="fa-solid fa-compass"></i> What this page is</h2>
+                    <h2><i class="fa-solid fa-compass"></i> Overview &amp; Required System Inputs</h2>
                     <p>
-                        A step-by-step walkthrough of how bank statements turn into the CA's GST working sheet and ready-to-upload
-                        GSTR-1 JSON return in this app - so you (or the CA) can follow it without asking anyone. This mirrors the CA's own written workflow
-                        specification (NUTAN INCOME WORKFLOW) exactly.
+                        This guide walks through all core compliance functions in this portal &mdash; specifying exactly <strong>what input files/data are required</strong> at every stage, where to navigate, and how bank statements, invoices, and GSTR-2B statements transform into the CA's official working papers and ready-to-upload GSTR-1 JSON returns.
                     </p>
+                </div>
+
+                <!-- MODULE 1: INCOME, OUTPUT GST & GSTR-1 JSON -->
+                <div class="guide-module-header">
+                    <h2><i class="fa-solid fa-coins" style="color: #2563eb;"></i> Module 1: Income Statements, Output GST &amp; GSTR-1 JSON Filing</h2>
+                    <span class="guide-module-tag">Revenue &amp; Output GST</span>
                 </div>
 
                 <div class="guide-step">
                     <div class="guide-step-num">1</div>
                     <div class="guide-step-body">
-                        <h3>Upload branch statements <span class="guide-where"><i class="fa-solid fa-location-dot"></i> Income &amp; Output GST</span></h3>
-                        <p>Drag and drop PDF/Excel branch statements (or a whole folder). Nothing changes here from how you've always done it - the app reads each account's income as <strong>credit total minus debit total</strong> for the period, rounds to 2 decimals, and auto-computes CGST/SGST at 9% each.</p>
+                        <h3>Upload branch income statements <span class="guide-where"><i class="fa-solid fa-location-dot"></i> Income &amp; Output GST</span></h3>
+                        <p>Upload monthly branch statements. The system reads each account line, calculates net revenue as <strong>Credit Total &minus; Debit Total</strong>, rounds to 2 decimal places, and automatically computes CGST (9%) and SGST (9%).</p>
+                        
+                        <div class="guide-inputs-box">
+                            <strong><i class="fa-solid fa-file-arrow-up"></i> Required Inputs:</strong>
+                            <ul>
+                                <li><strong>File Format:</strong> Branch Income / Trial Balance statements in Excel (<code class="g">.xlsx</code>, <code class="g">.xls</code>) or PDF (<code class="g">.pdf</code>).</li>
+                                <li><strong>Batch Upload:</strong> Drag and drop individual branch files or an entire folder of branch statements simultaneously.</li>
+                                <li><strong>Period Selection:</strong> Target Financial Year (e.g. <code class="g">2026-27</code>) and Month (e.g. <code class="g">July</code>).</li>
+                            </ul>
+                        </div>
                     </div>
                 </div>
 
                 <div class="guide-step">
                     <div class="guide-step-num">2</div>
                     <div class="guide-step-body">
-                        <h3>Check the "Needs Review" banner <span class="guide-where"><i class="fa-solid fa-location-dot"></i> Income &amp; Output GST</span></h3>
-                        <p>After upload, a yellow banner appears if anything needs a second look - a GL/PL code the app has never seen before, a manual-entry code (see step 3), or a locker/guarantee code with signs of an internal transfer. Click <strong>"Show these entries"</strong> to jump straight to them.</p>
+                        <h3>Check the "Needs Review" notification banner <span class="guide-where"><i class="fa-solid fa-location-dot"></i> Income &amp; Output GST</span></h3>
+                        <p>After statement processing, an amber alert banner highlights items requiring auditor inspection &mdash; such as previously unseen GL/PL codes, manual-entry transactions, or locker/guarantee codes showing internal transfer accruals.</p>
+                        
+                        <div class="guide-inputs-box amber">
+                            <strong><i class="fa-solid fa-check-double"></i> Required Inputs:</strong>
+                            <ul>
+                                <li>Click <strong>"Show these entries"</strong> on the yellow notification banner to filter and inspect only unclassified or flagged line items.</li>
+                            </ul>
+                        </div>
                     </div>
                 </div>
 
                 <div class="guide-step">
                     <div class="guide-step-num">3</div>
                     <div class="guide-step-body">
-                        <h3>Classify GL/PL codes (once per code) <span class="guide-where"><i class="fa-solid fa-location-dot"></i> Manage GL/PL Codes</span></h3>
-                        <p>This is the one-time setup step. Open <strong>Manage GL/PL Codes</strong> (button above the branch table) and tell the app how to treat specific codes - see the reference table below for exactly which ones. Type a code or particulars into the search box to find it fast; the field also suggests matches as you type.</p>
-                        <ul>
-                            <li>New/unrecognized codes default to <strong>18% Taxable</strong> until classified - never silently exempt.</li>
-                            <li>Editing a code here retroactively fixes every already-uploaded entry using it.</li>
-                        </ul>
+                        <h3>Classify GL/PL codes (one-time setup) <span class="guide-where"><i class="fa-solid fa-location-dot"></i> Manage GL/PL Codes</span></h3>
+                        <p>Configure how specific account codes are treated across all branches. Unrecognized codes default to <strong>18% Taxable</strong> for compliance safety &mdash; never silently exempting revenue.</p>
+                        
+                        <div class="guide-inputs-box">
+                            <strong><i class="fa-solid fa-sliders"></i> Required Inputs:</strong>
+                            <ul>
+                                <li><strong>GL/PL Code:</strong> Numeric or alphanumeric account code (e.g. <code class="g">3230</code>, <code class="g">1878</code>).</li>
+                                <li><strong>Tax Treatment:</strong> Taxable @ 18% (CGST 9% + SGST 9%), IGST @ 18%, or Exempt / Nil-Rated.</li>
+                                <li><strong>Entry Method:</strong> Auto-read (formula-driven) or Manual (allows typing custom figures).</li>
+                                <li><strong>Ledger Role:</strong> Normal Income, GST Payable Ledger (GL 1878/1879/1880), or Exempt Income Item.</li>
+                            </ul>
+                        </div>
                     </div>
                 </div>
 
                 <div class="guide-step">
                     <div class="guide-step-num">4</div>
                     <div class="guide-step-body">
-                        <h3>Fix manual-entry and ledger-balance figures <span class="guide-where"><i class="fa-solid fa-location-dot"></i> Income table / Ledger section</span></h3>
-                        <p>Codes marked <strong>Manual</strong> (like PL 3230, PL 3320) show a pencil icon next to their amount in the main table - click it to type the correct figure. GL 1878/1879/1880 and exempt-income codes appear lower on the page under <strong>"GST Payable Ledger &amp; Exempt Income"</strong>, each with its own pencil icon if the closing balance needs correcting.</p>
+                        <h3>Set manual figures &amp; ledger closing balances <span class="guide-where"><i class="fa-solid fa-location-dot"></i> Income Table &amp; Ledger Section</span></h3>
+                        <p>For accounts with internal accrual distortions (e.g. PL 3230 locker rent), click the pencil icon in the table to enter the exact audited figure. Enter closing balances for bank GST Payable accounts (GL 1878/1879/1880) and exempt heads.</p>
+                        
+                        <div class="guide-inputs-box">
+                            <strong><i class="fa-solid fa-pen-to-square"></i> Required Inputs:</strong>
+                            <ul>
+                                <li><strong>Manual Income Values:</strong> Click pencil icon on specific branch rows to override the formula.</li>
+                                <li><strong>GST Payable Closing Balances:</strong> Closing amounts for CGST (GL 1878), SGST (GL 1879), and IGST (GL 1880).</li>
+                                <li><strong>Cash Ledger Credit (Optional):</strong> Existing electronic cash ledger balance to offset net tax payable.</li>
+                            </ul>
+                        </div>
                     </div>
                 </div>
 
                 <div class="guide-step">
                     <div class="guide-step-num">5</div>
                     <div class="guide-step-body">
-                        <h3>Export the CA Working Sheet <span class="guide-where"><i class="fa-solid fa-location-dot"></i> Income &amp; Output GST</span></h3>
-                        <p>Click <strong>Export CA Working Sheet (Excel)</strong>. Every branch tab, <code class="g">Sheet1</code>, and <code class="g">SUMMARY SHEET GST</code> are filled from real uploaded data, plus two verification tabs:</p>
-                        <ul>
-                            <li><strong>GST Payable Reconciliation</strong> - each branch's computed CGST/SGST/IGST vs. the bank's own ledger figure, with the difference. Any branch tab where the difference exceeds <strong>₹10</strong> turns <strong style="color:#dc2626;">red</strong> automatically.</li>
-                            <li><strong>Exempt Income Working Sheet</strong> - this month vs. last month's closing balance for each classified exempt-income code, and the difference.</li>
-                        </ul>
+                        <h3>Export the CA Working Sheet (.xlsx) <span class="guide-where"><i class="fa-solid fa-location-dot"></i> Income &amp; Output GST</span></h3>
+                        <p>Click <strong>"Export CA Working Sheet (Excel)"</strong> to generate the comprehensive annual audit workbook with all branch tabs, Sheet1, Summary Sheet GST, and automated variance analysis.</p>
+                        
+                        <div class="guide-inputs-box green">
+                            <strong><i class="fa-solid fa-file-excel"></i> Generated Output:</strong>
+                            <ul>
+                                <li><strong>Branch Tabs &amp; Sheet1:</strong> Complete breakdown of account income per branch.</li>
+                                <li><strong>GST Payable Reconciliation:</strong> Compares computed GST vs bank ledger with automatic <strong style="color:#dc2626;">red highlights</strong> for variances &gt; ₹10.</li>
+                                <li><strong>Exempt Income Sheet:</strong> Month-over-month movement for all classified exempt revenue heads.</li>
+                            </ul>
+                        </div>
                     </div>
                 </div>
 
                 <div class="guide-step">
                     <div class="guide-step-num">6</div>
                     <div class="guide-step-body">
-                        <h3>Upload B2B registered client invoices (optional) <span class="guide-where"><i class="fa-solid fa-location-dot"></i> Income &amp; Output GST</span></h3>
-                        <p>If the bank issued taxable service invoices to corporate customers or companies with a GSTIN, click <strong>"Upload B2B Invoices"</strong> in the B2B Outward Registered Supplies bar. Upload an Excel (.xlsx) or CSV invoice file. The system automatically reads customer GSTIN, invoice number, date, and tax amounts, and maps them to <strong>Table 4 (B2B)</strong> in GSTR-1.</p>
-                        <ul>
-                            <li>The app automatically nets these B2B supplies out of Table 7 (B2CS retail) on matching intra/inter-state sides so revenue is never double-reported.</li>
-                            <li>If the bank has no corporate registered clients for the month, skip this step &mdash; all retail banking income flows directly to Table 7.</li>
-                        </ul>
+                        <h3>Upload B2B registered corporate invoices (optional) <span class="guide-where"><i class="fa-solid fa-location-dot"></i> Income &amp; Output GST</span></h3>
+                        <p>If the bank issued taxable services to companies or registered entities with a GSTIN, upload them here. The system maps them to <strong>Table 4 (B2B)</strong> and automatically subtracts them from retail Table 7 (B2CS) so revenue is never double-taxed.</p>
+                        
+                        <div class="guide-inputs-box purple">
+                            <strong><i class="fa-solid fa-file-invoice"></i> Required Inputs:</strong>
+                            <ul>
+                                <li><strong>File Format:</strong> Excel (<code class="g">.xlsx</code>, <code class="g">.xls</code>) or CSV (<code class="g">.csv</code>).</li>
+                                <li><strong>Required Data Columns (Auto-Detected):</strong>
+                                    Customer GSTIN (15 characters), Invoice Number, Invoice Date, Taxable Value, CGST, SGST, IGST.
+                                </li>
+                                <li><em>Note: If no corporate invoices were issued for the month, skip this step &mdash; all income defaults cleanly to retail Table 7.</em></li>
+                            </ul>
+                        </div>
                     </div>
                 </div>
 
@@ -232,15 +355,23 @@
                     <div class="guide-step-num">7</div>
                     <div class="guide-step-body">
                         <h3>Generate &amp; Download official GSTR-1 JSON <span class="guide-where"><i class="fa-solid fa-location-dot"></i> Income &amp; Output GST</span></h3>
-                        <p>Click the green <strong>"Download GSTR-1 JSON"</strong> button next to the CA Working Sheet button. A verification dialog opens displaying a live summary of all GSTR-1 sections:</p>
-                        <ul>
-                            <li><strong>Bank GSTIN &amp; Period:</strong> Pre-filled with bank GSTIN and standard filing period code (e.g., <code class="g">072026</code> for July 2026).</li>
-                            <li><strong>Table 4 (B2B):</strong> Invoice count and taxable value for registered corporate clients.</li>
-                            <li><strong>Table 7 (B2CS):</strong> Retail banking supplies (net intra-state and inter-state banking revenue).</li>
-                            <li><strong>Table 8 (Nil/Exempt):</strong> Interest on loans/advances and other statutory exempt banking turnover.</li>
-                            <li><strong>Table 12 (HSN/SAC):</strong> Mandatory SAC code <code class="g">9971</code> (Financial &amp; Related Services) covering 100% of the bank's gross turnover at 18% GST.</li>
-                        </ul>
-                        <p>Click <strong>"Confirm &amp; Download JSON"</strong> to save the official <code class="g">GSTR1_&lt;GSTIN&gt;_&lt;FP&gt;.json</code> file (conforming to GST Portal Offline Schema v3.1+).</p>
+                        <p>Click the green <strong>"Download GSTR-1 JSON"</strong> button. A pre-filing preview modal summarizes all GST return tables. Verify the numbers and click <strong>"Confirm &amp; Download JSON"</strong>.</p>
+                        
+                        <div class="guide-inputs-box green">
+                            <strong><i class="fa-solid fa-file-code"></i> Required Inputs &amp; Verification:</strong>
+                            <ul>
+                                <li><strong>Bank GSTIN:</strong> Pre-filled 15-character GSTIN (e.g. <code class="g">24AAACN0279M1ZL</code>) &mdash; editable if filing for another branch registration.</li>
+                                <li><strong>Filing Period:</strong> Formatted filing code (e.g. <code class="g">072026</code> for July 2026).</li>
+                                <li><strong>Generated Payload Tables:</strong>
+                                    <ul>
+                                        <li><strong>Table 4 (B2B):</strong> Registered customer invoices with customer GSTIN, invoice details, and item rates.</li>
+                                        <li><strong>Table 7 (B2CS):</strong> Net intra-state &amp; inter-state retail banking service charges.</li>
+                                        <li><strong>Table 8 (Nil/Exempt):</strong> Total exempt interest on advances and statutory non-taxable income.</li>
+                                        <li><strong>Table 12 (HSN/SAC 9971):</strong> Mandatory SAC 9971 classification covering 100% of gross turnover.</li>
+                                    </ul>
+                                </li>
+                            </ul>
+                        </div>
                     </div>
                 </div>
 
@@ -248,70 +379,188 @@
                     <div class="guide-step-num">8</div>
                     <div class="guide-step-body">
                         <h3>Upload JSON directly to GST Portal <span class="guide-where"><i class="fa-solid fa-globe"></i> GST Portal (gst.gov.in)</span></h3>
-                        <p>Submit your GSTR-1 return in under two minutes without manual typing:</p>
-                        <ul>
-                            <li>Log in to <strong>gst.gov.in</strong> &rarr; Go to <strong>Services &gt; Returns &gt; Returns Dashboard</strong>.</li>
-                            <li>Select the Financial Year and Month &rarr; Click <strong>Search</strong>.</li>
-                            <li>Under <strong>Details of outward supplies of goods or services (GSTR-1)</strong>, click <strong>PREPARE OFFLINE</strong>.</li>
-                            <li>Go to the <strong>Upload</strong> tab, click <strong>Choose File</strong>, and select your downloaded <code class="g">.json</code> file.</li>
-                            <li>The GST Portal validates and imports all tables (B2B, B2CS, Nil, HSN) automatically with zero errors. Proceed to generate summary and file.</li>
-                        </ul>
+                        <p>Upload the generated file to the GST Portal offline utility without any manual re-typing.</p>
+                        
+                        <div class="guide-inputs-box">
+                            <strong><i class="fa-solid fa-upload"></i> Portal Steps &amp; Required Input:</strong>
+                            <ul>
+                                <li><strong>Input:</strong> Downloaded <code class="g">GSTR1_&lt;GSTIN&gt;_&lt;FP&gt;.json</code> file.</li>
+                                <li><strong>Step 1:</strong> Log in to <strong>gst.gov.in</strong> &rarr; Navigate to <strong>Returns Dashboard</strong>.</li>
+                                <li><strong>Step 2:</strong> Select Financial Year and Month &rarr; Click <strong>Search</strong>.</li>
+                                <li><strong>Step 3:</strong> Under <strong>GSTR-1</strong>, click <strong>PREPARE OFFLINE</strong>.</li>
+                                <li><strong>Step 4:</strong> Click the <strong>Upload</strong> tab &rarr; <strong>Choose File</strong> &rarr; select the downloaded JSON.</li>
+                                <li><strong>Step 5:</strong> Portal marks status as <strong>"Processed"</strong>. Proceed to generate summary and file.</li>
+                            </ul>
+                        </div>
                     </div>
                 </div>
 
-                <h2 class="guide-section-title"><i class="fa-solid fa-table-list"></i> Quick reference - GL/PL Codes &amp; GSTR-1 Table Mapping</h2>
+                <!-- MODULE 2: GSTR-2B ITC RECONCILIATION -->
+                <div class="guide-module-header">
+                    <h2><i class="fa-solid fa-scale-balanced" style="color: #059669;"></i> Module 2: GSTR-2B Input Tax Credit (ITC) Reconciliation</h2>
+                    <span class="guide-module-tag green">Purchases &amp; ITC Matching</span>
+                </div>
+
+                <div class="guide-step">
+                    <div class="guide-step-num">9</div>
+                    <div class="guide-step-body">
+                        <h3>Upload purchase invoices &amp; bills (Our Books) <span class="guide-where"><i class="fa-solid fa-location-dot"></i> ITC Dashboard</span></h3>
+                        <p>Upload vendor purchase bills and expenses into the portal. The AI scanner extracts supplier GSTIN, invoice number, invoice date, taxable value, and tax head breakdown.</p>
+                        
+                        <div class="guide-inputs-box">
+                            <strong><i class="fa-solid fa-file-invoice-dollar"></i> Required Inputs:</strong>
+                            <ul>
+                                <li><strong>File Format:</strong> Vendor bill scans (PDF, JPEG, PNG) or Excel Purchase Book.</li>
+                                <li><strong>Captured Fields:</strong> Supplier Name, Supplier GSTIN, Invoice No, Date, Branch, State, Taxable Value, CGST, SGST, IGST.</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="guide-step">
+                    <div class="guide-step-num">10</div>
+                    <div class="guide-step-body">
+                        <h3>Import monthly GSTR-2B portal statements <span class="guide-where"><i class="fa-solid fa-location-dot"></i> Reconciliation Tab (Stage 1)</span></h3>
+                        <p>Upload the official monthly GSTR-2B Excel downloaded from the GST Portal. Gujarat and Maharashtra have independent upload panels so each state's returns remain separate.</p>
+                        
+                        <div class="guide-inputs-box">
+                            <strong><i class="fa-solid fa-cloud-arrow-up"></i> Required Inputs:</strong>
+                            <ul>
+                                <li><strong>GSTR-2B Excel File:</strong> Official GSTR-2B spreadsheet (<code class="g">.xlsx</code>) downloaded directly from the GST Portal.</li>
+                                <li><strong>State Selection:</strong> Drop into <strong>Gujarat GSTR-2B Panel</strong> or <strong>Maharashtra GSTR-2B Panel</strong>.</li>
+                                <li><strong>Month &amp; FY Selection:</strong> Select the filing month matching the GSTR-2B return period.</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="guide-step">
+                    <div class="guide-step-num">11</div>
+                    <div class="guide-step-body">
+                        <h3>Inspect Reconciliation Ledger (New: Separate Tax Head Columns) <span class="guide-where"><i class="fa-solid fa-location-dot"></i> Reconciliation Tab (Stage 2)</span></h3>
+                        <p>The reconciliation engine matches Books against GSTR-2B. Both desktop and mobile views show side-by-side breakdowns of <strong>Taxable Value, CGST, SGST, IGST, and Total GST</strong>.</p>
+                        
+                        <div class="guide-inputs-box green">
+                            <strong><i class="fa-solid fa-table-columns"></i> Matching Categories &amp; Visual Indicators:</strong>
+                            <ul>
+                                <li><strong style="color:#047857;">Fully Matched:</strong> Books and Portal match by GSTIN, Invoice Number, and Tax within &plusmn;₹10 tolerance.</li>
+                                <li><strong style="color:#b45309;">Value Mismatched:</strong> Invoice found in both, but amounts differ. The specific differing tax head (Taxable, CGST, SGST, or IGST) lights up in <span style="background:#fef3c7; color:#92400e; padding:1px 6px; border-radius:4px; font-weight:700;">amber</span>.</li>
+                                <li><strong style="color:#6d28d9;">Possible Match:</strong> AI detects near-match (slight invoice number OCR typo or GSTIN character variation) with matching tax amounts. Confirm with one click.</li>
+                                <li><strong style="color:#b91c1c;">Missing in Portal (GSTR-2B):</strong> Recorded in bank books, but vendor failed to file GSTR-1. Credit must be put on hold.</li>
+                                <li><strong style="color:#1d4ed8;">Missing in Books:</strong> Reflected in GSTR-2B portal, but missing from bank purchase books.</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="guide-step">
+                    <div class="guide-step-num">12</div>
+                    <div class="guide-step-body">
+                        <h3>Export Filtered Reconciliation Report (.xlsx) <span class="guide-where"><i class="fa-solid fa-location-dot"></i> Reconciliation Tab</span></h3>
+                        <p>Click <strong>"Export Filtered Ledger (.xlsx)"</strong> to download an Excel workbook formatted with separate tax columns and automatic categorization tabs.</p>
+                        
+                        <div class="guide-inputs-box green">
+                            <strong><i class="fa-solid fa-file-excel"></i> Export Contents &amp; Required Filters:</strong>
+                            <ul>
+                                <li><strong>Required Filter Inputs:</strong> Financial Year, Month checkboxes, State filter (All / Gujarat / Maharashtra), Status filter.</li>
+                                <li><strong>20-Column Layout:</strong> State, Supplier, GSTIN, Books Branch, Books Inv No, Date, Books Taxable, Books CGST, Books SGST, Books IGST, Books Total GST, Portal Inv No, Date, Portal Taxable, Portal CGST, Portal SGST, Portal IGST, Portal Total GST, Tax Difference, Match Status.</li>
+                                <li><strong>Categorized Multi-Tab Workbook:</strong> When exporting all records, the workbook automatically generates separate tabs for:
+                                    <code class="g">Reconciliation Ledger</code>, <code class="g">Fully Matched</code>, <code class="g">Value Mismatched</code>, <code class="g">Possible Match</code>, <code class="g">Missing in Portal</code>, and <code class="g">Missing in Books</code>.
+                                </li>
+                                <li><strong>Accounting Totals:</strong> Automated <code class="g">=SUM(...)</code> formulas at the bottom of every column on every sheet.</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="guide-step">
+                    <div class="guide-step-num">13</div>
+                    <div class="guide-step-body">
+                        <h3>Follow up via Vendor Action Center <span class="guide-where"><i class="fa-solid fa-location-dot"></i> Reconciliation Tab (Stage 3)</span></h3>
+                        <p>Take direct audit action on discrepancies to protect the bank from ineligible ITC claims and departmental interest.</p>
+                        
+                        <div class="guide-inputs-box">
+                            <strong><i class="fa-solid fa-paper-plane"></i> Actions &amp; Required Inputs:</strong>
+                            <ul>
+                                <li><strong>Vendor Notice Draft:</strong> Click <strong>"Notify"</strong> on any discrepancy row to generate an automated discrepancy email or WhatsApp message listing missing invoice numbers, dates, and total tax credit put on hold.</li>
+                                <li><strong>Mark as Provisional:</strong> Put unreflected invoices on temporary provisional hold &mdash; the system automatically re-checks them against future months' GSTR-2B batches.</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- REFERENCE TABLE -->
+                <h2 class="guide-section-title"><i class="fa-solid fa-table-list"></i> Quick Reference &mdash; GSTR-1 &amp; GSTR-2B Compliance Mapping</h2>
                 <div style="overflow-x:auto;">
                 <table class="guide-ref-table">
                     <thead>
-                        <tr><th>Code / Section</th><th>What it is</th><th>Action / GSTR-1 Table Mapping</th></tr>
+                        <tr><th>Section / Code</th><th>Description</th><th>Required Input</th><th>Output / Mapping</th></tr>
                     </thead>
                     <tbody>
                         <tr>
                             <td><code class="g">PL 3230</code>, <code class="g">PL 3320</code></td>
-                            <td>Guarantee commission / locker rent - prone to internal accrual transfers that confuse auto-reading.</td>
-                            <td><span class="guide-badge purple">Entry Method: Manual</span></td>
-                        </tr>
-                        <tr>
-                            <td>Any DEMAT-branch code paid on inter-state exchange dealings</td>
-                            <td>Some DEMAT income is IGST instead of CGST+SGST. Only applies inside the DEMAT branch, never elsewhere.</td>
-                            <td><span class="guide-badge blue">Tax Type: IGST @ 18%</span></td>
+                            <td>Locker rent / guarantee commission with internal transfers.</td>
+                            <td>Set Entry Method to Manual; type audited amount.</td>
+                            <td><span class="guide-badge purple">Manual Input Override</span></td>
                         </tr>
                         <tr>
                             <td><code class="g">GL 1878</code>, <code class="g">1879</code>, <code class="g">1880</code></td>
-                            <td>The bank's own GST-payable ledger accounts - one each for CGST, SGST, IGST. Only your chart of accounts says which is which.</td>
-                            <td><span class="guide-badge amber">Ledger Role: GST Payable (CGST / SGST / IGST)</span></td>
-                        </tr>
-                        <tr>
-                            <td>~14 named codes (dividend, interest exempted, provisions written back, income tax refund, etc.)</td>
-                            <td>The CA's exempt-income list for the separate working sheet.</td>
-                            <td><span class="guide-badge amber">Ledger Role: Exempt Income Item</span> &rarr; Table 8</td>
+                            <td>Bank GST Payable Ledger accounts (CGST, SGST, IGST).</td>
+                            <td>Enter monthly ledger closing balances in Ledger section.</td>
+                            <td><span class="guide-badge amber">Reconciliation Comparison</span></td>
                         </tr>
                         <tr>
                             <td><code class="g">Table 4 (B2B)</code></td>
-                            <td>Invoices issued to corporate clients with GSTIN.</td>
-                            <td><span class="guide-badge green">GSTR-1 Table 4: Registered B2B</span></td>
+                            <td>Taxable service invoices issued to registered corporate clients.</td>
+                            <td>Upload corporate invoice file (Excel / CSV).</td>
+                            <td><span class="guide-badge green">GSTR-1 Table 4: B2B Invoices</span></td>
                         </tr>
                         <tr>
                             <td><code class="g">Table 7 (B2CS)</code></td>
-                            <td>Retail banking service charges to savings/current account holders.</td>
-                            <td><span class="guide-badge green">GSTR-1 Table 7: Net B2C Intra/Inter</span></td>
+                            <td>Net retail banking supplies to individual account holders.</td>
+                            <td>Branch income statements (B2B automatically deducted).</td>
+                            <td><span class="guide-badge green">GSTR-1 Table 7: Net Retail 18%</span></td>
                         </tr>
                         <tr>
                             <td><code class="g">Table 8 (Nil/Exempt)</code></td>
-                            <td>Statutory exempt banking turnover (interest on advances, exempt services).</td>
+                            <td>Exempt interest on advances and non-taxable banking revenue.</td>
+                            <td>Classified exempt account codes from statements.</td>
                             <td><span class="guide-badge green">GSTR-1 Table 8: Exempt Supplies</span></td>
                         </tr>
                         <tr>
                             <td><code class="g">Table 12 (HSN/SAC)</code></td>
-                            <td>Mandatory SAC 9971 classification for Banking &amp; Financial Services.</td>
-                            <td><span class="guide-badge green">GSTR-1 Table 12: SAC 9971 Summary</span></td>
+                            <td>Mandatory HSN/SAC classification for banking operations.</td>
+                            <td>Auto-calculated from 100% of branch gross turnover.</td>
+                            <td><span class="guide-badge green">SAC 9971 @ 18% GST</span></td>
+                        </tr>
+                        <tr>
+                            <td><code class="g">Fully Matched</code></td>
+                            <td>Books and GSTR-2B portal entries match within tolerance.</td>
+                            <td>Books invoices + GSTR-2B Excel upload.</td>
+                            <td><span class="guide-badge green">Approved ITC for GSTR-3B</span></td>
+                        </tr>
+                        <tr>
+                            <td><code class="g">Value Mismatched</code></td>
+                            <td>Invoice numbers match, but tax amounts differ.</td>
+                            <td>Inspect amber-highlighted tax head column.</td>
+                            <td><span class="guide-badge amber">Hold Difference / Notify Vendor</span></td>
+                        </tr>
+                        <tr>
+                            <td><code class="g">Missing in Portal</code></td>
+                            <td>Purchase bill in books, but not filed by vendor in GSTR-1.</td>
+                            <td>Generate notice via Vendor Action Center.</td>
+                            <td><span class="guide-badge purple">ITC Withheld / Vendor Notice</span></td>
                         </tr>
                     </tbody>
                 </table>
                 </div>
 
-                <h2 class="guide-section-title"><i class="fa-solid fa-circle-question"></i> Common questions</h2>
+                <h2 class="guide-section-title"><i class="fa-solid fa-circle-question"></i> Frequently Asked Questions</h2>
 
+                <div class="guide-faq">
+                    <h4>What files are required to get the GSTR-1 JSON?</h4>
+                    <p>Only your normal branch income statements (PDF or Excel). If you have corporate registered clients, you can optionally upload the B2B invoice file. The app compiles Table 4, 7, 8, and 12 automatically.</p>
+                </div>
                 <div class="guide-faq">
                     <h4>How does the system ensure B2B invoices aren't double-counted in Table 7 (B2CS)?</h4>
                     <p>The app automatically nets uploaded B2B supplies against total CBS branch income on the matching intra/inter-state sides. Table 7 only receives net retail banking transactions, preventing any duplicate taxation.</p>
@@ -321,24 +570,16 @@
                     <p>Yes! Clicking "Download GSTR-1 JSON" opens a modal summary displaying the exact tax figures and turnover for Table 4, Table 7, Table 8, and Table 12 before downloading the <code class="g">.json</code> file.</p>
                 </div>
                 <div class="guide-faq">
+                    <h4>How do I get the separate columns for Taxable Value, CGST, SGST, and IGST in the Reconciliation report?</h4>
+                    <p>Simply navigate to the <strong>Reconciliation</strong> tab and click <strong>"Export Filtered Ledger (.xlsx)"</strong>. The downloaded workbook automatically contains separate columns for Taxable Value, CGST, SGST, IGST, and Total GST for both Books and Portal, along with dedicated tabs for Fully Matched, Value Mismatched, and Possible Match.</p>
+                </div>
+                <div class="guide-faq">
                     <h4>What if the bank GSTIN changes or we need to file for another state?</h4>
                     <p>You can edit the 15-character GSTIN directly in the GSTR-1 popup dialog before confirming download. The JSON envelope and filing period code update automatically.</p>
                 </div>
                 <div class="guide-faq">
-                    <h4>Why does a code default to 18% Taxable instead of asking me first?</h4>
-                    <p>Because guessing "exempt" on income that's actually taxable is the dangerous direction to be wrong in for GST. The app defaults to the safe-but-flagged option and waits for you to confirm via Manage GL/PL Codes - it never silently exempts something.</p>
-                </div>
-                <div class="guide-faq">
-                    <h4>A branch tab turned red in the export. What does that mean?</h4>
+                    <h4>A branch tab turned red in the CA Working Sheet export. What does that mean?</h4>
                     <p>The GST the app computed from that branch's income differs from what the bank's own GL 1878/1879/1880 ledger says by more than ₹10. Check the <strong>GST Payable Reconciliation</strong> sheet for the exact numbers, then verify against the branch's original statement.</p>
-                </div>
-                <div class="guide-faq">
-                    <h4>The Exempt Income sheet shows "—" for last month. Is that a bug?</h4>
-                    <p>No - it means there's no captured closing balance for the previous period yet (either it's the first month this code has been tracked, or the statement for that period wasn't uploaded). It will fill in automatically from the next month onward.</p>
-                </div>
-                <div class="guide-faq">
-                    <h4>I deleted a code by mistake, or classified something wrong. What happens to already-uploaded data?</h4>
-                    <p>Nothing is deleted from your records. Editing or deleting a code re-flags every entry using it as "Needs Review" (or recomputes it, if you're correcting rather than removing) so you can catch and fix it before filing - it never silently changes numbers you can't see.</p>
                 </div>
             </div>
         </main>
