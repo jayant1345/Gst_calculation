@@ -67,6 +67,7 @@
         .guide-badge.blue { background: #dbeafe; color: #1e40af; }
         .guide-badge.purple { background: #ede9fe; color: #5b21b6; }
         .guide-badge.amber { background: #fef3c7; color: #92400e; }
+        .guide-badge.green { background: #dcfce7; color: #15803d; }
         .guide-faq {
             background: #fff; border: 1px solid var(--border-color); border-radius: 12px;
             padding: 16px 20px; margin-bottom: 12px;
@@ -138,7 +139,7 @@
             <header class="top-header">
                 <div class="header-left">
                     <h1>Workflow Guide</h1>
-                    <p class="subtitle">How the Income &amp; Output GST module works, end to end</p>
+                    <p class="subtitle">How the Income &amp; Output GST module works, end to end &mdash; including CA Working Sheet &amp; GSTR-1 JSON Creation</p>
                 </div>
                 <div class="header-right">
                     <div class="user-profile">
@@ -161,8 +162,8 @@
                 <div class="guide-intro">
                     <h2><i class="fa-solid fa-compass"></i> What this page is</h2>
                     <p>
-                        A step-by-step walkthrough of how bank statements turn into the CA's GST working sheet in this app -
-                        so you (or the CA) can follow it without asking anyone. This mirrors the CA's own written workflow
+                        A step-by-step walkthrough of how bank statements turn into the CA's GST working sheet and ready-to-upload
+                        GSTR-1 JSON return in this app - so you (or the CA) can follow it without asking anyone. This mirrors the CA's own written workflow
                         specification (NUTAN INCOME WORKFLOW) exactly.
                     </p>
                 </div>
@@ -207,7 +208,7 @@
                     <div class="guide-step-num">5</div>
                     <div class="guide-step-body">
                         <h3>Export the CA Working Sheet <span class="guide-where"><i class="fa-solid fa-location-dot"></i> Income &amp; Output GST</span></h3>
-                        <p>Click <strong>Export CA Working Sheet</strong>. Every branch tab, <code class="g">Sheet1</code>, and <code class="g">SUMMARY SHEET GST</code> are filled from real uploaded data, plus two new tabs:</p>
+                        <p>Click <strong>Export CA Working Sheet (Excel)</strong>. Every branch tab, <code class="g">Sheet1</code>, and <code class="g">SUMMARY SHEET GST</code> are filled from real uploaded data, plus two verification tabs:</p>
                         <ul>
                             <li><strong>GST Payable Reconciliation</strong> - each branch's computed CGST/SGST/IGST vs. the bank's own ledger figure, with the difference. Any branch tab where the difference exceeds <strong>₹10</strong> turns <strong style="color:#dc2626;">red</strong> automatically.</li>
                             <li><strong>Exempt Income Working Sheet</strong> - this month vs. last month's closing balance for each classified exempt-income code, and the difference.</li>
@@ -215,11 +216,54 @@
                     </div>
                 </div>
 
-                <h2 class="guide-section-title"><i class="fa-solid fa-table-list"></i> Quick reference - what to set for which codes</h2>
+                <div class="guide-step">
+                    <div class="guide-step-num">6</div>
+                    <div class="guide-step-body">
+                        <h3>Upload B2B registered client invoices (optional) <span class="guide-where"><i class="fa-solid fa-location-dot"></i> Income &amp; Output GST</span></h3>
+                        <p>If the bank issued taxable service invoices to corporate customers or companies with a GSTIN, click <strong>"Upload B2B Invoices"</strong> in the B2B Outward Registered Supplies bar. Upload an Excel (.xlsx) or CSV invoice file. The system automatically reads customer GSTIN, invoice number, date, and tax amounts, and maps them to <strong>Table 4 (B2B)</strong> in GSTR-1.</p>
+                        <ul>
+                            <li>The app automatically nets these B2B supplies out of Table 7 (B2CS retail) on matching intra/inter-state sides so revenue is never double-reported.</li>
+                            <li>If the bank has no corporate registered clients for the month, skip this step &mdash; all retail banking income flows directly to Table 7.</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <div class="guide-step">
+                    <div class="guide-step-num">7</div>
+                    <div class="guide-step-body">
+                        <h3>Generate &amp; Download official GSTR-1 JSON <span class="guide-where"><i class="fa-solid fa-location-dot"></i> Income &amp; Output GST</span></h3>
+                        <p>Click the green <strong>"Download GSTR-1 JSON"</strong> button next to the CA Working Sheet button. A verification dialog opens displaying a live summary of all GSTR-1 sections:</p>
+                        <ul>
+                            <li><strong>Bank GSTIN &amp; Period:</strong> Pre-filled with bank GSTIN and standard filing period code (e.g., <code class="g">072026</code> for July 2026).</li>
+                            <li><strong>Table 4 (B2B):</strong> Invoice count and taxable value for registered corporate clients.</li>
+                            <li><strong>Table 7 (B2CS):</strong> Retail banking supplies (net intra-state and inter-state banking revenue).</li>
+                            <li><strong>Table 8 (Nil/Exempt):</strong> Interest on loans/advances and other statutory exempt banking turnover.</li>
+                            <li><strong>Table 12 (HSN/SAC):</strong> Mandatory SAC code <code class="g">9971</code> (Financial &amp; Related Services) covering 100% of the bank's gross turnover at 18% GST.</li>
+                        </ul>
+                        <p>Click <strong>"Confirm &amp; Download JSON"</strong> to save the official <code class="g">GSTR1_&lt;GSTIN&gt;_&lt;FP&gt;.json</code> file (conforming to GST Portal Offline Schema v3.1+).</p>
+                    </div>
+                </div>
+
+                <div class="guide-step">
+                    <div class="guide-step-num">8</div>
+                    <div class="guide-step-body">
+                        <h3>Upload JSON directly to GST Portal <span class="guide-where"><i class="fa-solid fa-globe"></i> GST Portal (gst.gov.in)</span></h3>
+                        <p>Submit your GSTR-1 return in under two minutes without manual typing:</p>
+                        <ul>
+                            <li>Log in to <strong>gst.gov.in</strong> &rarr; Go to <strong>Services &gt; Returns &gt; Returns Dashboard</strong>.</li>
+                            <li>Select the Financial Year and Month &rarr; Click <strong>Search</strong>.</li>
+                            <li>Under <strong>Details of outward supplies of goods or services (GSTR-1)</strong>, click <strong>PREPARE OFFLINE</strong>.</li>
+                            <li>Go to the <strong>Upload</strong> tab, click <strong>Choose File</strong>, and select your downloaded <code class="g">.json</code> file.</li>
+                            <li>The GST Portal validates and imports all tables (B2B, B2CS, Nil, HSN) automatically with zero errors. Proceed to generate summary and file.</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <h2 class="guide-section-title"><i class="fa-solid fa-table-list"></i> Quick reference - GL/PL Codes &amp; GSTR-1 Table Mapping</h2>
                 <div style="overflow-x:auto;">
                 <table class="guide-ref-table">
                     <thead>
-                        <tr><th>Code(s)</th><th>What it is</th><th>Set in Manage GL/PL Codes</th></tr>
+                        <tr><th>Code / Section</th><th>What it is</th><th>Action / GSTR-1 Table Mapping</th></tr>
                     </thead>
                     <tbody>
                         <tr>
@@ -240,7 +284,27 @@
                         <tr>
                             <td>~14 named codes (dividend, interest exempted, provisions written back, income tax refund, etc.)</td>
                             <td>The CA's exempt-income list for the separate working sheet.</td>
-                            <td><span class="guide-badge amber">Ledger Role: Exempt Income Item</span></td>
+                            <td><span class="guide-badge amber">Ledger Role: Exempt Income Item</span> &rarr; Table 8</td>
+                        </tr>
+                        <tr>
+                            <td><code class="g">Table 4 (B2B)</code></td>
+                            <td>Invoices issued to corporate clients with GSTIN.</td>
+                            <td><span class="guide-badge green">GSTR-1 Table 4: Registered B2B</span></td>
+                        </tr>
+                        <tr>
+                            <td><code class="g">Table 7 (B2CS)</code></td>
+                            <td>Retail banking service charges to savings/current account holders.</td>
+                            <td><span class="guide-badge green">GSTR-1 Table 7: Net B2C Intra/Inter</span></td>
+                        </tr>
+                        <tr>
+                            <td><code class="g">Table 8 (Nil/Exempt)</code></td>
+                            <td>Statutory exempt banking turnover (interest on advances, exempt services).</td>
+                            <td><span class="guide-badge green">GSTR-1 Table 8: Exempt Supplies</span></td>
+                        </tr>
+                        <tr>
+                            <td><code class="g">Table 12 (HSN/SAC)</code></td>
+                            <td>Mandatory SAC 9971 classification for Banking &amp; Financial Services.</td>
+                            <td><span class="guide-badge green">GSTR-1 Table 12: SAC 9971 Summary</span></td>
                         </tr>
                     </tbody>
                 </table>
@@ -248,6 +312,18 @@
 
                 <h2 class="guide-section-title"><i class="fa-solid fa-circle-question"></i> Common questions</h2>
 
+                <div class="guide-faq">
+                    <h4>How does the system ensure B2B invoices aren't double-counted in Table 7 (B2CS)?</h4>
+                    <p>The app automatically nets uploaded B2B supplies against total CBS branch income on the matching intra/inter-state sides. Table 7 only receives net retail banking transactions, preventing any duplicate taxation.</p>
+                </div>
+                <div class="guide-faq">
+                    <h4>Can I preview the JSON summary before downloading?</h4>
+                    <p>Yes! Clicking "Download GSTR-1 JSON" opens a modal summary displaying the exact tax figures and turnover for Table 4, Table 7, Table 8, and Table 12 before downloading the <code class="g">.json</code> file.</p>
+                </div>
+                <div class="guide-faq">
+                    <h4>What if the bank GSTIN changes or we need to file for another state?</h4>
+                    <p>You can edit the 15-character GSTIN directly in the GSTR-1 popup dialog before confirming download. The JSON envelope and filing period code update automatically.</p>
+                </div>
                 <div class="guide-faq">
                     <h4>Why does a code default to 18% Taxable instead of asking me first?</h4>
                     <p>Because guessing "exempt" on income that's actually taxable is the dangerous direction to be wrong in for GST. The app defaults to the safe-but-flagged option and waits for you to confirm via Manage GL/PL Codes - it never silently exempts something.</p>
