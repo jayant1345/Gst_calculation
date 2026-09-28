@@ -5,6 +5,13 @@
 
 document.addEventListener('DOMContentLoaded', () => {
     let currentClientId = sessionStorage.getItem('active_client_id') || 'nutan_nagrik';
+    const selectIncomeMonth = document.getElementById('selectIncomeMonth');
+    const selectIncomeFY = document.getElementById('selectIncomeFY');
+    let currentMonth = sessionStorage.getItem('income_month') || (selectIncomeMonth ? selectIncomeMonth.value : 'August');
+    let currentFinancialYear = sessionStorage.getItem('income_fy') || (selectIncomeFY ? selectIncomeFY.value : '2026-27');
+    if (selectIncomeMonth) selectIncomeMonth.value = currentMonth;
+    if (selectIncomeFY) selectIncomeFY.value = currentFinancialYear;
+
     let currentBranch = 'ALL';
     let allIncomeEntries = [];
     let masterBranches = [];
@@ -144,10 +151,28 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // Event listeners for Month and FY selection
+    if (selectIncomeMonth) {
+        selectIncomeMonth.addEventListener('change', () => {
+            currentMonth = selectIncomeMonth.value;
+            sessionStorage.setItem('income_month', currentMonth);
+            loadIncomeData();
+            loadB2BSummary();
+        });
+    }
+    if (selectIncomeFY) {
+        selectIncomeFY.addEventListener('change', () => {
+            currentFinancialYear = selectIncomeFY.value;
+            sessionStorage.setItem('income_fy', currentFinancialYear);
+            loadIncomeData();
+            loadB2BSummary();
+        });
+    }
+
     // 3. Load Income Summary & Table Entries
     async function loadIncomeData() {
         try {
-            const sumRes = await fetch(`/api/income-summary?client_id=${currentClientId}`);
+            const sumRes = await fetch(`/api/income-summary?client_id=${currentClientId}&financial_year=${encodeURIComponent(currentFinancialYear)}&month=${encodeURIComponent(currentMonth)}`);
             const sumData = await sumRes.json();
             
             if (sumData && sumData.income) {
@@ -183,7 +208,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             }
 
-            const entriesRes = await fetch(`/api/get-income-entries?client_id=${currentClientId}`);
+            const entriesRes = await fetch(`/api/get-income-entries?client_id=${currentClientId}&financial_year=${encodeURIComponent(currentFinancialYear)}&month=${encodeURIComponent(currentMonth)}`);
             const entriesData = await entriesRes.json();
             
             allIncomeEntries = entriesData.entries || [];
@@ -231,8 +256,8 @@ document.addEventListener('DOMContentLoaded', () => {
     async function loadLedgerTables() {
         try {
             const [gstRes, exemptRes] = await Promise.all([
-                fetch(`/api/ledger-entries/gst-payable?client_id=${currentClientId}`),
-                fetch(`/api/ledger-entries/exempt-income?client_id=${currentClientId}`)
+                fetch(`/api/ledger-entries/gst-payable?client_id=${currentClientId}&financial_year=${encodeURIComponent(currentFinancialYear)}&month=${encodeURIComponent(currentMonth)}`),
+                fetch(`/api/ledger-entries/exempt-income?client_id=${currentClientId}&financial_year=${encodeURIComponent(currentFinancialYear)}&month=${encodeURIComponent(currentMonth)}`)
             ]);
             const gstData = await gstRes.json();
             const exemptData = await exemptRes.json();
@@ -664,6 +689,8 @@ document.addEventListener('DOMContentLoaded', () => {
             const currentChunk = chunks[cIdx];
             const formData = new FormData();
             formData.append('client_id', currentClientId);
+            formData.append('financial_year', currentFinancialYear);
+            formData.append('month', currentMonth);
             
             currentChunk.forEach(file => {
                 const uploadName = file.webkitRelativePath || file.name;
@@ -694,7 +721,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         uploadProgress.style.display = 'none';
 
-        let summary = `Upload Complete!\nSuccessfully processed and saved ${totalSaved} income statement records across branches.`;
+        let summary = `Upload Complete!\nSuccessfully processed and saved ${totalSaved} income statement records across branches for ${currentMonth} ${currentFinancialYear}.`;
         if (totalReview > 0) {
             summary += `\n\n⚠ ${totalReview} of them need manual review (new GL/PL code not yet classified, or a possible locker/guarantee reclass) - see the yellow banner on the page.`;
         }
@@ -713,7 +740,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // 9. Export CA Working Sheet
     btnExportWorkingSheet.addEventListener('click', () => {
-        window.location.href = `/api/export-income-working-sheet?client_id=${currentClientId}&financial_year=2026-27&month=July`;
+        window.location.href = `/api/export-income-working-sheet?client_id=${currentClientId}&financial_year=${encodeURIComponent(currentFinancialYear)}&month=${encodeURIComponent(currentMonth)}`;
     });
 
     // 9b. GSTR-1 JSON Generation & Modal
@@ -736,7 +763,7 @@ document.addEventListener('DOMContentLoaded', () => {
     async function loadB2BSummary() {
         if (!b2bUploadStatusBadge) return;
         try {
-            const res = await fetch(`/api/b2b-invoices-summary?client_id=${currentClientId}&financial_year=2026-27&month=July`);
+            const res = await fetch(`/api/b2b-invoices-summary?client_id=${currentClientId}&financial_year=${encodeURIComponent(currentFinancialYear)}&month=${encodeURIComponent(currentMonth)}`);
             const data = await res.json();
             if (data.success) {
                 if (data.count > 0) {
@@ -762,8 +789,8 @@ document.addEventListener('DOMContentLoaded', () => {
             const formData = new FormData();
             formData.append('b2b_file', file);
             formData.append('client_id', currentClientId);
-            formData.append('financial_year', '2026-27');
-            formData.append('month', 'July');
+            formData.append('financial_year', currentFinancialYear);
+            formData.append('month', currentMonth);
             
             btnUploadB2B.disabled = true;
             btnUploadB2B.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Uploading...';
@@ -801,8 +828,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (btnExportGstr1Json) {
         btnExportGstr1Json.addEventListener('click', async () => {
-            const fy = '2026-27';
-            const month = 'July';
+            const fy = currentFinancialYear;
+            const month = currentMonth;
             
             if (gstr1ModalOverlay) {
                 gstr1ModalOverlay.style.display = 'flex';
@@ -815,7 +842,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             
             try {
-                const res = await fetch(`/api/export-gstr1-json?client_id=${currentClientId}&financial_year=${fy}&month=${month}&download=0`);
+                const res = await fetch(`/api/export-gstr1-json?client_id=${currentClientId}&financial_year=${encodeURIComponent(fy)}&month=${encodeURIComponent(month)}&download=0`);
                 const data = await res.json();
                 if (data.success && data.summary) {
                     const s = data.summary;
@@ -853,11 +880,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (btnConfirmDownloadGstr1) {
         btnConfirmDownloadGstr1.addEventListener('click', () => {
-            const fy = '2026-27';
-            const month = 'July';
+            const fy = currentFinancialYear;
+            const month = currentMonth;
             const gstin = gstr1GstinInput ? gstr1GstinInput.value.trim().toUpperCase() : '';
             if (gstr1ModalOverlay) gstr1ModalOverlay.style.display = 'none';
-            window.location.href = `/api/export-gstr1-json?client_id=${currentClientId}&financial_year=${fy}&month=${month}&gstin=${encodeURIComponent(gstin)}&download=1`;
+            window.location.href = `/api/export-gstr1-json?client_id=${currentClientId}&financial_year=${encodeURIComponent(fy)}&month=${encodeURIComponent(month)}&gstin=${encodeURIComponent(gstin)}&download=1`;
         });
     }
 

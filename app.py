@@ -6658,12 +6658,26 @@ def finalize_expense_ledger_accounts(raw_accounts, financial_year, month):
     return entries
 
 
-def parse_full_workbook_excel(file_bytes, filename):
+def parse_full_workbook_excel(file_bytes, filename, financial_year='2026-27', month='July'):
     """Bulk re-import of a complete branch-wise-calculation workbook (has its
     own 'SUMMARY SHEET GST' tab) - reads each branch tab's own columns
     directly rather than treating it as a raw ledger statement."""
     results = []
     wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
+    # Check if month/fy can be auto-detected from cell A5 or B3
+    try:
+        if 'ODHAV ' in wb.sheetnames and wb['ODHAV ']['A5'].value:
+            m_text = str(wb['ODHAV ']['A5'].value)
+            for m_cand in ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']:
+                if m_cand.upper() in m_text.upper():
+                    month = m_cand
+                    break
+            fy_match = re.search(r'(20\d{2}-\d{2})', m_text)
+            if fy_match:
+                financial_year = fy_match.group(1)
+    except Exception:
+        pass
+
     for bs_name in wb.sheetnames:
         if bs_name in ['SUMMARY SHEET GST', 'Notes', 'GSTN CANCELLTED', 'Sheet1'] or '1' in bs_name:
             continue
@@ -6690,8 +6704,8 @@ def parse_full_workbook_excel(file_bytes, filename):
                     is_tax = False
                 results.append({
                     "branch": b_name,
-                    "financial_year": "2026-27",
-                    "month": "July",
+                    "financial_year": financial_year,
+                    "month": month,
                     "gl_code": c_str,
                     "particulars": p_str,
                     "income_amount": t_val,
@@ -7420,6 +7434,8 @@ def set_ledger_entry_manual_balance(table_key, entry_id):
 def upload_income_api():
     user_id = session['user_id']
     client_id = request.form.get('client_id') or get_current_client_id()
+    upload_fy = request.form.get('financial_year') or '2026-27'
+    upload_month = request.form.get('month') or 'July'
     files = request.files.getlist('income_files')
     
     if not files or all(f.filename == '' for f in files):
@@ -7442,7 +7458,7 @@ def upload_income_api():
             return [], extract_raw_ledger_accounts_pdf(fbytes, fname)
         elif ext == 'xlsx':
             if is_full_workbook_xlsx(fbytes):
-                return parse_full_workbook_excel(fbytes, fname), []
+                return parse_full_workbook_excel(fbytes, fname, financial_year=upload_fy, month=upload_month), []
             return [], extract_raw_ledger_accounts_xlsx(fbytes, fname)
         elif ext == 'xls':
             return [], extract_raw_ledger_accounts_xls(fbytes, fname)
@@ -7493,7 +7509,9 @@ def upload_income_api():
             except Exception as ze:
                 print(f"Error reading zip file {fname}: {ze}")
 
-    finalized_from_raw, ledger_entries, exempt_entries, ingest_warnings = finalize_ledger_accounts(raw_accounts)
+    finalized_from_raw, ledger_entries, exempt_entries, ingest_warnings = finalize_ledger_accounts(
+        raw_accounts, financial_year=upload_fy, month=upload_month
+    )
     file_data_by_key = {}
     for a in raw_accounts:
         file_data_by_key.setdefault((a.get('branch'), a.get('gl_code')), a.get('file_data'))
@@ -7512,7 +7530,7 @@ def upload_income_api():
         # Deduplicate parsed entries in memory first
         unique_entries = {}
         for e in parsed_entries:
-            key = (client_id, e.get('branch', 'Unassigned').strip().upper(), e.get('financial_year', '2026-27'), e.get('month', 'July'), str(e.get('gl_code', 'N/A')).strip())
+            key = (client_id, e.get('branch', 'Unassigned').strip().upper(), e.get('financial_year', upload_fy), e.get('month', upload_month), str(e.get('gl_code', 'N/A')).strip())
             unique_entries[key] = e
 
         review_count = 0
@@ -7551,8 +7569,8 @@ def upload_income_api():
                 user_id, client_id,
                 e.get('branch', 'Unassigned'),
                 e.get('state', 'Gujarat'),
-                e.get('financial_year', '2026-27'),
-                e.get('month', 'July'),
+                e.get('financial_year', upload_fy),
+                e.get('month', upload_month),
                 e.get('gl_code', 'N/A'),
                 e.get('particulars', 'Income'),
                 e.get('is_taxable', True),
@@ -7598,8 +7616,8 @@ def upload_income_api():
             ''', (
                 client_id,
                 le.get('branch', 'Unassigned'),
-                le.get('financial_year', '2026-27'),
-                le.get('month', 'July'),
+                le.get('financial_year', upload_fy),
+                le.get('month', upload_month),
                 le.get('gl_code', 'N/A'),
                 le.get('ledger_role'),
                 le.get('closing_balance'),
@@ -7633,8 +7651,8 @@ def upload_income_api():
             ''', (
                 client_id,
                 ee.get('branch', 'Unassigned'),
-                ee.get('financial_year', '2026-27'),
-                ee.get('month', 'July'),
+                ee.get('financial_year', upload_fy),
+                ee.get('month', upload_month),
                 ee.get('gl_code', 'N/A'),
                 ee.get('closing_balance'),
                 ee.get('balance_source', 'parsed'),
@@ -8041,13 +8059,27 @@ def export_income_working_sheet():
                     'inc': 0.0, 'sgst': 0.0, 'cgst': 0.0, 'igst': 0.0, 'refwo': 0.0, 'refw': 0.0,
                 })
                 s1_grand = {'inc': 0.0, 'sgst': 0.0, 'cgst': 0.0, 'igst': 0.0, 'refwo': 0.0}
-                branch_computed = {}
+                def get_period_label(m_name, f_year):
+                    m_clean = str(m_name).strip().capitalize()
+                    if '-' in str(f_year):
+                        parts = f_year.split('-')
+                        start_yr = parts[0]
+                        end_yr = ('20' + parts[1]) if len(parts[1]) == 2 else parts[1]
+                        yr = end_yr if m_clean in ['January', 'February', 'March'] else start_yr
+                    else:
+                        yr = str(f_year)
+                    return f"{m_clean.upper()} {yr}"
+
+                period_str = get_period_label(month, fy)
 
                 for sname in wb.sheetnames:
                     if sname in ['SUMMARY SHEET GST', 'Notes', 'GSTN CANCELLTED', 'Sheet1'] or sname.endswith('1'):
                         continue
 
                     ws_b = wb[sname]
+                    # Ensure month and FY header is set dynamically across ALL branch tabs (e.g. AUGUST 2026)
+                    ws_b['A5'] = f"SUMMARY OF INCOME FOR THE MONTH OF {period_str}"
+                    ws_b['A5'].font = Font(name="Arial", size=12, bold=True)
                     b_norm = re.sub(r'[^A-Z0-9]', '', sname.upper().strip())
 
                     matched_dict = None
@@ -8190,6 +8222,8 @@ def export_income_working_sheet():
                     # written the same zero-if-absent way as each branch sheet so no
                     # template-contaminated figure can survive.
                     ws_s1 = wb['Sheet1']
+                    ws_s1['A5'] = f"SUMMARY OF INCOME FOR THE MONTH OF {period_str}"
+                    ws_s1['A5'].font = Font(name="Arial", size=12, bold=True)
                     s1_total = {'inc': 0.0, 'sgst': 0.0, 'cgst': 0.0, 'igst': 0.0, 'refwo': 0.0}
                     for r in range(9, 68):
                         c_val = ws_s1.cell(r, 1).value
@@ -8239,6 +8273,7 @@ def export_income_working_sheet():
                 # SUMMARY SHEET GST - Section (1) Exempt Income, Section (2) Taxable Income & Section (8) GSTR-1 Working
                 if 'SUMMARY SHEET GST' in wb.sheetnames:
                     ws_sum = wb['SUMMARY SHEET GST']
+                    _set(ws_sum, 3, 2, f"GST CALCULATION SUMMARY FOR THE MONTH OF {period_str}")
 
                     # Step 7: Update Section (1) Non-Taxable / Exempt Income (Rows 7 to 20)
                     # Mapping of standard GL/PL codes to their designated rows in SUMMARY SHEET GST
