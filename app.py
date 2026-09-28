@@ -6325,6 +6325,136 @@ def _detect_ledger_branch(text, filename):
     return None
 
 
+
+MONTH_NAME_BY_NUM = {
+    1: 'January', 2: 'February', 3: 'March', 4: 'April',
+    5: 'May', 6: 'June', 7: 'July', 8: 'August',
+    9: 'September', 10: 'October', 11: 'November', 12: 'December'
+}
+
+MONTH_NUM_BY_NAME = {
+    'JANUARY': 1, 'JAN': 1,
+    'FEBRUARY': 2, 'FEB': 2,
+    'MARCH': 3, 'MAR': 3,
+    'APRIL': 4, 'APR': 4,
+    'MAY': 5,
+    'JUNE': 6, 'JUN': 6,
+    'JULY': 7, 'JUL': 7,
+    'AUGUST': 8, 'AUG': 8,
+    'SEPTEMBER': 9, 'SEP': 9, 'SEPT': 9,
+    'OCTOBER': 10, 'OCT': 10,
+    'NOVEMBER': 11, 'NOV': 11,
+    'DECEMBER': 12, 'DEC': 12
+}
+
+
+def detect_statement_period(text="", filename="", rows=None):
+    """Detects (month, financial_year) from document text, rows or filename.
+    Returns (month_str, fy_str) or (None, None).
+    Handles:
+      - 'From date 01/08/2026 To Date 31/08/2026'
+      - 'From Date : 01/08/2026 To Date : 31/08/2026'
+      - 'From Date 01/08/2026 To 31/08/2026'
+      - 'From date 2026-08-01 00:00:00 To Date 2026-08-31 00:00:00'
+      - Excel serial dates like 46235.0 (01/08/2026)
+      - Filenames like 'PL CHANGODAR AUGUST 2026.xlsx', 'GL 8546 31.08.2026.xls'
+    """
+    from datetime import datetime
+
+    def _fy_from_year_month(y, m):
+        if m >= 4:
+            return f"{y}-{str(y + 1)[-2:]}"
+        else:
+            return f"{y - 1}-{str(y)[-2:]}"
+
+    # 1. Search text for "From date ... To Date ..." or "From Date ..."
+    if text:
+        # DD/MM/YYYY or DD-MM-YYYY
+        m = re.search(r'From\s+date\s*[:\-]?\s*(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})', text, re.IGNORECASE)
+        if m:
+            mo = int(m.group(2))
+            yr = int(m.group(3))
+            if yr < 100:
+                yr += 2000
+            if 1 <= mo <= 12:
+                return MONTH_NAME_BY_NUM[mo], _fy_from_year_month(yr, mo)
+
+        # YYYY-MM-DD
+        m = re.search(r'From\s+date\s*[:\-]?\s*(\d{4})[/-](\d{1,2})[/-](\d{1,2})', text, re.IGNORECASE)
+        if m:
+            yr = int(m.group(1))
+            mo = int(m.group(2))
+            if 1 <= mo <= 12:
+                return MONTH_NAME_BY_NUM[mo], _fy_from_year_month(yr, mo)
+
+        # "For:01/08/2026-..." in statement particulars
+        m = re.search(r'For\s*:\s*(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})', text, re.IGNORECASE)
+        if m:
+            mo = int(m.group(2))
+            yr = int(m.group(3))
+            if yr < 100:
+                yr += 2000
+            if 1 <= mo <= 12:
+                return MONTH_NAME_BY_NUM[mo], _fy_from_year_month(yr, mo)
+
+        # Explicit Month Name + Year
+        m = re.search(r'\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4})\b', text, re.IGNORECASE)
+        if m:
+            mo_name = m.group(1).capitalize()
+            yr = int(m.group(2))
+            mo = MONTH_NUM_BY_NAME.get(mo_name.upper(), 8)
+            return mo_name, _fy_from_year_month(yr, mo)
+
+    # 2. Search rows for Excel serial numbers or datetime objects
+    if rows:
+        import xlrd
+        for row in rows[:20]:
+            row_str = " ".join(str(c) for c in row if c is not None)
+            if re.search(r'From\s+date', row_str, re.IGNORECASE) or re.search(r'Entry\s+Date', row_str, re.IGNORECASE):
+                for cell in row:
+                    if isinstance(cell, float) and 35000 <= cell <= 60000:
+                        try:
+                            dt = xlrd.xldate_as_datetime(cell, 0)
+                            return MONTH_NAME_BY_NUM[dt.month], _fy_from_year_month(dt.year, dt.month)
+                        except Exception:
+                            pass
+                    elif isinstance(cell, datetime):
+                        return MONTH_NAME_BY_NUM[cell.month], _fy_from_year_month(cell.year, cell.month)
+                    elif isinstance(cell, str):
+                        m = re.search(r'(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})', cell)
+                        if m:
+                            mo = int(m.group(2))
+                            yr = int(m.group(3))
+                            if yr < 100: yr += 2000
+                            if 1 <= mo <= 12:
+                                return MONTH_NAME_BY_NUM[mo], _fy_from_year_month(yr, mo)
+                        m2 = re.search(r'(\d{4})-(\d{2})-(\d{2})', cell)
+                        if m2:
+                            yr = int(m2.group(1))
+                            mo = int(m2.group(2))
+                            if 1 <= mo <= 12:
+                                return MONTH_NAME_BY_NUM[mo], _fy_from_year_month(yr, mo)
+
+    # 3. Check filename
+    if filename:
+        m = re.search(r'\b(January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\b[_\s\-]*(\d{4})?', filename, re.IGNORECASE)
+        if m:
+            raw_month = m.group(1).upper()
+            mo_num = MONTH_NUM_BY_NAME.get(raw_month)
+            if mo_num:
+                yr = int(m.group(2)) if m.group(2) else 2026
+                return MONTH_NAME_BY_NUM[mo_num], _fy_from_year_month(yr, mo_num)
+
+        m_date = re.search(r'(\d{1,2})[\._-](\d{2})[\._-](\d{4})', filename)
+        if m_date:
+            mo = int(m_date.group(2))
+            yr = int(m_date.group(3))
+            if 1 <= mo <= 12:
+                return MONTH_NAME_BY_NUM[mo], _fy_from_year_month(yr, mo)
+
+    return None, None
+
+
 def extract_raw_ledger_accounts_pdf(file_bytes, filename):
     doc = pymupdf.open(stream=file_bytes, filetype="pdf")
     text = ""
@@ -6338,9 +6468,14 @@ def extract_raw_ledger_accounts_pdf(file_bytes, filename):
     else:
         accounts = _scan_ledger_lines(lines, _LEDGER_PDF_ACCOUNT_LABELS, _LEDGER_PDF_TOTAL_LABELS)
     branch = _detect_ledger_branch(text, filename)
+    det_month, det_fy = detect_statement_period(text, filename)
     for a in accounts:
         a['branch'] = branch
         a['filename'] = filename
+        if det_month:
+            a['month'] = det_month
+        if det_fy:
+            a['financial_year'] = det_fy
     return accounts
 
 
@@ -6361,9 +6496,14 @@ def extract_raw_ledger_accounts_xlsx(file_bytes, filename):
         else:
             continue
         branch = _detect_ledger_branch(flat_text, filename)
+        det_month, det_fy = detect_statement_period(flat_text, filename, rows)
         for a in accounts:
             a['branch'] = branch
             a['filename'] = filename
+            if det_month:
+                a['month'] = det_month
+            if det_fy:
+                a['financial_year'] = det_fy
         all_accounts.extend(accounts)
     return all_accounts
 
@@ -6403,9 +6543,14 @@ def extract_raw_ledger_accounts_xls(file_bytes, filename):
         else:
             accounts = _scan_ledger_lines(lines, _LEDGER_PDF_ACCOUNT_LABELS, _LEDGER_PDF_TOTAL_LABELS)
         branch = _detect_ledger_branch(flat_text, filename)
+        det_month, det_fy = detect_statement_period(flat_text, filename, rows)
         for a in accounts:
             a['branch'] = branch
             a['filename'] = filename
+            if det_month:
+                a['month'] = det_month
+            if det_fy:
+                a['financial_year'] = det_fy
         all_accounts.extend(accounts)
     return all_accounts
 
@@ -6494,8 +6639,8 @@ def finalize_ledger_accounts(raw_accounts, financial_year='2026-27', month='July
                 bucket = exempt_entries if ledger_role == 'EXEMPT_INCOME' else ledger_entries
                 bucket.append({
                     "branch": branch,
-                    "financial_year": financial_year,
-                    "month": month,
+                    "financial_year": a.get('financial_year') or financial_year,
+                    "month": a.get('month') or month,
                     "gl_code": code,
                     "ledger_role": ledger_role,
                     "closing_balance": closing_balance,
@@ -6548,8 +6693,8 @@ def finalize_ledger_accounts(raw_accounts, financial_year='2026-27', month='July
 
             entries.append({
                 "branch": branch,
-                "financial_year": financial_year,
-                "month": month,
+                "financial_year": a.get('financial_year') or financial_year,
+                "month": a.get('month') or month,
                 "gl_code": code,
                 "particulars": particulars,
                 "income_amount": round(amount, 2),
@@ -6646,8 +6791,8 @@ def finalize_expense_ledger_accounts(raw_accounts, financial_year, month):
             meta = get_income_code_meta(code)
             entries.append({
                 "branch": branch,
-                "financial_year": financial_year,
-                "month": month,
+                "financial_year": a.get('financial_year') or financial_year,
+                "month": a.get('month') or month,
                 "gl_code": code,
                 "particulars": meta.get('particulars') if meta else (a.get('name') or 'Unclassified Expense'),
                 "voucher_amount": amount,
