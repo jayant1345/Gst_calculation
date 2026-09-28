@@ -2465,7 +2465,7 @@ body.table-fullscreen-active {
    the sticky Match Status/Actions columns above) never actually engage,
    since nothing is wider than its container. */
 .recon-table {
-    min-width: 1800px;
+    min-width: 2350px;
 }
 
 /* Pin Match Status + Actions to the right edge of the scroll area so the

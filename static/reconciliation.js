@@ -666,13 +666,20 @@ document.addEventListener('DOMContentLoaded', function() {
             const bBranch = item.book ? item.book.branch : '-';
             const bInv = item.book ? item.book.invoice_number : '-';
             const bDate = item.book ? item.book.invoice_date : '-';
-            const bGst = item.book ? `₹${item.book.total_gst.toFixed(2)}` : '-';
+            const bTaxable = item.book && item.book.taxable_value !== undefined && item.book.taxable_value !== null ? `₹${item.book.taxable_value.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}` : '-';
+            const bCgst = item.book && item.book.cgst !== undefined && item.book.cgst !== null ? `₹${item.book.cgst.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}` : '-';
+            const bSgst = item.book && item.book.sgst !== undefined && item.book.sgst !== null ? `₹${item.book.sgst.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}` : '-';
+            const bIgst = item.book && item.book.igst !== undefined && item.book.igst !== null ? `₹${item.book.igst.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}` : '-';
+            const bGst = item.book && item.book.total_gst !== undefined && item.book.total_gst !== null ? `₹${item.book.total_gst.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}` : '-';
 
             // Portal Side
             const pInv = item.portal ? item.portal.invoice_number : '-';
             const pDate = item.portal ? item.portal.invoice_date : '-';
-            const pGst = item.portal ? `₹${item.portal.total_gst.toFixed(2)}` : '-';
-            const pTaxable = item.portal ? `₹${item.portal.taxable_value.toFixed(2)}` : '-';
+            const pTaxable = item.portal && item.portal.taxable_value !== undefined && item.portal.taxable_value !== null ? `₹${item.portal.taxable_value.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}` : '-';
+            const pCgst = item.portal && item.portal.cgst !== undefined && item.portal.cgst !== null ? `₹${item.portal.cgst.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}` : '-';
+            const pSgst = item.portal && item.portal.sgst !== undefined && item.portal.sgst !== null ? `₹${item.portal.sgst.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}` : '-';
+            const pIgst = item.portal && item.portal.igst !== undefined && item.portal.igst !== null ? `₹${item.portal.igst.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}` : '-';
+            const pGst = item.portal && item.portal.total_gst !== undefined && item.portal.total_gst !== null ? `₹${item.portal.total_gst.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}` : '-';
 
             // Status Badge
             const statusBadge = `<span class="badge ${getStatusBadgeClass(item.status)}">${escapeHtml(item.status)}</span>`;
@@ -705,6 +712,12 @@ document.addEventListener('DOMContentLoaded', function() {
             }
 
             const highlightDiff = item.status === 'Value Mismatched' || item.status === 'Possible Match';
+            const isMismatched = item.status === 'Value Mismatched';
+            const taxableDiff = isMismatched && item.book && item.portal && Math.abs((item.book.taxable_value || 0) - (item.portal.taxable_value || 0)) > 1.0;
+            const cgstDiff = isMismatched && item.book && item.portal && Math.abs((item.book.cgst || 0) - (item.portal.cgst || 0)) > 1.0;
+            const sgstDiff = isMismatched && item.book && item.portal && Math.abs((item.book.sgst || 0) - (item.portal.sgst || 0)) > 1.0;
+            const igstDiff = isMismatched && item.book && item.portal && Math.abs((item.book.igst || 0) - (item.portal.igst || 0)) > 1.0;
+            const gstDiff = isMismatched && item.book && item.portal && Math.abs((item.book.total_gst || 0) - (item.portal.total_gst || 0)) > 1.0;
 
             tr.innerHTML = `
                 <td>${escapeHtml(item.state || 'Unassigned')}</td>
@@ -717,12 +730,19 @@ document.addEventListener('DOMContentLoaded', function() {
                 <td>${escapeHtml(bBranch)}</td>
                 <td class="${highlightDiff ? 'value-diff' : ''}">${escapeHtml(bInv)}</td>
                 <td>${escapeHtml(bDate)}</td>
-                <td class="text-right ${item.status === 'Value Mismatched' ? 'value-diff' : ''}">${bGst}</td>
+                <td class="text-right ${taxableDiff ? 'value-diff' : ''}">${bTaxable}</td>
+                <td class="text-right ${cgstDiff ? 'value-diff' : ''}">${bCgst}</td>
+                <td class="text-right ${sgstDiff ? 'value-diff' : ''}">${bSgst}</td>
+                <td class="text-right ${igstDiff ? 'value-diff' : ''}">${bIgst}</td>
+                <td class="text-right ${gstDiff ? 'value-diff' : ''}"><strong>${bGst}</strong></td>
 
                 <td class="${highlightDiff ? 'value-diff' : ''}">${escapeHtml(pInv)}</td>
                 <td>${escapeHtml(pDate)}</td>
-                <td class="text-right ${item.status === 'Value Mismatched' ? 'value-diff' : ''}">${pGst}</td>
-                <td class="text-right">${pTaxable}</td>
+                <td class="text-right ${taxableDiff ? 'value-diff' : ''}">${pTaxable}</td>
+                <td class="text-right ${cgstDiff ? 'value-diff' : ''}">${pCgst}</td>
+                <td class="text-right ${sgstDiff ? 'value-diff' : ''}">${pSgst}</td>
+                <td class="text-right ${igstDiff ? 'value-diff' : ''}">${pIgst}</td>
+                <td class="text-right ${gstDiff ? 'value-diff' : ''}"><strong>${pGst}</strong></td>
 
                 <td>${statusBadge}</td>
                 <td><div class="action-btn-cell">${actionBtn}</div></td>
@@ -810,12 +830,20 @@ document.addEventListener('DOMContentLoaded', function() {
             // Books details
             const bInv = item.book ? item.book.invoice_number : 'N/A';
             const bDate = item.book ? item.book.invoice_date : '-';
-            const bGst = item.book ? `₹${item.book.total_gst.toFixed(2)}` : '-';
+            const bTaxable = item.book && item.book.taxable_value !== undefined && item.book.taxable_value !== null ? `₹${item.book.taxable_value.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}` : '-';
+            const bCgst = item.book && item.book.cgst !== undefined && item.book.cgst !== null ? `₹${item.book.cgst.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}` : '-';
+            const bSgst = item.book && item.book.sgst !== undefined && item.book.sgst !== null ? `₹${item.book.sgst.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}` : '-';
+            const bIgst = item.book && item.book.igst !== undefined && item.book.igst !== null ? `₹${item.book.igst.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}` : '-';
+            const bGst = item.book && item.book.total_gst !== undefined && item.book.total_gst !== null ? `₹${item.book.total_gst.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}` : '-';
 
             // Portal details
             const pInv = item.portal ? item.portal.invoice_number : 'N/A';
             const pDate = item.portal ? item.portal.invoice_date : '-';
-            const pGst = item.portal ? `₹${item.portal.total_gst.toFixed(2)}` : '-';
+            const pTaxable = item.portal && item.portal.taxable_value !== undefined && item.portal.taxable_value !== null ? `₹${item.portal.taxable_value.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}` : '-';
+            const pCgst = item.portal && item.portal.cgst !== undefined && item.portal.cgst !== null ? `₹${item.portal.cgst.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}` : '-';
+            const pSgst = item.portal && item.portal.sgst !== undefined && item.portal.sgst !== null ? `₹${item.portal.sgst.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}` : '-';
+            const pIgst = item.portal && item.portal.igst !== undefined && item.portal.igst !== null ? `₹${item.portal.igst.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}` : '-';
+            const pGst = item.portal && item.portal.total_gst !== undefined && item.portal.total_gst !== null ? `₹${item.portal.total_gst.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}` : '-';
 
             const statusBadge = `<span class="badge ${getStatusBadgeClass(item.status)}">${escapeHtml(item.status)}</span>`;
 
@@ -852,17 +880,25 @@ document.addEventListener('DOMContentLoaded', function() {
 
                 <div class="mobile-card-comparison">
                     <div class="comp-column books-col">
-                        <h5>Books</h5>
+                        <h5>Our Books</h5>
                         <div class="comp-row"><span>Inv No:</span> <strong>${escapeHtml(bInv)}</strong></div>
                         <div class="comp-row"><span>Date:</span> <span>${escapeHtml(bDate)}</span></div>
-                        <div class="comp-row"><span>Tax:</span> <strong>${bGst}</strong></div>
+                        <div class="comp-row"><span>Taxable:</span> <span>${bTaxable}</span></div>
+                        <div class="comp-row"><span>CGST:</span> <span>${bCgst}</span></div>
+                        <div class="comp-row"><span>SGST:</span> <span>${bSgst}</span></div>
+                        <div class="comp-row"><span>IGST:</span> <span>${bIgst}</span></div>
+                        <div class="comp-row"><span>Total GST:</span> <strong>${bGst}</strong></div>
                     </div>
                     <div class="comp-divider"></div>
                     <div class="comp-column portal-col">
-                        <h5>GSTR-2B</h5>
+                        <h5>GSTR-2B Portal</h5>
                         <div class="comp-row"><span>Inv No:</span> <strong>${escapeHtml(pInv)}</strong></div>
                         <div class="comp-row"><span>Date:</span> <span>${escapeHtml(pDate)}</span></div>
-                        <div class="comp-row"><span>Tax:</span> <strong>${pGst}</strong></div>
+                        <div class="comp-row"><span>Taxable:</span> <span>${pTaxable}</span></div>
+                        <div class="comp-row"><span>CGST:</span> <span>${pCgst}</span></div>
+                        <div class="comp-row"><span>SGST:</span> <span>${pSgst}</span></div>
+                        <div class="comp-row"><span>IGST:</span> <span>${pIgst}</span></div>
+                        <div class="comp-row"><span>Total GST:</span> <strong>${pGst}</strong></div>
                     </div>
                 </div>
 

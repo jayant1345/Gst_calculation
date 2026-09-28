@@ -4593,109 +4593,187 @@ def export_filtered_reconciliation():
                     filtered.append(i)
             items = filtered
 
-        # Generate Excel Workbook
+        # Generate Excel Workbook with comprehensive tax breakdown columns
         wb = Workbook()
-        ws = wb.active
-        ws.title = "Reconciliation Ledger"
 
-        header_fill = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
-        title_font = Font(name="Calibri", size=13, bold=True, color="1F4E79")
-        subtitle_font = Font(name="Calibri", size=10, italic=True, color="475569")
-        white_font = Font(name="Calibri", size=10, bold=True, color="FFFFFF")
-        bold_font = Font(name="Calibri", size=10, bold=True)
-        regular_font = Font(name="Calibri", size=10)
-        border_thin = Border(left=Side(style='thin', color='DDDDDD'), right=Side(style='thin', color='DDDDDD'),
-                             top=Side(style='thin', color='DDDDDD'), bottom=Side(style='thin', color='DDDDDD'))
-        num_fmt = '#,##0.00'
+        def build_reconciliation_sheet(ws, sheet_title, sheet_items, fy_val, months_list, state_val, status_val):
+            header_fill = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
+            books_head_fill = PatternFill(start_color="1E3A8A", end_color="1E3A8A", fill_type="solid")
+            portal_head_fill = PatternFill(start_color="065F46", end_color="065F46", fill_type="solid")
+            diff_head_fill = PatternFill(start_color="7C2D12", end_color="7C2D12", fill_type="solid")
+            title_font = Font(name="Calibri", size=13, bold=True, color="1F4E79")
+            subtitle_font = Font(name="Calibri", size=10, italic=True, color="475569")
+            white_font = Font(name="Calibri", size=10, bold=True, color="FFFFFF")
+            bold_font = Font(name="Calibri", size=10, bold=True)
+            regular_font = Font(name="Calibri", size=10)
+            total_font = Font(name="Calibri", size=10, bold=True, color="0F172A")
+            total_fill = PatternFill(start_color="F1F5F9", end_color="F1F5F9", fill_type="solid")
+            border_thin = Border(left=Side(style='thin', color='DDDDDD'), right=Side(style='thin', color='DDDDDD'),
+                                 top=Side(style='thin', color='DDDDDD'), bottom=Side(style='thin', color='DDDDDD'))
+            border_total = Border(left=Side(style='thin', color='CBD5E1'), right=Side(style='thin', color='CBD5E1'),
+                                  top=Side(style='thin', color='64748B'), bottom=Side(style='double', color='0F172A'))
+            num_fmt = '#,##0.00'
 
-        # Title Block
-        ws.merge_cells("A1:L1")
-        ws["A1"] = f"NUTAN NAGRIK SAHAKARI BANK LTD. - GST RECONCILIATION LEDGER (FY {fy})"
-        ws["A1"].font = title_font
-        ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
+            # Title Block (Merged across all 20 columns A-T)
+            ws.merge_cells("A1:T1")
+            ws["A1"] = f"NUTAN NAGRIK SAHAKARI BANK LTD. - GST RECONCILIATION LEDGER (FY {fy_val})" + (f" - {sheet_title.upper()}" if sheet_title != "Reconciliation Ledger" else "")
+            ws["A1"].font = title_font
+            ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
 
-        ws.merge_cells("A2:L2")
-        ws["A2"] = f"Active Filters: Months: {', '.join(months)} | State: {state_filter.title()} | Status: {status_filter.title()} | Total Records: {len(items)}"
-        ws["A2"].font = subtitle_font
-        ws["A2"].alignment = Alignment(horizontal="center", vertical="center")
+            ws.merge_cells("A2:T2")
+            ws["A2"] = f"Active Filters: Months: {', '.join(months_list)} | State: {state_val.title()} | Status: {status_val} | Total Records: {len(sheet_items)}"
+            ws["A2"].font = subtitle_font
+            ws["A2"].alignment = Alignment(horizontal="center", vertical="center")
 
-        headers = [
-            "State", "Supplier / Vendor", "Supplier GSTIN",
-            "Books Branch", "Books Invoice No", "Books Date", "Books GST (₹)",
-            "Portal Invoice No", "Portal Date", "Portal GST (₹)", "Portal Taxable (₹)",
-            "Match Status"
-        ]
-
-        ws.append([]) # Empty row 3
-        ws.append(headers) # Row 4
-        header_row_idx = 4
-
-        for col_idx in range(1, len(headers) + 1):
-            cell = ws.cell(row=header_row_idx, column=col_idx)
-            cell.fill = header_fill
-            cell.font = white_font
-            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-            cell.border = border_thin
-
-        status_fills = {
-            'Matched': PatternFill(start_color="D1FAE5", end_color="D1FAE5", fill_type="solid"),
-            'Value Mismatched': PatternFill(start_color="FEF3C7", end_color="FEF3C7", fill_type="solid"),
-            'Possible Match': PatternFill(start_color="EDE9FE", end_color="EDE9FE", fill_type="solid"),
-            'Missing in GSTR-2B': PatternFill(start_color="FEE2E2", end_color="FEE2E2", fill_type="solid"),
-            'Missing in Books': PatternFill(start_color="DBEAFE", end_color="DBEAFE", fill_type="solid"),
-        }
-
-        row_idx = header_row_idx + 1
-        for item in items:
-            b = item.get('book') or {}
-            p = item.get('portal') or {}
-            state = item.get('state') or 'Unassigned'
-            supplier = b.get('vendor_name') or p.get('vendor_name') or 'Unknown'
-            gstin = b.get('gstin') or p.get('gstin') or 'N/A'
-            b_branch = b.get('branch') or '-'
-            b_inv = b.get('invoice_number') or '-'
-            b_date = b.get('invoice_date') or '-'
-            b_gst = b.get('total_gst') if b.get('total_gst') is not None else ''
-            p_inv = p.get('invoice_number') or '-'
-            p_date = p.get('invoice_date') or '-'
-            p_gst = p.get('total_gst') if p.get('total_gst') is not None else ''
-            p_taxable = p.get('taxable_value') if p.get('taxable_value') is not None else ''
-            status = item.get('status') or 'Unknown'
-
-            row_data = [
-                state, supplier, gstin,
-                b_branch, b_inv, b_date, b_gst,
-                p_inv, p_date, p_gst, p_taxable,
-                status
+            headers = [
+                "State", "Supplier / Vendor", "Supplier GSTIN",
+                "Books Branch", "Books Invoice No", "Books Date",
+                "Books Taxable (₹)", "Books CGST (₹)", "Books SGST (₹)", "Books IGST (₹)", "Books Total GST (₹)",
+                "Portal Invoice No", "Portal Date",
+                "Portal Taxable (₹)", "Portal CGST (₹)", "Portal SGST (₹)", "Portal IGST (₹)", "Portal Total GST (₹)",
+                "Tax Difference (₹)", "Match Status"
             ]
-            ws.append(row_data)
+
+            ws.append([]) # Row 3
+            ws.append(headers) # Row 4
+            header_row_idx = 4
 
             for col_idx in range(1, len(headers) + 1):
-                cell = ws.cell(row=row_idx, column=col_idx)
-                cell.font = regular_font
+                cell = ws.cell(row=header_row_idx, column=col_idx)
+                if 4 <= col_idx <= 11:
+                    cell.fill = books_head_fill
+                elif 12 <= col_idx <= 18:
+                    cell.fill = portal_head_fill
+                elif col_idx == 19:
+                    cell.fill = diff_head_fill
+                else:
+                    cell.fill = header_fill
+                cell.font = white_font
+                cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
                 cell.border = border_thin
-                if col_idx in [7, 10, 11]:
+
+            status_fills = {
+                'Matched': PatternFill(start_color="D1FAE5", end_color="D1FAE5", fill_type="solid"),
+                'Value Mismatched': PatternFill(start_color="FEF3C7", end_color="FEF3C7", fill_type="solid"),
+                'Possible Match': PatternFill(start_color="EDE9FE", end_color="EDE9FE", fill_type="solid"),
+                'Missing in GSTR-2B': PatternFill(start_color="FEE2E2", end_color="FEE2E2", fill_type="solid"),
+                'Missing in Books': PatternFill(start_color="DBEAFE", end_color="DBEAFE", fill_type="solid"),
+            }
+
+            start_data_row = header_row_idx + 1
+            row_idx = start_data_row
+            for item in sheet_items:
+                b = item.get('book') or {}
+                p = item.get('portal') or {}
+                st = item.get('state') or 'Unassigned'
+                supplier = b.get('vendor_name') or p.get('vendor_name') or 'Unknown'
+                gstin = b.get('gstin') or p.get('gstin') or 'N/A'
+                b_branch = b.get('branch') or '-'
+                b_inv = b.get('invoice_number') or '-'
+                b_date = b.get('invoice_date') or '-'
+                b_taxable = b.get('taxable_value') if b.get('taxable_value') is not None else ''
+                b_cgst = b.get('cgst') if b.get('cgst') is not None else ''
+                b_sgst = b.get('sgst') if b.get('sgst') is not None else ''
+                b_igst = b.get('igst') if b.get('igst') is not None else ''
+                b_gst = b.get('total_gst') if b.get('total_gst') is not None else ''
+
+                p_inv = p.get('invoice_number') or '-'
+                p_date = p.get('invoice_date') or '-'
+                p_taxable = p.get('taxable_value') if p.get('taxable_value') is not None else ''
+                p_cgst = p.get('cgst') if p.get('cgst') is not None else ''
+                p_sgst = p.get('sgst') if p.get('sgst') is not None else ''
+                p_igst = p.get('igst') if p.get('igst') is not None else ''
+                p_gst = p.get('total_gst') if p.get('total_gst') is not None else ''
+
+                if b.get('total_gst') is not None and p.get('total_gst') is not None:
+                    tax_diff = round(p.get('total_gst', 0.0) - b.get('total_gst', 0.0), 2)
+                else:
+                    tax_diff = ''
+
+                status = item.get('status') or 'Unknown'
+
+                row_data = [
+                    st, supplier, gstin,
+                    b_branch, b_inv, b_date,
+                    b_taxable, b_cgst, b_sgst, b_igst, b_gst,
+                    p_inv, p_date,
+                    p_taxable, p_cgst, p_sgst, p_igst, p_gst,
+                    tax_diff, status
+                ]
+                ws.append(row_data)
+
+                for col_idx in range(1, len(headers) + 1):
+                    cell = ws.cell(row=row_idx, column=col_idx)
+                    cell.font = regular_font
+                    cell.border = border_thin
+                    if col_idx in [7, 8, 9, 10, 11, 14, 15, 16, 17, 18, 19]:
+                        cell.number_format = num_fmt
+                        cell.alignment = Alignment(horizontal="right")
+                    elif col_idx in [1, 4, 5, 6, 12, 13]:
+                        cell.alignment = Alignment(horizontal="center")
+                    elif col_idx == 20:
+                        cell.alignment = Alignment(horizontal="center")
+                        cell.font = bold_font
+                        fill = status_fills.get(status)
+                        if fill:
+                            cell.fill = fill
+
+                row_idx += 1
+
+            # Summary Totals Row
+            if sheet_items:
+                last_data_row = row_idx - 1
+                ws.cell(row=row_idx, column=2, value="TOTAL")
+                num_cols = {
+                    7: 'G', 8: 'H', 9: 'I', 10: 'J', 11: 'K',
+                    14: 'N', 15: 'O', 16: 'P', 17: 'Q', 18: 'R', 19: 'S'
+                }
+                for c_idx, letter in num_cols.items():
+                    cell = ws.cell(row=row_idx, column=c_idx, value=f"=SUM({letter}{start_data_row}:{letter}{last_data_row})")
                     cell.number_format = num_fmt
                     cell.alignment = Alignment(horizontal="right")
-                elif col_idx in [1, 4, 5, 6, 8, 9]:
-                    cell.alignment = Alignment(horizontal="center")
-                elif col_idx == 12:
-                    cell.alignment = Alignment(horizontal="center")
-                    cell.font = bold_font
-                    fill = status_fills.get(status)
-                    if fill:
-                        cell.fill = fill
 
-            row_idx += 1
+                for col_idx in range(1, len(headers) + 1):
+                    cell = ws.cell(row=row_idx, column=col_idx)
+                    cell.font = total_font
+                    cell.fill = total_fill
+                    cell.border = border_total
+                    if col_idx == 2:
+                        cell.alignment = Alignment(horizontal="center")
 
-        # Adjust column widths
-        for col in ws.columns:
-            max_len = 0
-            col_letter = get_column_letter(col[0].column)
-            for cell in col:
-                if cell.row > 2 and cell.value is not None:
-                    max_len = max(max_len, len(str(cell.value)))
-            ws.column_dimensions[col_letter].width = max(max_len + 4, 12)
+            # Adjust Column Widths
+            for col in ws.columns:
+                max_len = 0
+                col_letter = get_column_letter(col[0].column)
+                for cell in col:
+                    if cell.row > 2 and cell.value is not None:
+                        max_len = max(max_len, len(str(cell.value)))
+                ws.column_dimensions[col_letter].width = max(max_len + 3, 11)
+
+        # Build Primary Active Sheet
+        ws_all = wb.active
+        ws_all.title = "Reconciliation Ledger"
+        build_reconciliation_sheet(ws_all, "Reconciliation Ledger", items, fy, months, state_filter, status_filter.title())
+
+        # If user exports All Statuses, also provide categorized tabs for Fully Matched, Mismatched, Possible Match, etc.
+        if status_filter.lower() == 'all':
+            matched_items = [i for i in items if i.get('status') == 'Matched']
+            mismatched_items = [i for i in items if i.get('status') == 'Value Mismatched']
+            possible_items = [i for i in items if i.get('status') == 'Possible Match']
+            missing_portal_items = [i for i in items if i.get('status') == 'Missing in GSTR-2B']
+            missing_books_items = [i for i in items if i.get('status') == 'Missing in Books']
+
+            tabs_config = [
+                ("Fully Matched", matched_items, "Matched"),
+                ("Value Mismatched", mismatched_items, "Value Mismatched"),
+                ("Possible Match", possible_items, "Possible Match"),
+                ("Missing in Portal", missing_portal_items, "Missing in GSTR-2B"),
+                ("Missing in Books", missing_books_items, "Missing in Books")
+            ]
+
+            for tab_name, tab_items, tab_status in tabs_config:
+                ws_tab = wb.create_sheet(title=tab_name)
+                build_reconciliation_sheet(ws_tab, tab_name, tab_items, fy, months, state_filter, tab_status)
 
         output = io.BytesIO()
         wb.save(output)
@@ -5600,7 +5678,12 @@ def export_vendor_discrepancies():
         red_fill = PatternFill(start_color="FFDAD6", end_color="FFDAD6", fill_type="solid")
         yellow_fill = PatternFill(start_color="FFF3CD", end_color="FFF3CD", fill_type="solid")
 
-        headers = ["Supplier GSTIN", "Vendor Name", "Discrepancy Status", "Invoice No", "Date", "Book Taxable (₹)", "Book GST (₹)", "Portal Taxable (₹)", "Portal GST (₹)", "Tax Difference (₹)", "Action Required"]
+        headers = [
+            "Supplier GSTIN", "Vendor Name", "Discrepancy Status", "Invoice No", "Date",
+            "Book Taxable (₹)", "Book CGST (₹)", "Book SGST (₹)", "Book IGST (₹)", "Book Total GST (₹)",
+            "Portal Taxable (₹)", "Portal CGST (₹)", "Portal SGST (₹)", "Portal IGST (₹)", "Portal Total GST (₹)",
+            "Tax Difference (₹)", "Action Required"
+        ]
         ws.append(headers)
         for col_idx in range(1, len(headers) + 1):
             cell = ws.cell(row=1, column=col_idx)
@@ -5622,14 +5705,26 @@ def export_vendor_discrepancies():
             inv_date = book["invoice_date"] if book else portal["invoice_date"]
 
             b_taxable = book["taxable_value"] if book else 0.0
+            b_cgst = book.get("cgst", 0.0) if book else 0.0
+            b_sgst = book.get("sgst", 0.0) if book else 0.0
+            b_igst = book.get("igst", 0.0) if book else 0.0
             b_gst = book["total_gst"] if book else 0.0
+
             p_taxable = portal["taxable_value"] if portal else 0.0
+            p_cgst = portal.get("cgst", 0.0) if portal else 0.0
+            p_sgst = portal.get("sgst", 0.0) if portal else 0.0
+            p_igst = portal.get("igst", 0.0) if portal else 0.0
             p_gst = portal["total_gst"] if portal else 0.0
 
             tax_diff = abs(p_gst - b_gst)
             action = "Upload in GSTR-1" if status == "Missing in GSTR-2B" else "Amend Tax Amount in GSTR-1"
 
-            row_vals = [gstin, vendor, status, inv_no, inv_date, b_taxable, b_gst, p_taxable, p_gst, tax_diff, action]
+            row_vals = [
+                gstin, vendor, status, inv_no, inv_date,
+                b_taxable, b_cgst, b_sgst, b_igst, b_gst,
+                p_taxable, p_cgst, p_sgst, p_igst, p_gst,
+                tax_diff, action
+            ]
             ws.append(row_vals)
 
             curr_row = ws.max_row
@@ -5638,9 +5733,9 @@ def export_vendor_discrepancies():
                 cell = ws.cell(row=curr_row, column=col_idx)
                 cell.font = regular_font
                 cell.border = border_thin
-                if col_idx in [3, 11]:
+                if col_idx in [3, 17]:
                     cell.fill = fill_color
-                if col_idx in [6, 7, 8, 9, 10]:
+                if col_idx in [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]:
                     cell.alignment = Alignment(horizontal="right")
                     cell.number_format = '#,##0.00'
 
