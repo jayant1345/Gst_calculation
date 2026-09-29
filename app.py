@@ -6691,6 +6691,29 @@ def finalize_ledger_accounts(raw_accounts, financial_year='2026-27', month='July
                 needs_review = True
                 review_reason = "Possible locker/guarantee reclass transfer this period - verify split with paired code manually"
 
+            # Point 2: Debit Amount in PL Ledger
+            # If a PL ledger has both credit and debit amounts, the debit amount
+            # should be deducted from total income and shown under Refund Without GST
+            # or Refund With GST, as applicable.
+            # The classification is determined based on the corresponding GST payable ledger (GL 1878/1879/1880).
+            dr_amt = round(float(a.get('dr') or 0.0), 2)
+            cr_amt = round(float(a.get('cr') or 0.0), 2)
+            ref_wo = round(float(a.get('refund_without_gst') or 0.0), 2)
+            ref_w = round(float(a.get('refund_with_gst') or 0.0), 2)
+
+            if not ref_wo and not ref_w and cr_amt > 0.0 and dr_amt > 0.0:
+                # Check if corresponding GST payable ledger (GL 1878/1879/1880) had debit reversal for this branch
+                branch_has_gst_payable_dr = False
+                for p_code in ('1878', '1879', '1880'):
+                    if p_code in code_map and (code_map[p_code].get('dr') or 0.0) > 0.01:
+                        branch_has_gst_payable_dr = True
+                        break
+
+                if branch_has_gst_payable_dr:
+                    ref_w = dr_amt
+                else:
+                    ref_wo = dr_amt
+
             entries.append({
                 "branch": branch,
                 "financial_year": a.get('financial_year') or financial_year,
@@ -6703,8 +6726,8 @@ def finalize_ledger_accounts(raw_accounts, financial_year='2026-27', month='July
                 "cgst": cgst,
                 "sgst": sgst,
                 "igst": igst,
-                "refund_without_gst": 0.0,
-                "refund_with_gst": 0.0,
+                "refund_without_gst": ref_wo,
+                "refund_with_gst": ref_w,
                 "filename": a.get('filename', 'upload'),
                 "needs_review": needs_review,
                 "review_reason": review_reason,
@@ -6844,6 +6867,17 @@ def parse_full_workbook_excel(file_bytes, filename, financial_year='2026-27', mo
                 cgst_amt = float(cgst_val or (t_val * 0.09 if t_val else 0.0))
                 sgst_amt = float(ggst or (t_val * 0.09 if t_val else 0.0))
                 igst_amt = float(igst_val or 0.0)
+                ref_wo_c = bws.cell(r, 7).value
+                ref_w_c = bws.cell(r, 8).value
+                def _to_f(v):
+                    if v in (None, '', '.', ' '):
+                        return 0.0
+                    try:
+                        return float(str(v).replace(',', '').strip())
+                    except Exception:
+                        return 0.0
+                ref_wo_amt = _to_f(ref_wo_c)
+                ref_w_amt = _to_f(ref_w_c)
                 is_tax = (cgst_amt + sgst_amt + igst_amt) > 0 or t_val > 0
                 if 'E-STAMPING' in p_str.upper() or 'EXEMPT' in p_str.upper():
                     is_tax = False
@@ -6858,8 +6892,8 @@ def parse_full_workbook_excel(file_bytes, filename, financial_year='2026-27', mo
                     "cgst": round(cgst_amt, 2),
                     "sgst": round(sgst_amt, 2),
                     "igst": round(igst_amt, 2),
-                    "refund_without_gst": 0.0,
-                    "refund_with_gst": 0.0,
+                    "refund_without_gst": round(ref_wo_amt, 2),
+                    "refund_with_gst": round(ref_w_amt, 2),
                     "filename": filename
                 })
     return results
@@ -7850,6 +7884,8 @@ def get_income_summary():
                    COALESCE(SUM(sgst), 0)::float as total_sgst,
                    COALESCE(SUM(igst), 0)::float as total_igst,
                    COALESCE(SUM(cgst + sgst + igst), 0)::float as total_output_gst,
+                   COALESCE(SUM(refund_without_gst), 0)::float as total_refund_without_gst,
+                   COALESCE(SUM(refund_with_gst), 0)::float as total_refund_with_gst,
                    COUNT(*) FILTER (WHERE needs_review) as review_count
             FROM income_entries
             WHERE client_id = %s
@@ -7900,7 +7936,9 @@ def get_income_summary():
                    COALESCE(SUM(cgst), 0)::float as branch_cgst,
                    COALESCE(SUM(sgst), 0)::float as branch_sgst,
                    COALESCE(SUM(igst), 0)::float as branch_igst,
-                   COALESCE(SUM(cgst + sgst + igst), 0)::float as branch_gst
+                   COALESCE(SUM(cgst + sgst + igst), 0)::float as branch_gst,
+                   COALESCE(SUM(refund_without_gst), 0)::float as branch_refund_without_gst,
+                   COALESCE(SUM(refund_with_gst), 0)::float as branch_refund_with_gst
             FROM income_entries
             WHERE client_id = %s
         '''
@@ -7919,6 +7957,27 @@ def get_income_summary():
         cur.execute(q_branch, params_br)
         branch_stats = cur.fetchall()
 
+        # Query GST Payable Ledger (GL 1878/1879/1880) closing balances for Payable Working
+        q_pay_ledger = '''
+            SELECT ledger_role,
+                   COALESCE(SUM(closing_balance), 0)::float as total_balance,
+                   COUNT(DISTINCT branch) as branch_count
+            FROM gst_payable_ledger
+            WHERE client_id = %s
+        '''
+        params_pay = [client_id]
+        if fy and fy != 'ALL':
+            q_pay_ledger += " AND financial_year = %s"
+            params_pay.append(fy)
+        if month and month != 'ALL':
+            q_pay_ledger += " AND month = %s"
+            params_pay.append(month)
+        q_pay_ledger += " GROUP BY ledger_role"
+
+        cur.execute(q_pay_ledger, params_pay)
+        pay_rows = cur.fetchall()
+        pay_map = {r['ledger_role']: r['total_balance'] for r in pay_rows}
+
         cur.close()
         conn.close()
 
@@ -7935,13 +7994,80 @@ def get_income_summary():
         cash_ledger_balance = row['balance'] if row else 0.0
         actual_cash_to_deposit = max(0.0, round(net_gst_payable - cash_ledger_balance, 2))
 
+        # Build GSTR-1 Payable Working section
+        inc_calc_base = inc_stat['taxable_income'] if inc_stat else 0.0
+        inc_calc_sgst = inc_stat['total_sgst'] if inc_stat else 0.0
+        inc_calc_cgst = inc_stat['total_cgst'] if inc_stat else 0.0
+        inc_calc_igst = inc_stat['total_igst'] if inc_stat else 0.0
+        inc_calc_tax = round(inc_calc_sgst + inc_calc_cgst + inc_calc_igst, 2)
+
+        ref_base = inc_stat['total_refund_without_gst'] if inc_stat else 0.0
+        ref_sgst = round(ref_base * 0.09, 2)
+        ref_cgst = round(ref_base * 0.09, 2)
+        ref_igst = 0.0
+        ref_tax = round(ref_sgst + ref_cgst, 2)
+
+        tot_liab_base = round(inc_calc_base + ref_base, 2)
+        tot_liab_sgst = round(inc_calc_sgst + ref_sgst, 2)
+        tot_liab_cgst = round(inc_calc_cgst + ref_cgst, 2)
+        tot_liab_igst = round(inc_calc_igst, 2)
+        tot_liab_tax = round(tot_liab_sgst + tot_liab_cgst + tot_liab_igst, 2)
+
+        led_sgst = round(pay_map.get('SGST_PAYABLE', 0.0), 2)
+        led_cgst = round(pay_map.get('CGST_PAYABLE', 0.0), 2)
+        led_igst = round(pay_map.get('IGST_PAYABLE', 0.0), 2)
+        led_total = round(led_sgst + led_cgst + led_igst, 2)
+
+        diff_sgst = round(tot_liab_sgst - led_sgst, 2)
+        diff_cgst = round(tot_liab_cgst - led_cgst, 2)
+        diff_igst = round(tot_liab_igst - led_igst, 2)
+        diff_total = round(diff_sgst + diff_cgst + diff_igst, 2)
+
+        payable_working = {
+            "income_calculation": {
+                "base": inc_calc_base,
+                "sgst": inc_calc_sgst,
+                "cgst": inc_calc_cgst,
+                "igst": inc_calc_igst,
+                "total": inc_calc_tax
+            },
+            "refund_without_gst": {
+                "base": ref_base,
+                "sgst": ref_sgst,
+                "cgst": ref_cgst,
+                "igst": ref_igst,
+                "total": ref_tax
+            },
+            "total_computed_liability": {
+                "base": tot_liab_base,
+                "sgst": tot_liab_sgst,
+                "cgst": tot_liab_cgst,
+                "igst": tot_liab_igst,
+                "total": tot_liab_tax
+            },
+            "payable_as_per_ledger": {
+                "sgst": led_sgst,
+                "cgst": led_cgst,
+                "igst": led_igst,
+                "total": led_total
+            },
+            "difference": {
+                "sgst": diff_sgst,
+                "cgst": diff_cgst,
+                "igst": diff_igst,
+                "total": diff_total
+            },
+            "has_ledger_data": len(pay_rows) > 0
+        }
+
         return jsonify({
             "income": inc_stat,
             "itc": itc_stat,
             "net_gst_payable": net_gst_payable,
             "cash_ledger_balance": cash_ledger_balance,
             "actual_cash_to_deposit": actual_cash_to_deposit,
-            "branches": branch_stats
+            "branches": branch_stats,
+            "payable_working": payable_working
         })
     except Exception as e:
         print(f"Error generating income summary: {e}")
@@ -8338,13 +8464,71 @@ def export_income_working_sheet():
                         'inc': b_tot_inc, 'cgst': b_tot_cgst, 'sgst': b_tot_ggst, 'igst': b_tot_igst,
                     }
 
+                    ledger_vals = ledger_by_branch.get(b_norm, {})
+
+                    # Point 1: Auto-fetch and populate Payable Working section on this branch tab
+                    b_rows = {}
+                    for r_chk in range(total_row + 1, min(ws_b.max_row + 1, total_row + 30)):
+                        chk_txt = str(ws_b.cell(r_chk, 1).value or ws_b.cell(r_chk, 2).value or '').upper().strip()
+                        if 'INCOME AS PER LEDGER' in chk_txt:
+                            b_rows['inc'] = r_chk
+                        elif 'REFUND GIVEN' in chk_txt:
+                            b_rows['ref'] = r_chk
+                        elif 'PAYABLE AS PER LEDGER' in chk_txt:
+                            b_rows['pay'] = r_chk
+                        elif 'DIFFERENCE' in chk_txt and 'inc' in b_rows:
+                            if 'diff' not in b_rows:
+                                b_rows['diff'] = r_chk
+
+                    if 'inc' in b_rows and 'ref' in b_rows and 'pay' in b_rows:
+                        r_inc = b_rows['inc']
+                        r_ref = b_rows['ref']
+                        r_tot = r_ref + 1  # Row between Refund and Payable is Total
+                        r_pay = b_rows['pay']
+                        r_diff = b_rows.get('diff', r_pay + 1)
+
+                        # (1) Income as per Ledger-wise Calculation
+                        _set(ws_b, r_inc, 3, b_tot_inc)
+                        _set(ws_b, r_inc, 4, b_tot_ggst)
+                        _set(ws_b, r_inc, 5, b_tot_cgst)
+                        _set(ws_b, r_inc, 6, b_tot_igst if b_tot_igst else 0.0)
+
+                        # (2) Refund Given but GST Refund Not Given
+                        ref_gst_b = round(b_tot_ref_wo * 0.09, 2)
+                        _set(ws_b, r_ref, 3, b_tot_ref_wo)
+                        _set(ws_b, r_ref, 4, ref_gst_b)
+                        _set(ws_b, r_ref, 5, ref_gst_b)
+                        _set(ws_b, r_ref, 6, 0.0)
+
+                        # Total
+                        b_tot_liab_ggst = round(b_tot_ggst + ref_gst_b, 2)
+                        b_tot_liab_cgst = round(b_tot_cgst + ref_gst_b, 2)
+                        b_tot_liab_igst = round(b_tot_igst, 2)
+                        _set(ws_b, r_tot, 3, round(b_tot_inc + b_tot_ref_wo, 2))
+                        _set(ws_b, r_tot, 4, b_tot_liab_ggst)
+                        _set(ws_b, r_tot, 5, b_tot_liab_cgst)
+                        _set(ws_b, r_tot, 6, b_tot_liab_igst if b_tot_liab_igst else 0.0)
+
+                        # (3) Payable as per Ledger: GGST (GL 1878), CGST (GL 1879), IGST (GL 1880)
+                        l_sgst = ledger_vals.get('SGST_PAYABLE')
+                        l_cgst = ledger_vals.get('CGST_PAYABLE')
+                        l_igst = ledger_vals.get('IGST_PAYABLE')
+
+                        _set(ws_b, r_pay, 4, round(l_sgst, 2) if l_sgst is not None else 0.0)
+                        _set(ws_b, r_pay, 5, round(l_cgst, 2) if l_cgst is not None else 0.0)
+                        _set(ws_b, r_pay, 6, round(l_igst, 2) if l_igst is not None else 0.0)
+
+                        # Difference
+                        diff_ggst = round(b_tot_liab_ggst - (l_sgst or 0.0), 2)
+                        diff_cgst = round(b_tot_liab_cgst - (l_cgst or 0.0), 2)
+                        diff_igst = round(b_tot_liab_igst - (l_igst or 0.0), 2)
+
+                        _set(ws_b, r_diff, 4, diff_ggst)
+                        _set(ws_b, r_diff, 5, diff_cgst)
+                        _set(ws_b, r_diff, 6, diff_igst)
+
                     # Step 5: highlight this branch's tab when computed payable
                     # differs from the ledger's own closing balance by > Rs 10.
-                    # A missing ledger figure means "not compared yet", not "zero
-                    # difference" - it's simply excluded from the max(), and if no
-                    # ledger figure exists at all for this branch the tab is left
-                    # its normal color (nothing to flag against).
-                    ledger_vals = ledger_by_branch.get(b_norm, {})
                     diffs = []
                     if ledger_vals.get('CGST_PAYABLE') is not None:
                         diffs.append(abs(round(b_tot_cgst - ledger_vals['CGST_PAYABLE'], 2)))
@@ -8400,7 +8584,7 @@ def export_income_working_sheet():
                     _set(ws_s1, 64, 6, s1_total['igst'] if s1_total['igst'] else None)
                     _set(ws_s1, 64, 7, s1_total['refwo'] if s1_total['refwo'] else None)
 
-                    for rr in range(73, 76):
+                    for rr in range(73, 78):
                         for cc in range(3, 8):
                             _set(ws_s1, rr, cc, None)
                     _set(ws_s1, 73, 3, s1_grand['inc'])
@@ -8414,6 +8598,32 @@ def export_income_working_sheet():
                     _set(ws_s1, 75, 3, s1_grand['inc'] + s1_grand['refwo'])
                     _set(ws_s1, 75, 4, s1_grand['sgst'] + ref_gst_s1)
                     _set(ws_s1, 75, 5, s1_grand['cgst'] + ref_gst_s1)
+                    _set(ws_s1, 75, 6, s1_grand['igst'])
+
+                    # Sheet1 (3) Payable as per Ledger & Difference
+                    s1_ledger_sgst = sum(
+                        (lv.get('SGST_PAYABLE') or 0.0)
+                        for b_k, lv in ledger_by_branch.items()
+                        if b_k not in ('HO', 'DEMAT')
+                    )
+                    s1_ledger_cgst = sum(
+                        (lv.get('CGST_PAYABLE') or 0.0)
+                        for b_k, lv in ledger_by_branch.items()
+                        if b_k not in ('HO', 'DEMAT')
+                    )
+                    s1_ledger_igst = sum(
+                        (lv.get('IGST_PAYABLE') or 0.0)
+                        for b_k, lv in ledger_by_branch.items()
+                        if b_k not in ('HO', 'DEMAT')
+                    )
+
+                    _set(ws_s1, 76, 4, round(s1_ledger_sgst, 2))
+                    _set(ws_s1, 76, 5, round(s1_ledger_cgst, 2))
+                    _set(ws_s1, 76, 6, round(s1_ledger_igst, 2))
+
+                    _set(ws_s1, 77, 4, round((s1_grand['sgst'] + ref_gst_s1) - s1_ledger_sgst, 2))
+                    _set(ws_s1, 77, 5, round((s1_grand['cgst'] + ref_gst_s1) - s1_ledger_cgst, 2))
+                    _set(ws_s1, 77, 6, round(s1_grand['igst'] - s1_ledger_igst, 2))
 
                 # SUMMARY SHEET GST - Section (1) Exempt Income, Section (2) Taxable Income & Section (8) GSTR-1 Working
                 if 'SUMMARY SHEET GST' in wb.sheetnames:
@@ -8421,7 +8631,6 @@ def export_income_working_sheet():
                     _set(ws_sum, 3, 2, f"GST CALCULATION SUMMARY FOR THE MONTH OF {period_str}")
 
                     # Step 7: Update Section (1) Non-Taxable / Exempt Income (Rows 7 to 20)
-                    # Mapping of standard GL/PL codes to their designated rows in SUMMARY SHEET GST
                     EXEMPT_ROW_MAP = {
                         '3300': 7,   # INTEREST INCOME (EXEMPTED)
                         '3275': 8,   # INCOME FROM NON JUDICIAL FRANKING STAMP(3275)
@@ -8477,9 +8686,11 @@ def export_income_working_sheet():
                         _set(ws_sum, 31, 4, round(tot_ledger_sgst, 2))
                         _set(ws_sum, 31, 5, round(tot_ledger_cgst, 2))
                         _set(ws_sum, 31, 6, round(tot_ledger_igst, 2))
+                        _set(ws_sum, 31, 7, round(tot_ledger_sgst + tot_ledger_cgst + tot_ledger_igst, 2))
                         _set(ws_sum, 32, 4, round(tot_ggst - tot_ledger_sgst, 2))
                         _set(ws_sum, 32, 5, round(tot_cgst - tot_ledger_cgst, 2))
                         _set(ws_sum, 32, 6, round(grand_igst - tot_ledger_igst, 2))
+                        _set(ws_sum, 32, 7, round((tot_ggst - tot_ledger_sgst) + (tot_cgst - tot_ledger_cgst) + (grand_igst - tot_ledger_igst), 2))
 
                 # New sheet (CA steps 3-4-6): per-branch computed-from-income
                 # GST payable vs the bank's own ledger closing balance (GL

@@ -206,6 +206,78 @@ document.addEventListener('DOMContentLoaded', () => {
                     incomeReviewBanner.style.display = 'none';
                     reviewOnlyFilter = false;
                 }
+
+                // Point 1: Populate GSTR-1 Payable Working & Ledger Reconciliation
+                if (sumData.payable_working) {
+                    const pw = sumData.payable_working;
+                    const incW = pw.income_calculation || {};
+                    const refW = pw.refund_without_gst || {};
+                    const totW = pw.total_computed_liability || {};
+                    const ledW = pw.payable_as_per_ledger || {};
+                    const diffW = pw.difference || {};
+
+                    const _el = id => document.getElementById(id);
+                    if (_el('pw-inc-base')) _el('pw-inc-base').textContent = formatINR(incW.base);
+                    if (_el('pw-inc-sgst')) _el('pw-inc-sgst').textContent = formatINR(incW.sgst);
+                    if (_el('pw-inc-cgst')) _el('pw-inc-cgst').textContent = formatINR(incW.cgst);
+                    if (_el('pw-inc-igst')) _el('pw-inc-igst').textContent = formatINR(incW.igst);
+                    if (_el('pw-inc-total')) _el('pw-inc-total').textContent = formatINR(incW.total);
+
+                    if (_el('pw-ref-base')) _el('pw-ref-base').textContent = formatINR(refW.base);
+                    if (_el('pw-ref-sgst')) _el('pw-ref-sgst').textContent = formatINR(refW.sgst);
+                    if (_el('pw-ref-cgst')) _el('pw-ref-cgst').textContent = formatINR(refW.cgst);
+                    if (_el('pw-ref-igst')) _el('pw-ref-igst').textContent = formatINR(refW.igst);
+                    if (_el('pw-ref-total')) _el('pw-ref-total').textContent = formatINR(refW.total);
+
+                    if (_el('pw-tot-base')) _el('pw-tot-base').textContent = formatINR(totW.base);
+                    if (_el('pw-tot-sgst')) _el('pw-tot-sgst').textContent = formatINR(totW.sgst);
+                    if (_el('pw-tot-cgst')) _el('pw-tot-cgst').textContent = formatINR(totW.cgst);
+                    if (_el('pw-tot-igst')) _el('pw-tot-igst').textContent = formatINR(totW.igst);
+                    if (_el('pw-tot-total')) _el('pw-tot-total').textContent = formatINR(totW.total);
+
+                    if (_el('pw-led-sgst')) _el('pw-led-sgst').textContent = formatINR(ledW.sgst);
+                    if (_el('pw-led-cgst')) _el('pw-led-cgst').textContent = formatINR(ledW.cgst);
+                    if (_el('pw-led-igst')) _el('pw-led-igst').textContent = formatINR(ledW.igst);
+                    if (_el('pw-led-total')) _el('pw-led-total').textContent = formatINR(ledW.total);
+
+                    if (_el('pw-diff-sgst')) _el('pw-diff-sgst').textContent = formatINR(diffW.sgst);
+                    if (_el('pw-diff-cgst')) _el('pw-diff-cgst').textContent = formatINR(diffW.cgst);
+                    if (_el('pw-diff-igst')) _el('pw-diff-igst').textContent = formatINR(diffW.igst);
+                    if (_el('pw-diff-total')) _el('pw-diff-total').textContent = formatINR(diffW.total);
+
+                    const diffAbs = Math.abs(diffW.total || 0);
+                    const badge = _el('pwReconBadge');
+                    const diffRow = _el('pwDiffRow');
+                    if (badge) {
+                        if (!pw.has_ledger_data) {
+                            badge.style.background = 'rgba(148, 163, 184, 0.2)';
+                            badge.style.color = '#cbd5e1';
+                            badge.style.borderColor = 'rgba(203, 213, 225, 0.3)';
+                            badge.innerHTML = '<i class="fa-solid fa-circle-info"></i> Ledgers Not Uploaded';
+                        } else if (diffAbs <= 1.0) {
+                            badge.style.background = 'rgba(16, 185, 129, 0.2)';
+                            badge.style.color = '#34d399';
+                            badge.style.borderColor = 'rgba(52, 211, 153, 0.4)';
+                            badge.innerHTML = '<i class="fa-solid fa-circle-check"></i> Reconciled';
+                        } else {
+                            badge.style.background = 'rgba(239, 68, 68, 0.2)';
+                            badge.style.color = '#f87171';
+                            badge.style.borderColor = 'rgba(248, 113, 113, 0.4)';
+                            badge.innerHTML = `<i class="fa-solid fa-triangle-exclamation"></i> Variance: ${formatINR(diffW.total)}`;
+                        }
+                    }
+                    if (diffRow) {
+                        if (diffAbs <= 1.0) {
+                            diffRow.style.background = 'rgba(16, 185, 129, 0.08)';
+                            const diffTot = _el('pw-diff-total');
+                            if (diffTot) diffTot.style.color = '#34d399';
+                        } else {
+                            diffRow.style.background = 'rgba(239, 68, 68, 0.12)';
+                            const diffTot = _el('pw-diff-total');
+                            if (diffTot) diffTot.style.color = '#f87171';
+                        }
+                    }
+                }
             }
 
             const entriesRes = await fetch(`/api/get-income-entries?client_id=${currentClientId}&financial_year=${encodeURIComponent(currentFinancialYear)}&month=${encodeURIComponent(currentMonth)}`);
@@ -359,6 +431,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 <td style="padding: 12px 14px; text-align: right; font-weight: 700; color: #0f172a;">
                     ${formatINR(e.income_amount)}
                     ${e.manual_entry ? `<button type="button" class="btn-manual-amount" data-id="${e.id}" data-branch="${e.branch}" data-code="${e.gl_code}" data-amount="${e.income_amount}" title="Manual-entry code — click to enter the correct figure" style="display:inline-flex; align-items:center; margin-left:6px; background:none; border:none; color:#7c3aed; cursor:pointer; font-size:12px; vertical-align:middle;"><i class="fa-solid fa-pen"></i></button>` : ''}
+                    ${e.refund_without_gst > 0 ? `<div style="font-size: 11px; color: #d97706; font-weight: 600; margin-top: 2px;" title="Debit deducted & classified as Refund Without GST"><i class="fa-solid fa-minus"></i> Ref (w/o GST): ${formatINR(e.refund_without_gst)}</div>` : ''}
+                    ${e.refund_with_gst > 0 ? `<div style="font-size: 11px; color: #2563eb; font-weight: 600; margin-top: 2px;" title="Debit deducted & classified as Refund With GST"><i class="fa-solid fa-minus"></i> Ref (with GST): ${formatINR(e.refund_with_gst)}</div>` : ''}
                 </td>
                 <td style="padding: 12px 14px; text-align: right; color: #64748b;">${formatINR(e.sgst)}</td>
                 <td style="padding: 12px 14px; text-align: right; color: #64748b;">${formatINR(e.cgst)}</td>
