@@ -9406,7 +9406,8 @@ def export_income_pdf():
         # Parse request parameters
         month = request.args.get('month') or request.form.get('month') or 'August'
         fy = request.args.get('financial_year') or request.args.get('year') or request.form.get('financial_year') or request.form.get('year') or '2026-27'
-        client_id = request.args.get('client_id') or request.form.get('client_id') or 1
+        raw_client_id = request.args.get('client_id') or request.form.get('client_id') or 'nutan_nagrik'
+        client_id = 'nutan_nagrik' if str(raw_client_id).strip() in ('1', '', 'nutan_nagrik') else str(raw_client_id).strip()
         client_cfg = get_client_config(client_id)
 
         # Database queries
@@ -9818,8 +9819,10 @@ def export_income_pdf():
             download_name=out_filename
         )
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         print(f"Error exporting income PDF: {e}")
-        return jsonify({"error": friendly_error_message(e)}), 500
+        return jsonify({"error": f"Error generating PDF: {str(e)}"}), 500
 
 
 GSTR1_MONTH_MAP = {
