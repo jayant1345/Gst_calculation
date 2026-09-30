@@ -529,6 +529,16 @@ def init_db():
         cur.execute("ALTER TABLE income_code_catalog ADD COLUMN IF NOT EXISTS tax_type VARCHAR(20) DEFAULT 'CGST_SGST';")
         cur.execute("ALTER TABLE income_code_catalog ADD COLUMN IF NOT EXISTS ledger_role VARCHAR(20);")
 
+        # Admin-managed Expense PL code catalog (from CA reference list PL CODE_EXPENSE.xlsx)
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS expense_code_catalog (
+                code VARCHAR(50) PRIMARY KEY,
+                particulars VARCHAR(255) NOT NULL,
+                category VARCHAR(100) DEFAULT 'Expense',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        ''')
+
         cur.execute("ALTER TABLE income_entries ADD COLUMN IF NOT EXISTS auto_income_amount NUMERIC(15,2);")
         cur.execute("ALTER TABLE income_entries ADD COLUMN IF NOT EXISTS manual_income_amount NUMERIC(15,2);")
 
@@ -5995,7 +6005,9 @@ def get_monthly_bill_summary():
 # ============================================================================
 
 INCOME_CATALOG_PATH = os.path.join(os.path.dirname(__file__), 'reference_data', 'income_master_catalog.json')
+EXPENSE_CATALOG_PATH = os.path.join(os.path.dirname(__file__), 'reference_data', 'expense_master_catalog.json')
 INCOME_MASTER_CODES = []
+EXPENSE_MASTER_CODES = []
 INCOME_MASTER_BRANCHES = [
     'ODHAV', 'RAKHIAL', 'NEW SHARDA', 'CHANGODAR', 'ISANPUR', 'MANINAGAR',
     'SHANTI COMM', 'MASKATI', 'VEJALPUR', 'JODHPUR-SATELLITE', 'PANJRAPOLE',
@@ -6013,6 +6025,14 @@ if os.path.exists(INCOME_CATALOG_PATH):
                 INCOME_MASTER_BRANCHES = cat_data.get('branches')
     except Exception as e:
         print(f"Error loading income master catalog: {e}")
+
+if os.path.exists(EXPENSE_CATALOG_PATH):
+    try:
+        with open(EXPENSE_CATALOG_PATH, 'r', encoding='utf-8') as f:
+            exp_data = json.load(f)
+            EXPENSE_MASTER_CODES = exp_data.get('expense_codes', [])
+    except Exception as e:
+        print(f"Error loading expense master catalog: {e}")
 
 def load_income_code_overrides():
     """Merge admin-added/edited GL/PL codes from income_code_catalog (durable
@@ -6065,14 +6085,73 @@ def load_income_code_overrides():
         else:
             INCOME_MASTER_CODES.append(entry)
 
+def load_expense_code_overrides():
+    """Merge admin-added/edited expense PL codes from expense_code_catalog on top
+    of the bundled JSON catalog, and auto-seed on startup."""
+    global EXPENSE_MASTER_CODES
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute('SELECT code, particulars, category FROM expense_code_catalog')
+        overrides = cur.fetchall()
+
+        db_codes = {str(r['code']).strip().upper() for r in overrides}
+        missing_seeds = [mc for mc in EXPENSE_MASTER_CODES if str(mc.get('code', '')).strip().upper() not in db_codes]
+        if missing_seeds:
+            for mc in missing_seeds:
+                c_clean = str(mc.get('code', '')).strip().upper()
+                if c_clean:
+                    cur.execute('''
+                        INSERT INTO expense_code_catalog (code, particulars, category)
+                        VALUES (%s, %s, %s)
+                        ON CONFLICT (code) DO NOTHING;
+                    ''', (
+                        c_clean,
+                        mc.get('particulars') or 'Branch Expense',
+                        mc.get('category') or 'Expense'
+                    ))
+            conn.commit()
+            cur.execute('SELECT code, particulars, category FROM expense_code_catalog')
+            overrides = cur.fetchall()
+
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print(f"Error loading expense code overrides from DB: {e}")
+        return
+    for ov in overrides:
+        clean = str(ov['code']).strip().upper()
+        existing = next((m for m in EXPENSE_MASTER_CODES if str(m.get('code')).strip().upper() == clean), None)
+        entry = dict(ov)
+        if existing:
+            existing.update(entry)
+        else:
+            EXPENSE_MASTER_CODES.append(entry)
+
 load_income_code_overrides()
+load_expense_code_overrides()
 
 def get_income_code_meta(code_str):
+    if not code_str:
+        return None
     clean = str(code_str).strip().upper()
     for m in INCOME_MASTER_CODES:
         if str(m.get('code')).strip().upper() == clean:
             return m
     return None
+
+def get_expense_code_meta(code_str):
+    if not code_str:
+        return None
+    clean = str(code_str).strip().upper()
+    for m in EXPENSE_MASTER_CODES:
+        if str(m.get('code')).strip().upper() == clean:
+            return m
+    return None
+
+def get_pl_code_meta(code_str):
+    """Lookup code in expense first, then income."""
+    return get_expense_code_meta(code_str) or get_income_code_meta(code_str)
 
 # ---------------------------------------------------------------------------
 # Ledger statement parsing (reads the bank's actual GL/PL account statements)
@@ -6628,6 +6707,13 @@ def finalize_ledger_accounts(raw_accounts, financial_year='2026-27', month='July
             a = code_map[code]
             meta = get_income_code_meta(code)
 
+            if meta is None:
+                exp_meta = get_expense_code_meta(code)
+                if exp_meta:
+                    # Account is an Expense PL Code (from CA PL CODE_EXPENSE.xlsx catalog)
+                    # Exclude from income_entries so it never falsely taxes operational bank expenses.
+                    continue
+
             # GL codes the catalog marks as a payable-ledger account (GL
             # 1878/1879/1880-style CGST/SGST/IGST payable control accounts,
             # or the CA step-7 exempt-income items) are not income - route
@@ -6811,7 +6897,7 @@ def finalize_expense_ledger_accounts(raw_accounts, financial_year, month):
     for branch, code_map in by_branch.items():
         for code, a in code_map.items():
             amount = round(-(a.get('net') or 0.0), 2)
-            meta = get_income_code_meta(code)
+            meta = get_expense_code_meta(code) or get_income_code_meta(code)
             entries.append({
                 "branch": branch,
                 "financial_year": a.get('financial_year') or financial_year,
@@ -6820,7 +6906,7 @@ def finalize_expense_ledger_accounts(raw_accounts, financial_year, month):
                 "particulars": meta.get('particulars') if meta else (a.get('name') or 'Unclassified Expense'),
                 "voucher_amount": amount,
                 "needs_review": meta is None,
-                "review_reason": None if meta else f"GL code {code} not found in the GL/PL code catalog (Manage GL/PL Codes) - please add it or verify",
+                "review_reason": None if meta else f"GL code {code} not found in the GL/PL code catalog (Manage PL Codes) - please add it or verify",
                 "filename": a.get('filename', 'upload'),
             })
     return entries
@@ -6906,10 +6992,129 @@ def income_page():
 @app.route('/api/income-codes-master', methods=['GET'])
 @login_required
 def get_income_codes_master():
+    code_type = request.args.get('type', '').strip().lower()
+    if code_type == 'expense':
+        return jsonify({
+            "branches": INCOME_MASTER_BRANCHES,
+            "codes": EXPENSE_MASTER_CODES
+        })
+    elif code_type == 'income':
+        return jsonify({
+            "branches": INCOME_MASTER_BRANCHES,
+            "codes": INCOME_MASTER_CODES
+        })
     return jsonify({
         "branches": INCOME_MASTER_BRANCHES,
-        "codes": INCOME_MASTER_CODES
+        "codes": INCOME_MASTER_CODES,
+        "income_codes": INCOME_MASTER_CODES,
+        "expense_codes": EXPENSE_MASTER_CODES
     })
+
+@app.route('/api/expense-codes-master', methods=['GET'])
+@login_required
+def get_expense_codes_master():
+    return jsonify({
+        "codes": EXPENSE_MASTER_CODES
+    })
+
+@app.route('/api/expense-codes-master', methods=['POST'])
+@login_required
+def add_expense_code_master():
+    if not is_admin_user():
+        return jsonify({"error": "Adding or editing expense PL codes is restricted to Administrator users only."}), 403
+
+    data = request.json or {}
+    code = str(data.get('code', '')).strip().upper()
+    particulars = str(data.get('particulars', '')).strip()
+    category = str(data.get('category') or 'Expense').strip()
+    if not code or not particulars:
+        return jsonify({"error": "Expense PL code and particulars are both required."}), 400
+
+    global EXPENSE_MASTER_CODES
+    entry = {"code": code, "particulars": particulars, "category": category}
+    existing = next((m for m in EXPENSE_MASTER_CODES if str(m.get('code')).strip().upper() == code), None)
+    if existing:
+        existing.update(entry)
+    else:
+        EXPENSE_MASTER_CODES.append(entry)
+
+    try:
+        with open(EXPENSE_CATALOG_PATH, 'w', encoding='utf-8') as f:
+            json.dump({"expense_codes": EXPENSE_MASTER_CODES}, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        print(f"Note: could not write expense_master_catalog.json: {e}")
+
+    fixed_count = 0
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute('''
+            INSERT INTO expense_code_catalog (code, particulars, category)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (code) DO UPDATE SET
+                particulars = EXCLUDED.particulars,
+                category = EXCLUDED.category
+        ''', (code, particulars, category))
+
+        cur.execute('''
+            UPDATE purchase_gl_vouchers
+            SET particulars = %s, needs_review = FALSE, review_reason = NULL
+            WHERE UPPER(gl_code) = %s AND (needs_review = TRUE OR particulars IS NULL OR particulars = 'Unclassified Expense')
+        ''', (particulars, code))
+        fixed_count = cur.rowcount
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print(f"Error saving expense code {code}: {e}")
+        return jsonify({"error": friendly_error_message(e)}), 500
+
+    log_activity(session['user_id'], 'EDIT_EXPENSE_CODE' if existing else 'ADD_EXPENSE_CODE',
+                 f"{'Edited' if existing else 'Added'} Expense PL code {code} ({particulars})")
+
+    return jsonify({"success": True, "code": entry, "updated_existing": existing is not None, "vouchers_fixed": fixed_count})
+
+@app.route('/api/expense-codes-master/<code>', methods=['DELETE'])
+@login_required
+def delete_expense_code_master(code):
+    if not is_admin_user():
+        return jsonify({"error": "Deleting expense PL codes is restricted to Administrator users only."}), 403
+
+    clean = str(code).strip().upper()
+    global EXPENSE_MASTER_CODES
+    before = len(EXPENSE_MASTER_CODES)
+    EXPENSE_MASTER_CODES = [m for m in EXPENSE_MASTER_CODES if str(m.get('code')).strip().upper() != clean]
+    if len(EXPENSE_MASTER_CODES) == before:
+        return jsonify({"error": f"Code {code} not found in the expense catalog."}), 404
+
+    try:
+        with open(EXPENSE_CATALOG_PATH, 'w', encoding='utf-8') as f:
+            json.dump({"expense_codes": EXPENSE_MASTER_CODES}, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        print(f"Note: could not write expense_master_catalog.json: {e}")
+
+    affected_count = 0
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute('DELETE FROM expense_code_catalog WHERE UPPER(code) = %s', (clean,))
+        cur.execute('''
+            UPDATE purchase_gl_vouchers
+            SET needs_review = TRUE,
+                review_reason = %s
+            WHERE UPPER(gl_code) = %s
+        ''', (f"Expense PL code {clean} was removed from the catalog - please reclassify", clean))
+        affected_count = cur.rowcount
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print(f"Error deleting expense code {code}: {e}")
+        return jsonify({"error": friendly_error_message(e)}), 500
+
+    log_activity(session['user_id'], 'DELETE_EXPENSE_CODE', f"Deleted Expense PL code {clean} - {affected_count} existing vouchers re-flagged for review")
+
+    return jsonify({"success": True, "affected_vouchers": affected_count})
 
 @app.route('/api/income-codes-master', methods=['POST'])
 @login_required
@@ -7158,13 +7363,13 @@ def upload_gl_voucher():
                                 "error": "No GL code could be read from this voucher - add it via Manual Entry instead"
                             })
                             continue
-                        meta = get_income_code_meta(gl_code)
+                        meta = get_expense_code_meta(gl_code) or get_income_code_meta(gl_code)
                         entries.append({
                             "branch": branch, "financial_year": fy, "month": month, "gl_code": gl_code,
                             "particulars": meta.get('particulars') if meta else (v.get('particulars') or 'Unclassified Expense'),
                             "voucher_amount": amount,
                             "needs_review": meta is None,
-                            "review_reason": None if meta else f"GL code {gl_code} not found in the GL/PL code catalog (Manage GL/PL Codes) - please add it or verify",
+                            "review_reason": None if meta else f"GL code {gl_code} not found in the GL/PL code catalog (Manage PL Codes) - please add it or verify",
                             "source": "scan",
                             "file_data": fbytes,
                         })
@@ -7255,10 +7460,10 @@ def save_gl_voucher_manual():
     if not gl_code or not fy or not month:
         return jsonify({"error": "Branch, Financial Year, Month, and GL Code are required."}), 400
 
-    meta = get_income_code_meta(gl_code)
+    meta = get_expense_code_meta(gl_code) or get_income_code_meta(gl_code)
     particulars = meta.get('particulars') if meta else 'Unclassified Expense'
     needs_review = meta is None
-    review_reason = None if meta else f"GL code {gl_code} not found in the GL/PL code catalog (Manage GL/PL Codes) - please add it or verify"
+    review_reason = None if meta else f"GL code {gl_code} not found in the GL/PL code catalog (Manage PL Codes) - please add it or verify"
 
     try:
         conn = get_db_connection()
@@ -7395,7 +7600,7 @@ def gl_tally_report():
         voucher_row = voucher_totals.get(key)
         bills_total = bill_row['bills_total'] if bill_row else 0.0
         voucher_total = voucher_row['voucher_total'] if voucher_row else 0.0
-        particulars = (voucher_row['particulars'] if voucher_row else None) or (get_income_code_meta(gl_code) or {}).get('particulars') or gl_code
+        particulars = (voucher_row['particulars'] if voucher_row else None) or (get_expense_code_meta(gl_code) or {}).get('particulars') or (get_income_code_meta(gl_code) or {}).get('particulars') or gl_code
         diff = round(bills_total - voucher_total, 2)
 
         if bill_row and not voucher_row:

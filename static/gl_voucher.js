@@ -248,8 +248,8 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         glCodesTableBody.querySelectorAll('.btn-delete-gl-code').forEach(btn => {
             btn.addEventListener('click', () => {
-                if (!confirm(`Delete PL code ${btn.dataset.code}? This is the same shared catalog Income & Output GST uses - bills/vouchers/income entries already tagged with it are left as-is.`)) return;
-                fetch(`/api/income-codes-master/${encodeURIComponent(btn.dataset.code)}`, { method: 'DELETE' })
+                if (!confirm(`Delete Expense PL code ${btn.dataset.code}? Bills/vouchers already tagged with it are left as-is.`)) return;
+                fetch(`/api/expense-codes-master/${encodeURIComponent(btn.dataset.code)}`, { method: 'DELETE' })
                     .then(async res => {
                         const data = await res.json().catch(() => ({}));
                         if (!res.ok) throw new Error(data.error || 'Failed to delete code.');
@@ -270,7 +270,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const particulars = document.getElementById('glCodeInputParticulars').value.trim();
             const category = document.getElementById('glCodeInputCategory').value.trim();
 
-            fetch('/api/income-codes-master', {
+            fetch('/api/expense-codes-master', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ code, particulars, category })
@@ -286,7 +286,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     glCodeFormMsg.style.display = 'block';
                     glCodeFormMsg.style.background = '#dcfce7';
                     glCodeFormMsg.style.color = '#166534';
-                    glCodeFormMsg.textContent = `Saved PL code ${code}.`;
+                    glCodeFormMsg.textContent = `Saved Expense PL code ${code}.`;
                     setTimeout(() => { glCodeFormMsg.style.display = 'none'; }, 3000);
                 }
                 return window.loadGlPlCodes();

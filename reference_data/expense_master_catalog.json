@@ -1,0 +1,414 @@
+{
+  "expense_codes": [
+    {
+      "code": "3150",
+      "particulars": "INT.INCOME ON DEPO. WITH OTHER BANKS",
+      "category": "Interest Expense"
+    },
+    {
+      "code": "3155",
+      "particulars": "(G-SEC) INTEREST ON INVESTMENTS",
+      "category": "Interest Expense"
+    },
+    {
+      "code": "3156",
+      "particulars": "INTEREST ON INVESTMENT (TRADING)",
+      "category": "Interest Expense"
+    },
+    {
+      "code": "3157",
+      "particulars": "INTEREST ON TAX FREE BOND",
+      "category": "Interest Expense"
+    },
+    {
+      "code": "3158",
+      "particulars": "INTEREST ON TAXABLE BOND",
+      "category": "Interest Expense"
+    },
+    {
+      "code": "3170",
+      "particulars": "INTEREST RECEIVED FROM BRANCHES",
+      "category": "Interest Expense"
+    },
+    {
+      "code": "3178",
+      "particulars": "SDF LENDING INTEREST INCOME",
+      "category": "Interest Expense"
+    },
+    {
+      "code": "3215",
+      "particulars": "PAY ORDER",
+      "category": "Banking Operations"
+    },
+    {
+      "code": "3270",
+      "particulars": "PROCESSING CHARGES",
+      "category": "Banking Operations"
+    },
+    {
+      "code": "3271",
+      "particulars": "RENEWAL FEES",
+      "category": "Banking Operations"
+    },
+    {
+      "code": "3274",
+      "particulars": "INCOME FROM E-STAMPING",
+      "category": "Banking Operations"
+    },
+    {
+      "code": "3286",
+      "particulars": "COMM. ON PMJJBY LIC",
+      "category": "Banking Operations"
+    },
+    {
+      "code": "3288",
+      "particulars": "NPCI SETTLEMENT AC(ATM/POS/IMPS)",
+      "category": "Banking Operations"
+    },
+    {
+      "code": "3296",
+      "particulars": "RTGS/NEFT MANUAL CHARGES",
+      "category": "Banking Operations"
+    },
+    {
+      "code": "3297",
+      "particulars": "ASBA FORM PRINT CHARGES",
+      "category": "Banking Operations"
+    },
+    {
+      "code": "3298",
+      "particulars": "MANDATE HANDLING CHARGES",
+      "category": "Banking Operations"
+    },
+    {
+      "code": "3300",
+      "particulars": "INCIDENTAL CHARGES",
+      "category": "Banking Operations"
+    },
+    {
+      "code": "3305",
+      "particulars": "SHARE TRANSFER FEES",
+      "category": "Banking Operations"
+    },
+    {
+      "code": "3310",
+      "particulars": "MISCELLANEOUS INCOME",
+      "category": "Banking Operations"
+    },
+    {
+      "code": "3311",
+      "particulars": "I/W CHQ.RET.CHARGES RECEIVED A/C",
+      "category": "Banking Operations"
+    },
+    {
+      "code": "3312",
+      "particulars": "OUTWARD CHQ.RET.CHARGES RECEIVED A/C",
+      "category": "Banking Operations"
+    },
+    {
+      "code": "3313",
+      "particulars": "ECS RET.CHARGES RECEIVED A/C",
+      "category": "Banking Operations"
+    },
+    {
+      "code": "3314",
+      "particulars": "CHQ.BOOK ISSUE CHARGES A/C",
+      "category": "Banking Operations"
+    },
+    {
+      "code": "3316",
+      "particulars": "CASH CHARGES A/C",
+      "category": "Banking Operations"
+    },
+    {
+      "code": "3320",
+      "particulars": "RENT ON LOCKER",
+      "category": "Banking Operations"
+    },
+    {
+      "code": "3324",
+      "particulars": "PENALTY ON OVERDUE LOCKER RENT",
+      "category": "Banking Operations"
+    },
+    {
+      "code": "3329",
+      "particulars": "PROFIT ON SALE OF INVESTMENT SHORT TERM",
+      "category": "Banking Operations"
+    },
+    {
+      "code": "3332",
+      "particulars": "P&L ASBA COMMISSION INCOME",
+      "category": "Banking Operations"
+    },
+    {
+      "code": "3345",
+      "particulars": "DEMATERIALISATION CHARGES",
+      "category": "Banking Operations"
+    },
+    {
+      "code": "3346",
+      "particulars": "KRA UPLOAD CHARGES",
+      "category": "Banking Operations"
+    },
+    {
+      "code": "3350",
+      "particulars": "ANNUAL MAINTENANCE CHARGES",
+      "category": "Banking Operations"
+    },
+    {
+      "code": "3358",
+      "particulars": "DEMAT MODIFICATION CHARGES",
+      "category": "Banking Operations"
+    },
+    {
+      "code": "3360",
+      "particulars": "SELL- TRANSACTION CHARGES",
+      "category": "Banking Operations"
+    },
+    {
+      "code": "3361",
+      "particulars": "DELIVERY SLIP BOOK CHARGES",
+      "category": "Banking Operations"
+    },
+    {
+      "code": "3370",
+      "particulars": "PLEDGE/MARGIN PLEDGE CHARGES",
+      "category": "Banking Operations"
+    },
+    {
+      "code": "3385",
+      "particulars": "LATE INSTRUCTION CHARGES",
+      "category": "Banking Operations"
+    },
+    {
+      "code": "3397",
+      "particulars": "ROUNDING OFF INCOME",
+      "category": "Banking Operations"
+    },
+    {
+      "code": "3405",
+      "particulars": "SAVING BANK DEPOSITS",
+      "category": "Interest Expense"
+    },
+    {
+      "code": "3410",
+      "particulars": "FIXED DEPOSITS (PUBLIC)",
+      "category": "Interest Expense"
+    },
+    {
+      "code": "3415",
+      "particulars": "RECURRING DEPOSITS",
+      "category": "Interest Expense"
+    },
+    {
+      "code": "3420",
+      "particulars": "S.S.D.C. (PUBLIC)",
+      "category": "Interest Expense"
+    },
+    {
+      "code": "3431",
+      "particulars": "MONTHLY INTEREST DEPOSIT CERTIFICATE",
+      "category": "Interest Expense"
+    },
+    {
+      "code": "3445",
+      "particulars": "INT PAID ON BRANCH BALANCE",
+      "category": "Interest Expense"
+    },
+    {
+      "code": "3500",
+      "particulars": "SALARIES (BASIC)",
+      "category": "Staff Expense"
+    },
+    {
+      "code": "3505",
+      "particulars": "DEARNESS ALLOWANCE",
+      "category": "Staff Expense"
+    },
+    {
+      "code": "3510",
+      "particulars": "HOUSE RENT ALLOWANCE",
+      "category": "Staff Expense"
+    },
+    {
+      "code": "3515",
+      "particulars": "CITY COMPEN.ALLOWANCE",
+      "category": "Staff Expense"
+    },
+    {
+      "code": "3525",
+      "particulars": "CASHIER ALLOWANCE",
+      "category": "Staff Expense"
+    },
+    {
+      "code": "3537",
+      "particulars": "POST ALLOWANCE",
+      "category": "Staff Expense"
+    },
+    {
+      "code": "3538",
+      "particulars": "SPECIAL PAY ALLOWANCE",
+      "category": "Staff Expense"
+    },
+    {
+      "code": "3550",
+      "particulars": "WASHING EXPENSESE",
+      "category": "Staff Expense"
+    },
+    {
+      "code": "3560",
+      "particulars": "BANK S CONTRIBUTION TO STAFF P.F.",
+      "category": "Staff Expense"
+    },
+    {
+      "code": "3565",
+      "particulars": "BANK S CONTRIBUTION TO STAFF F.P.F.",
+      "category": "Staff Expense"
+    },
+    {
+      "code": "3655",
+      "particulars": "TEA EXPENSES",
+      "category": "Staff Expense"
+    },
+    {
+      "code": "3675",
+      "particulars": "TRANSPORT EXPENSES (STAFF)",
+      "category": "Staff Expense"
+    },
+    {
+      "code": "3680",
+      "particulars": "MEDICAL EXPENCIES",
+      "category": "Staff Expense"
+    },
+    {
+      "code": "3699",
+      "particulars": "JAIIB/CAIIB EXAM ALLOWANCE",
+      "category": "Staff Expense"
+    },
+    {
+      "code": "3710",
+      "particulars": "ELECTRICITY & LIGHTING CHARGES",
+      "category": "Premises & Utility"
+    },
+    {
+      "code": "3800",
+      "particulars": "POSTAGES PAID WITHOUT GST",
+      "category": "Communication & Postage"
+    },
+    {
+      "code": "3801",
+      "particulars": "COURIER CHARGES PAID",
+      "category": "Communication & Postage"
+    },
+    {
+      "code": "3805",
+      "particulars": "TELEGRAM & TELEPHONE CHARGES",
+      "category": "Communication & Postage"
+    },
+    {
+      "code": "3820",
+      "particulars": "LEASE LINE TELEPHONE CHARGES",
+      "category": "Communication & Postage"
+    },
+    {
+      "code": "3830",
+      "particulars": "INTERNAL AUDIT FEES",
+      "category": "Audit & Professional"
+    },
+    {
+      "code": "3936",
+      "particulars": "MAINTENANCE & REPAIRS TO OFFICE EQUIPMENTS",
+      "category": "Repairs & Maintenance"
+    },
+    {
+      "code": "3940",
+      "particulars": "COMPUTER SYSTEMS",
+      "category": "Repairs & Maintenance"
+    },
+    {
+      "code": "3950",
+      "particulars": "PRINTED STATIONARY",
+      "category": "Stationery & Printing"
+    },
+    {
+      "code": "3955",
+      "particulars": "TABLE STATIONARY",
+      "category": "Stationery & Printing"
+    },
+    {
+      "code": "3960",
+      "particulars": "ADVERTISEMENT",
+      "category": "Marketing & Business Promotion"
+    },
+    {
+      "code": "4005",
+      "particulars": "MISCELLANEOUS EXPENSES WITHOUT GST",
+      "category": "Administrative & General"
+    },
+    {
+      "code": "4006",
+      "particulars": "MISCELLANEOUS EXPENSE WITH GST",
+      "category": "Administrative & General"
+    },
+    {
+      "code": "4007",
+      "particulars": "CHARGES PAID TO OTHER BANK",
+      "category": "Administrative & General"
+    },
+    {
+      "code": "4010",
+      "particulars": "SWEEPING CHARGES",
+      "category": "Administrative & General"
+    },
+    {
+      "code": "4020",
+      "particulars": "SUBSCRIPTION TO NEWS PAPERS",
+      "category": "Administrative & General"
+    },
+    {
+      "code": "4025",
+      "particulars": "WATCH AND WARD CHARGES",
+      "category": "Administrative & General"
+    },
+    {
+      "code": "4070",
+      "particulars": "CONVEYANCE EXPENSES",
+      "category": "Administrative & General"
+    },
+    {
+      "code": "4090",
+      "particulars": "PROFESSIONAL FEES A/C",
+      "category": "Audit & Professional"
+    },
+    {
+      "code": "4112",
+      "particulars": "DSA MARKETING EXPENSES",
+      "category": "Marketing & Business Promotion"
+    },
+    {
+      "code": "4117",
+      "particulars": "DSA COMMISION UNDER RCM",
+      "category": "Marketing & Business Promotion"
+    },
+    {
+      "code": "4175",
+      "particulars": "CHARGES PAID TO CCIL",
+      "category": "Administrative & General"
+    },
+    {
+      "code": "4191",
+      "particulars": "PAYMENT TO CONTRACTOR",
+      "category": "Administrative & General"
+    },
+    {
+      "code": "4197",
+      "particulars": "SERVICE TAX/GST EXPENSE",
+      "category": "Administrative & General"
+    },
+    {
+      "code": "4206",
+      "particulars": "NPCI SETTLEMENT EXP A/C",
+      "category": "Administrative & General"
+    }
+  ]
+}

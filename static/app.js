@@ -455,18 +455,17 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     loadMasterData();
 
-    // PL Code catalog - the SAME shared list Section 3 (Income & Output
-    // GST) manages under "Manage PL Codes". One bank chart of accounts,
-    // not a separate list per section. gl_voucher.js also reads window.glPlCodes.
+    // PL Code catalog - loads official bank expense PL codes (from CA reference list)
+    // for tagging Purchase Bills and classifying branch PL vouchers in Section 1.
     window.glPlCodes = [];
     function loadGlPlCodes() {
-        return fetch('/api/income-codes-master')
+        return fetch('/api/expense-codes-master')
             .then(res => res.json())
             .then(data => {
                 window.glPlCodes = data.codes || [];
                 populateGlCodeDropdowns();
             })
-            .catch(err => console.error("Error loading PL codes:", err));
+            .catch(err => console.error("Error loading Expense PL codes:", err));
     }
     loadGlPlCodes();
     window.loadGlPlCodes = loadGlPlCodes;
