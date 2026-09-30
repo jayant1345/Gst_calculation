@@ -743,6 +743,14 @@ document.addEventListener('DOMContentLoaded', () => {
         window.location.href = `/api/export-income-working-sheet?client_id=${currentClientId}&financial_year=${encodeURIComponent(currentFinancialYear)}&month=${encodeURIComponent(currentMonth)}`;
     });
 
+    // 9a. Export Working Sheet (PDF)
+    const btnExportIncomePdf = document.getElementById('btnExportIncomePdf');
+    if (btnExportIncomePdf) {
+        btnExportIncomePdf.addEventListener('click', () => {
+            window.location.href = `/api/export-income-pdf?client_id=${currentClientId}&financial_year=${encodeURIComponent(currentFinancialYear)}&month=${encodeURIComponent(currentMonth)}`;
+        });
+    }
+
     // 9b. GSTR-1 JSON Generation & Modal
     const btnExportGstr1Json = document.getElementById('btnExportGstr1Json');
     const gstr1ModalOverlay = document.getElementById('gstr1ModalOverlay');

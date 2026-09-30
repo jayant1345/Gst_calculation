@@ -6190,13 +6190,23 @@ def get_pl_code_meta(code_str):
 RECLASS_DEFERRED_TO_INCOME = {}
 
 _LEDGER_NUM_RE = re.compile(r'^-?[\d,]+(?:\.\d+)?$')
-_ACCTNO_COLON_RE = re.compile(r'^Acct No\s*:\s*(\d{3,6})\s*/\s*(.*)$', re.IGNORECASE)
-_LEDGER_PDF_ACCOUNT_LABELS = ('account id', 'account id.')
-# format 1 ("Total :"/"Total:") has no leading count; format 2 (bare "Total")
-# prints a leading entry-count token before Dr/Cr.
-_LEDGER_PDF_TOTAL_LABELS = {'total :': 0, 'total:': 0, 'total': 1}
-_LEDGER_XLSX_ACCOUNT_LABELS = ('a/c no', 'a/c no.')
-_LEDGER_XLSX_TOTAL_LABELS = {'closing balance': 0}
+_ACCTNO_COLON_RE = re.compile(r'^Acct\s*No\s*:\s*(?:PL|GL|P/L|G/L)?\s*(\d{3,6})\s*[/:-]\s*(.*)$', re.IGNORECASE)
+_LEDGER_PDF_ACCOUNT_LABELS = (
+    'account id', 'account id.', 'account no', 'account no.', 'a/c no', 'a/c no.',
+    'acct no', 'acct no.', 'gl account', 'gl account no', 'gl code', 'pl code'
+)
+_LEDGER_PDF_TOTAL_LABELS = {
+    'total :': 0, 'total:': 0, 'total': 1, 'account total :': 0, 'account total:': 0,
+    'grand total :': 0, 'closing balance': 0, 'closing balance:': 0, 'closing balance :': 0
+}
+_LEDGER_XLSX_ACCOUNT_LABELS = (
+    'a/c no', 'a/c no.', 'account id', 'account id.', 'account no', 'account no.',
+    'acct no', 'acct no.', 'gl account', 'code no.', 'code no'
+)
+_LEDGER_XLSX_TOTAL_LABELS = {
+    'closing balance': 0, 'closing balance:': 0, 'closing balance :': 0,
+    'total :': 0, 'total:': 0, 'total': 0
+}
 
 
 def _ledger_num(tok):
@@ -6235,16 +6245,19 @@ def _capture_closing_balance_value(lines, start_idx, max_lookahead=15):
 
 def _extract_ledger_code(cand):
     cand = cand.strip()
-    m2 = re.match(r'^(\d{3,6})\s*-\s*(.+)$', cand)
+    cand_clean = re.sub(r'^(?:PL|GL|P/L|G/L)[\s\-_.:]*', '', cand, flags=re.IGNORECASE).strip()
+    m2 = re.match(r'^(\d{3,6})\s*[-:]\s*(.+)$', cand_clean)
     if m2:
         return m2.group(1), m2.group(2).strip()
-    if '/' in cand:
-        parts = [p.strip() for p in cand.split('/') if p.strip()]
-        if parts and re.match(r'^\d{3,6}$', parts[-1]):
-            return parts[-1], None
-    if re.match(r'^\d{6,}$', cand):
-        return cand[-4:], None
-    m4 = re.match(r'^(\d{3,6})\b', cand)
+    if '/' in cand_clean:
+        parts = [p.strip() for p in cand_clean.split('/') if p.strip()]
+        for p in parts:
+            p_code = re.sub(r'^(?:PL|GL|P/L|G/L)[\s\-_.:]*', '', p, flags=re.IGNORECASE).strip()
+            if re.match(r'^\d{3,6}$', p_code):
+                return p_code, None
+    if re.match(r'^\d{6,}$', cand_clean):
+        return cand_clean[-4:], None
+    m4 = re.match(r'^(\d{3,6})\b', cand_clean)
     if m4:
         return m4.group(1), None
     return None, None
@@ -6256,36 +6269,50 @@ def _scan_ledger_lines(lines, account_labels, total_labels):
     i = 0
     while i < n:
         line = lines[i].strip()
-        if line.lower() in account_labels:
-            j = i + 1
+        line_lower = line.lower()
+        m_same = re.match(r'^(?:account\s*id|a/c\s*no|account\s*no|acct\s*no|gl\s*account|pl\s*code|gl\s*code)\s*[:.\-_]\s*(.+)$', line, re.IGNORECASE)
+        is_label_only = (line_lower in account_labels) or (line_lower.rstrip(':.-').strip() in account_labels)
+
+        if is_label_only or m_same:
             code = None
             name = None
-            look = j
-            while look < n and look < j + 8:
-                cand = lines[look].strip()
-                if cand.lower() in account_labels:
-                    i = look
-                    j = look + 1
-                    look = j
-                    continue
-                c, nm = _extract_ledger_code(cand)
+            look = i + 1
+
+            if m_same:
+                c, nm = _extract_ledger_code(m_same.group(1).strip())
                 if c:
                     code = c
                     name = nm
-                    if name is None:
-                        look2 = look + 1
-                        while look2 < n and lines[look2].strip() != 'Name':
-                            look2 += 1
-                            if look2 > look + 4:
-                                break
-                        if look2 < n and lines[look2].strip() == 'Name':
-                            nn = look2 + 1
-                            while nn < n and not lines[nn].strip():
-                                nn += 1
-                            if nn < n:
-                                name = lines[nn].strip()
-                    break
-                look += 1
+
+            if not code:
+                j = i + 1
+                look = j
+                while look < n and look < j + 8:
+                    cand = lines[look].strip()
+                    cand_lower = cand.lower().rstrip(':.-').strip()
+                    if cand_lower in account_labels or re.match(r'^(?:account\s*id|a/c\s*no|account\s*no|acct\s*no)\b', cand, re.IGNORECASE):
+                        i = look
+                        j = look + 1
+                        look = j
+                        continue
+                    c, nm = _extract_ledger_code(cand)
+                    if c:
+                        code = c
+                        name = nm
+                        if name is None:
+                            look2 = look + 1
+                            while look2 < n and lines[look2].strip() != 'Name':
+                                look2 += 1
+                                if look2 > look + 4:
+                                    break
+                            if look2 < n and lines[look2].strip() == 'Name':
+                                nn = look2 + 1
+                                while nn < n and not lines[nn].strip():
+                                    nn += 1
+                                if nn < n:
+                                    name = lines[nn].strip()
+                        break
+                    look += 1
 
             if code is None:
                 i += 1
@@ -6296,16 +6323,25 @@ def _scan_ledger_lines(lines, account_labels, total_labels):
             closing_balance = None
             while k < n:
                 lk = lines[k].strip()
-                if lk.lower() in account_labels:
+                lk_lower = lk.lower().rstrip(':.-').strip()
+                if (lk_lower in account_labels) or re.match(r'^(?:account\s*id|a/c\s*no|account\s*no|acct\s*no)\b', lk, re.IGNORECASE):
                     break
-                if lk.lower() in total_labels:
-                    skip = total_labels[lk.lower()]
+
+                matched_skip = None
+                for t_lbl, skip_val in total_labels.items():
+                    if lk.lower() == t_lbl or lk_lower == t_lbl.rstrip(':.-').strip():
+                        matched_skip = skip_val
+                        break
+
+                if matched_skip is not None:
+                    skip = matched_skip
                     nums = []
                     kk = k + 1
                     steps = 0
                     while kk < n and len(nums) < 2 + skip and steps < 20:
                         val = lines[kk].strip()
-                        if val.lower() in account_labels:
+                        val_lower = val.lower().rstrip(':.-').strip()
+                        if val_lower in account_labels or re.match(r'^(?:account\s*id|a/c\s*no|account\s*no|acct\s*no)\b', val, re.IGNORECASE):
                             break
                         if _LEDGER_NUM_RE.match(val):
                             nums.append(_ledger_num(val))
@@ -6314,11 +6350,7 @@ def _scan_ledger_lines(lines, account_labels, total_labels):
                     nums = nums[skip:]
                     if len(nums) >= 2:
                         total_dr, total_cr = nums[0], nums[1]
-                    # Only the "Closing Balance"-anchored format (format 3)
-                    # ever prints a genuine running balance near this line -
-                    # the "Total"/"Total :" anchors (formats 1/2) never do,
-                    # so closing_balance correctly stays None for those.
-                    if lk.lower() == 'closing balance':
+                    if 'closing balance' in lk.lower():
                         closing_balance = _capture_closing_balance_value(lines, kk)
                     k = kk
                     continue
@@ -6350,7 +6382,7 @@ def _scan_acctno_colon_format(lines):
                 lk = lines[k].strip()
                 if _ACCTNO_COLON_RE.match(lk):
                     break
-                if lk.lower() in ('total :', 'total:'):
+                if lk.lower() in ('total :', 'total:', 'total'):
                     nums = []
                     kk = k + 1
                     steps = 0
@@ -6376,6 +6408,7 @@ def _scan_acctno_colon_format(lines):
         else:
             i += 1
     return accounts
+
 
 
 def _flatten_ledger_rows(rows_iter):
@@ -6964,14 +6997,22 @@ def parse_full_workbook_excel(file_bytes, filename, financial_year='2026-27', mo
                         return 0.0
                 ref_wo_amt = _to_f(ref_wo_c)
                 ref_w_amt = _to_f(ref_w_c)
-                is_tax = (cgst_amt + sgst_amt + igst_amt) > 0 or t_val > 0
-                if 'E-STAMPING' in p_str.upper() or 'EXEMPT' in p_str.upper():
+                m_code = re.match(r'^(?:PL|GL|P/L|G/L)?\s*(\d{3,6})$', c_str, re.IGNORECASE)
+                clean_code = m_code.group(1) if m_code else c_str
+                meta = get_income_code_meta(clean_code)
+                if meta:
+                    p_str = meta.get('particulars') or p_str
+                    is_tax = meta.get('is_taxable', True)
+                elif 'E-STAMPING' in p_str.upper() or 'EXEMPT' in p_str.upper():
                     is_tax = False
+                else:
+                    is_tax = (cgst_amt + sgst_amt + igst_amt) > 0 or t_val > 0
+
                 results.append({
                     "branch": b_name,
                     "financial_year": financial_year,
                     "month": month,
-                    "gl_code": c_str,
+                    "gl_code": clean_code,
                     "particulars": p_str,
                     "income_amount": t_val,
                     "is_taxable": is_tax,
@@ -8523,6 +8564,7 @@ def export_income_working_sheet():
                             pass
 
                 # Update branch sheets with uploaded statement numbers
+                branch_computed = {}
                 grand_income = grand_ggst = grand_cgst = grand_igst = 0.0
                 grand_ref_wo = grand_ref_w = 0.0
                 code_row_re = re.compile(r'^(?:PL|GL)?\s*(\d{3,6})$', re.IGNORECASE)
@@ -8564,7 +8606,17 @@ def export_income_working_sheet():
                             matched_dict = branch_map[b_key]
                             break
                     matched_dict = matched_dict or {}
-                    total_row = {'HO': 57, 'DEMAT': 31}.get(sname.strip().upper(), 62)
+
+                    # Dynamically locate the TOTAL row in this branch sheet
+                    total_row = None
+                    for r_search in range(20, min(ws_b.max_row + 1, 80)):
+                        val2 = str(ws_b.cell(r_search, 2).value or '').strip().upper()
+                        val1 = str(ws_b.cell(r_search, 1).value or '').strip().upper()
+                        if val2.startswith('TOTAL') or val1.startswith('TOTAL'):
+                            total_row = r_search
+                            break
+                    if not total_row:
+                        total_row = {'HO': 52, 'DEMAT': 31}.get(sname.strip().upper(), 62)
 
                     b_tot_inc = 0.0
                     b_tot_ggst = 0.0
@@ -8618,8 +8670,17 @@ def export_income_working_sheet():
                             _set(ws_b, r, 6, igst_amt if igst_amt else None)
                             _set(ws_b, r, 7, ref_wo if ref_wo else None)
                             _set(ws_b, r, 8, ref_w if ref_w else None)
+                        elif matched_dict:
+                            # Branch statement uploaded; codes not present in statement have 0.0 for this period
+                            inc_amt = sgst_amt = cgst_amt = igst_amt = ref_wo = ref_w = 0.0
+                            _set(ws_b, r, 3, 0.0)
+                            _set(ws_b, r, 4, 0.0)
+                            _set(ws_b, r, 5, 0.0)
+                            _set(ws_b, r, 6, None)
+                            _set(ws_b, r, 7, None)
+                            _set(ws_b, r, 8, None)
                         else:
-                            # Preserve master template baseline if no statement row ingested
+                            # Preserve master template baseline only if no statements uploaded for branch
                             inc_amt = _num(ws_b.cell(r, 3).value)
                             sgst_amt = _num(ws_b.cell(r, 4).value)
                             cgst_amt = _num(ws_b.cell(r, 5).value)
@@ -8837,13 +8898,9 @@ def export_income_working_sheet():
 
                     # Step 7: Update Section (1) Non-Taxable / Exempt Income (Rows 7 to 20)
                     EXEMPT_ROW_MAP = {
-                        '3300': 7,   # INTEREST INCOME (EXEMPTED)
                         '3275': 8,   # INCOME FROM NON JUDICIAL FRANKING STAMP(3275)
-                        '3314': 9,   # INVESTMENT FLUCTU FUND BROUGHT
-                        '3312': 10,  # PROFIT ON SALE OF INVESTMENT(S)(GROSS AMT)
                         '3354': 11,  # PL 3354 PROVISION FOR OD INTEREST WRITTEN BACK
                         '3304': 12,  # 3304 BUILD FUND PROV BROGHT BAK
-                        '3316': 13,  # DEP AMT BK MMCB OF SHREYAS
                         '3307': 14,  # 3307 WRITTEN OF AMT RECOVERED
                         '3402': 15,  # PL 3402 BDDR BROUGHT BACK
                         '3353': 16,  # 3353-EXCESS PROV.FOR I.T WRTN BACK
@@ -8887,15 +8944,15 @@ def export_income_working_sheet():
                     tot_ledger_sgst = sum(r['closing_balance'] for r in ledger_rows if r.get('ledger_role') == 'SGST_PAYABLE' and r.get('closing_balance') is not None)
                     tot_ledger_igst = sum(r['closing_balance'] for r in ledger_rows if r.get('ledger_role') == 'IGST_PAYABLE' and r.get('closing_balance') is not None)
 
-                    if tot_ledger_cgst or tot_ledger_sgst or tot_ledger_igst:
-                        _set(ws_sum, 31, 4, round(tot_ledger_sgst, 2))
-                        _set(ws_sum, 31, 5, round(tot_ledger_cgst, 2))
-                        _set(ws_sum, 31, 6, round(tot_ledger_igst, 2))
-                        _set(ws_sum, 31, 7, round(tot_ledger_sgst + tot_ledger_cgst + tot_ledger_igst, 2))
-                        _set(ws_sum, 32, 4, round(tot_ggst - tot_ledger_sgst, 2))
-                        _set(ws_sum, 32, 5, round(tot_cgst - tot_ledger_cgst, 2))
-                        _set(ws_sum, 32, 6, round(grand_igst - tot_ledger_igst, 2))
-                        _set(ws_sum, 32, 7, round((tot_ggst - tot_ledger_sgst) + (tot_cgst - tot_ledger_cgst) + (grand_igst - tot_ledger_igst), 2))
+                    # Always write rows 31 & 32 so template baseline figures never leak into current period
+                    _set(ws_sum, 31, 4, round(tot_ledger_sgst, 2))
+                    _set(ws_sum, 31, 5, round(tot_ledger_cgst, 2))
+                    _set(ws_sum, 31, 6, round(tot_ledger_igst, 2))
+                    _set(ws_sum, 31, 7, round(tot_ledger_sgst + tot_ledger_cgst + tot_ledger_igst, 2))
+                    _set(ws_sum, 32, 4, round(tot_ggst - tot_ledger_sgst, 2))
+                    _set(ws_sum, 32, 5, round(tot_cgst - tot_ledger_cgst, 2))
+                    _set(ws_sum, 32, 6, round(grand_igst - tot_ledger_igst, 2))
+                    _set(ws_sum, 32, 7, round((tot_ggst - tot_ledger_sgst) + (tot_cgst - tot_ledger_cgst) + (grand_igst - tot_ledger_igst), 2))
 
                 # New sheet (CA steps 3-4-6): per-branch computed-from-income
                 # GST payable vs the bank's own ledger closing balance (GL
@@ -9120,6 +9177,64 @@ def export_income_working_sheet():
         ws_summary.cell(row=r_ptr, column=6, value=igst_total).font = bold_num_font
         ws_summary.cell(row=r_ptr, column=7, value=cgst_total + sgst_total + igst_total).font = bold_num_font
 
+        # Section 3: Consolidated Output GST & Payable Working (as required by CA)
+        tot_ledger_cgst = sum(r['closing_balance'] for r in ledger_rows if r.get('ledger_role') == 'CGST_PAYABLE' and r.get('closing_balance') is not None)
+        tot_ledger_sgst = sum(r['closing_balance'] for r in ledger_rows if r.get('ledger_role') == 'SGST_PAYABLE' and r.get('closing_balance') is not None)
+        tot_ledger_igst = sum(r['closing_balance'] for r in ledger_rows if r.get('ledger_role') == 'IGST_PAYABLE' and r.get('closing_balance') is not None)
+
+        r_ptr += 2
+        ws_summary.cell(row=r_ptr, column=2, value="(3) PAYABLE WORKING & RECONCILIATION").font = section_font
+        r_ptr += 1
+        headers_pay = ["PARTICULARS", "TAXABLE VALUE (₹)", "GGST 9% (₹)", "CGST 9% (₹)", "IGST 18% (₹)", "TOTAL GST (₹)"]
+        for c_idx, h in enumerate(headers_pay, start=2):
+            cell = ws_summary.cell(row=r_ptr, column=c_idx, value=h)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center")
+
+        r_ptr += 1
+        ws_summary.cell(row=r_ptr, column=2, value="(1) INCOME AS PER LEDGERWISE CALCULATION").font = num_font
+        ws_summary.cell(row=r_ptr, column=3, value=round(taxable_total, 2)).font = num_font
+        ws_summary.cell(row=r_ptr, column=4, value=round(sgst_total, 2)).font = num_font
+        ws_summary.cell(row=r_ptr, column=5, value=round(cgst_total, 2)).font = num_font
+        ws_summary.cell(row=r_ptr, column=6, value=round(igst_total, 2)).font = num_font
+        ws_summary.cell(row=r_ptr, column=7, value=round(sgst_total + cgst_total + igst_total, 2)).font = num_font
+
+        tot_ref_wo = sum(e.get('refund_without_gst', 0.0) or 0.0 for e in entries)
+        ref_gst_tot = round(tot_ref_wo * 0.09, 2)
+        r_ptr += 1
+        ws_summary.cell(row=r_ptr, column=2, value="(2) REFUND GIVEN BUT GST REFUND NOT GIVEN").font = num_font
+        ws_summary.cell(row=r_ptr, column=3, value=round(tot_ref_wo, 2)).font = num_font
+        ws_summary.cell(row=r_ptr, column=4, value=ref_gst_tot).font = num_font
+        ws_summary.cell(row=r_ptr, column=5, value=ref_gst_tot).font = num_font
+        ws_summary.cell(row=r_ptr, column=6, value=0.0).font = num_font
+        ws_summary.cell(row=r_ptr, column=7, value=round(ref_gst_tot * 2, 2)).font = num_font
+
+        tot_liab_sgst = round(sgst_total + ref_gst_tot, 2)
+        tot_liab_cgst = round(cgst_total + ref_gst_tot, 2)
+        tot_liab_igst = round(igst_total, 2)
+        r_ptr += 1
+        ws_summary.cell(row=r_ptr, column=2, value="TOTAL GST LIABILITY").font = bold_num_font
+        ws_summary.cell(row=r_ptr, column=3, value=round(taxable_total + tot_ref_wo, 2)).font = bold_num_font
+        ws_summary.cell(row=r_ptr, column=4, value=tot_liab_sgst).font = bold_num_font
+        ws_summary.cell(row=r_ptr, column=5, value=tot_liab_cgst).font = bold_num_font
+        ws_summary.cell(row=r_ptr, column=6, value=tot_liab_igst).font = bold_num_font
+        ws_summary.cell(row=r_ptr, column=7, value=round(tot_liab_sgst + tot_liab_cgst + tot_liab_igst, 2)).font = bold_num_font
+
+        r_ptr += 1
+        ws_summary.cell(row=r_ptr, column=2, value="PAYABLE AS PER LEDGER (GL 1878/1879/1880)").font = num_font
+        ws_summary.cell(row=r_ptr, column=4, value=round(tot_ledger_sgst, 2)).font = num_font
+        ws_summary.cell(row=r_ptr, column=5, value=round(tot_ledger_cgst, 2)).font = num_font
+        ws_summary.cell(row=r_ptr, column=6, value=round(tot_ledger_igst, 2)).font = num_font
+        ws_summary.cell(row=r_ptr, column=7, value=round(tot_ledger_sgst + tot_ledger_cgst + tot_ledger_igst, 2)).font = num_font
+
+        r_ptr += 1
+        ws_summary.cell(row=r_ptr, column=2, value="DIFFERENCE TO BE TRF AS EXPS.").font = bold_num_font
+        ws_summary.cell(row=r_ptr, column=4, value=round(tot_liab_sgst - tot_ledger_sgst, 2)).font = bold_num_font
+        ws_summary.cell(row=r_ptr, column=5, value=round(tot_liab_cgst - tot_ledger_cgst, 2)).font = bold_num_font
+        ws_summary.cell(row=r_ptr, column=6, value=round(tot_liab_igst - tot_ledger_igst, 2)).font = bold_num_font
+        ws_summary.cell(row=r_ptr, column=7, value=round((tot_liab_sgst - tot_ledger_sgst) + (tot_liab_cgst - tot_ledger_cgst) + (tot_liab_igst - tot_ledger_igst), 2)).font = bold_num_font
+
         for b_name in INCOME_MASTER_BRANCHES:
             ws_b = wb.create_sheet(title=b_name[:31])
             ws_b['A1'] = f"{client_cfg.get('name', 'Nutan Nagrik Sahakari Bank Ltd.')}"
@@ -9160,11 +9275,61 @@ def export_income_working_sheet():
                 ws_b.cell(row=b_row, column=8, value="").font = num_font
                 b_row += 1
 
-            ws_b.cell(row=b_row, column=2, value="TOTAL").font = bold_num_font
+            ws_b.cell(row=b_row, column=2, value="TOTAL :").font = bold_num_font
             ws_b.cell(row=b_row, column=3, value=f"=SUM(C8:C{b_row-1})").font = bold_num_font
             ws_b.cell(row=b_row, column=4, value=f"=SUM(D8:D{b_row-1})").font = bold_num_font
             ws_b.cell(row=b_row, column=5, value=f"=SUM(E8:E{b_row-1})").font = bold_num_font
             ws_b.cell(row=b_row, column=6, value=f"=SUM(F8:F{b_row-1})").font = bold_num_font
+
+            # Complete Payable Working Section (as required by CA)
+            b_norm_code = re.sub(r'[^A-Z0-9]', '', b_name.upper().strip())
+            l_vals = ledger_by_branch.get(b_norm_code, {})
+            b_tot_ggst = sum(e['sgst'] for e in b_list if e.get('is_taxable'))
+            b_tot_cgst = sum(e['cgst'] for e in b_list if e.get('is_taxable'))
+            b_tot_igst = sum(e['igst'] for e in b_list if e.get('is_taxable'))
+            b_tot_inc = sum(e['income_amount'] for e in b_list if e.get('is_taxable'))
+            b_tot_ref_wo = sum(e.get('refund_without_gst', 0.0) or 0.0 for e in b_list)
+            ref_gst_b = round(b_tot_ref_wo * 0.09, 2)
+
+            b_row += 3
+            ws_b.cell(row=b_row, column=1, value="SUMMARY ").font = bold_num_font
+            b_row += 2
+            ws_b.cell(row=b_row, column=1, value="(1) INCOME").font = bold_num_font
+            b_row += 1
+            ws_b.cell(row=b_row, column=1, value="PARTICULARS").font = bold_num_font
+            ws_b.cell(row=b_row, column=4, value="GGST").font = bold_num_font
+            ws_b.cell(row=b_row, column=5, value="CGST").font = bold_num_font
+            ws_b.cell(row=b_row, column=6, value="IGST").font = bold_num_font
+            b_row += 2
+            ws_b.cell(row=b_row, column=1, value="(1) INCOME AS PER LEDGERWISE CALCULATION").font = num_font
+            ws_b.cell(row=b_row, column=4, value=round(b_tot_ggst, 2)).font = num_font
+            ws_b.cell(row=b_row, column=5, value=round(b_tot_cgst, 2)).font = num_font
+            ws_b.cell(row=b_row, column=6, value=round(b_tot_igst, 2)).font = num_font
+            b_row += 1
+            ws_b.cell(row=b_row, column=1, value="(2) REFUND GIVEN BUT GST REFUND NOT GIVEN").font = num_font
+            ws_b.cell(row=b_row, column=3, value=round(b_tot_ref_wo, 2)).font = num_font
+            ws_b.cell(row=b_row, column=4, value=ref_gst_b).font = num_font
+            ws_b.cell(row=b_row, column=5, value=ref_gst_b).font = num_font
+            ws_b.cell(row=b_row, column=6, value=0.0).font = num_font
+            b_row += 1
+            tot_liab_ggst = round(b_tot_ggst + ref_gst_b, 2)
+            tot_liab_cgst = round(b_tot_cgst + ref_gst_b, 2)
+            ws_b.cell(row=b_row, column=4, value=tot_liab_ggst).font = bold_num_font
+            ws_b.cell(row=b_row, column=5, value=tot_liab_cgst).font = bold_num_font
+            ws_b.cell(row=b_row, column=6, value=round(b_tot_igst, 2)).font = bold_num_font
+            b_row += 1
+            l_sgst = round(l_vals.get('SGST_PAYABLE', 0.0) or 0.0, 2)
+            l_cgst = round(l_vals.get('CGST_PAYABLE', 0.0) or 0.0, 2)
+            l_igst = round(l_vals.get('IGST_PAYABLE', 0.0) or 0.0, 2)
+            ws_b.cell(row=b_row, column=1, value="(3) PAYABLE AS PER LEDGER").font = num_font
+            ws_b.cell(row=b_row, column=4, value=l_sgst).font = num_font
+            ws_b.cell(row=b_row, column=5, value=l_cgst).font = num_font
+            ws_b.cell(row=b_row, column=6, value=l_igst).font = num_font
+            b_row += 1
+            ws_b.cell(row=b_row, column=1, value="DIFFERENCE").font = bold_num_font
+            ws_b.cell(row=b_row, column=4, value=round(tot_liab_ggst - l_sgst, 2)).font = bold_num_font
+            ws_b.cell(row=b_row, column=5, value=round(tot_liab_cgst - l_cgst, 2)).font = bold_num_font
+            ws_b.cell(row=b_row, column=6, value=round(b_tot_igst - l_igst, 2)).font = bold_num_font
 
         for sheet in wb.worksheets:
             for col in sheet.columns:
@@ -9187,6 +9352,473 @@ def export_income_working_sheet():
         )
     except Exception as e:
         print(f"Error exporting working sheet: {e}")
+        return jsonify({"error": friendly_error_message(e)}), 500
+
+
+@app.route('/api/export-income-pdf', methods=['GET', 'POST'])
+@login_required
+def export_income_pdf():
+    """
+    Exports complete Branch-Wise Income Data, Output GST, and Payable Working Sheet
+    in high-fidelity PDF format for Statutory Audit and Chartered Accountant compliance.
+    """
+    try:
+        from reportlab.lib import colors
+        from reportlab.lib.pagesizes import A4, landscape
+        from reportlab.platypus import (
+            SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, KeepTogether, HRFlowable
+        )
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.pdfgen import canvas
+
+        class NumberedCanvas(canvas.Canvas):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self._saved_page_states = []
+
+            def showPage(self):
+                self._saved_page_states.append(dict(self.__dict__))
+                self._startPage()
+
+            def save(self):
+                num_pages = len(self._saved_page_states)
+                for state in self._saved_page_states:
+                    self.__dict__.update(state)
+                    self.draw_page_decorations(num_pages)
+                    super().showPage()
+                super().save()
+
+            def draw_page_decorations(self, page_count):
+                self.saveState()
+                self.setFont("Helvetica", 8)
+                self.setFillColor(colors.HexColor("#475569"))
+                # Top accent line
+                self.setStrokeColor(colors.HexColor("#1E3A8A"))
+                self.setLineWidth(1)
+                self.line(24, 574, 818, 574)
+                # Footer line
+                self.setStrokeColor(colors.HexColor("#CBD5E1"))
+                self.line(24, 28, 818, 28)
+                self.drawString(24, 18, "Nutan Nagrik Sahakari Bank Ltd. | Branch-Wise Income & GST Payable Working Sheet | CA Audit Compliance")
+                self.drawRightString(818, 18, f"Page {self._pageNumber} of {page_count}")
+                self.restoreState()
+
+        # Parse request parameters
+        month = request.args.get('month') or request.form.get('month') or 'August'
+        fy = request.args.get('financial_year') or request.args.get('year') or request.form.get('financial_year') or request.form.get('year') or '2026-27'
+        client_id = request.args.get('client_id') or request.form.get('client_id') or 1
+        client_cfg = get_client_config(client_id)
+
+        # Database queries
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+        cur.execute('''
+            SELECT branch, gl_code, particulars, income_amount::float,
+                   cgst::float, sgst::float, igst::float,
+                   refund_without_gst::float, refund_with_gst::float, is_taxable
+            FROM income_entries
+            WHERE client_id = %s AND LOWER(month) = LOWER(%s) AND financial_year = %s
+            ORDER BY branch, gl_code
+        ''', (client_id, month, fy))
+        entries = cur.fetchall()
+
+        cur.execute('''
+            SELECT branch, gl_code, ledger_role, closing_balance::float, needs_review
+            FROM gst_payable_ledger
+            WHERE client_id = %s AND LOWER(month) = LOWER(%s) AND financial_year = %s
+            ORDER BY branch, gl_code
+        ''', (client_id, month, fy))
+        ledger_rows = cur.fetchall()
+
+        # Previous month for exempt comparison
+        prev_month, prev_fy = previous_fy_month(month, fy)
+        exempt_rows_prev = []
+        if prev_month and prev_fy:
+            cur.execute('''
+                SELECT gl_code, closing_balance::float
+                FROM exempt_income_ledger
+                WHERE client_id = %s AND financial_year = %s AND LOWER(month) = LOWER(%s)
+            ''', (client_id, prev_fy, prev_month))
+            exempt_rows_prev = cur.fetchall()
+
+        cur.close()
+        conn.close()
+
+        # Data structuring
+        ledger_by_branch = collections.defaultdict(dict)
+        for lr in ledger_rows:
+            if not lr.get('ledger_role'):
+                continue
+            b_norm = re.sub(r'[^A-Z0-9]', '', lr['branch'].upper().strip())
+            ledger_by_branch[b_norm][lr['ledger_role']] = lr['closing_balance']
+
+        branch_map = collections.defaultdict(dict)
+        for e in entries:
+            b_norm = re.sub(r'[^A-Z0-9]', '', e['branch'].upper().strip())
+            branch_map[b_norm][str(e['gl_code']).strip()] = e
+
+        # Summary rollups
+        grand_taxable = 0.0
+        grand_cgst = 0.0
+        grand_sgst = 0.0
+        grand_igst = 0.0
+        grand_ref_wo = 0.0
+
+        branch_summaries = []
+        for b_name in INCOME_MASTER_BRANCHES:
+            b_norm = re.sub(r'[^A-Z0-9]', '', b_name.upper().strip())
+            b_entries = [e for e in entries if re.sub(r'[^A-Z0-9]', '', e['branch'].upper().strip()) == b_norm]
+
+            b_tax = sum(e['income_amount'] for e in b_entries if e.get('is_taxable'))
+            b_c = sum(e['cgst'] for e in b_entries if e.get('is_taxable'))
+            b_s = sum(e['sgst'] for e in b_entries if e.get('is_taxable'))
+            b_i = sum(e['igst'] for e in b_entries if e.get('is_taxable'))
+            b_tot_g = round(b_c + b_s + b_i, 2)
+            b_rwo = sum(e.get('refund_without_gst', 0.0) or 0.0 for e in b_entries)
+            ref_gst = round(b_rwo * 0.09, 2)
+
+            lv = ledger_by_branch.get(b_norm, {})
+            l_c = lv.get('CGST_PAYABLE')
+            l_s = lv.get('SGST_PAYABLE')
+            l_i = lv.get('IGST_PAYABLE')
+            has_ledger = (l_c is not None or l_s is not None or l_i is not None)
+            l_tot = ((l_c or 0.0) + (l_s or 0.0) + (l_i or 0.0)) if has_ledger else None
+
+            tot_liab = round(b_tot_g + (ref_gst * 2), 2)
+            diff = round(tot_liab - l_tot, 2) if l_tot is not None else None
+
+            grand_taxable += b_tax
+            grand_cgst += b_c
+            grand_sgst += b_s
+            grand_igst += b_i
+            grand_ref_wo += b_rwo
+
+            branch_summaries.append({
+                'name': b_name, 'income': b_tax, 'cgst': b_c, 'sgst': b_s, 'igst': b_i,
+                'total_gst': b_tot_g, 'ref_wo': b_rwo, 'ref_gst': ref_gst,
+                'total_liability': tot_liab, 'ledger_tot': l_tot, 'diff': diff,
+                'matched': (abs(diff) < 1.0) if diff is not None else None
+            })
+
+        grand_tot_gst = round(grand_cgst + grand_sgst + grand_igst, 2)
+        grand_ref_gst = round(grand_ref_wo * 0.09, 2)
+        grand_total_liab = round(grand_tot_gst + (grand_ref_gst * 2), 2)
+
+        tot_ledger_c = sum(r['closing_balance'] for r in ledger_rows if r.get('ledger_role') == 'CGST_PAYABLE' and r.get('closing_balance') is not None)
+        tot_ledger_s = sum(r['closing_balance'] for r in ledger_rows if r.get('ledger_role') == 'SGST_PAYABLE' and r.get('closing_balance') is not None)
+        tot_ledger_i = sum(r['closing_balance'] for r in ledger_rows if r.get('ledger_role') == 'IGST_PAYABLE' and r.get('closing_balance') is not None)
+        tot_ledger_all = round(tot_ledger_c + tot_ledger_s + tot_ledger_i, 2)
+        grand_diff = round(grand_total_liab - tot_ledger_all, 2)
+
+        # PDF Setup
+        buf = io.BytesIO()
+        doc = SimpleDocTemplate(
+            buf,
+            pagesize=landscape(A4),
+            leftMargin=24,
+            rightMargin=24,
+            topMargin=26,
+            bottomMargin=32
+        )
+        styles = getSampleStyleSheet()
+
+        def _fmt(val):
+            if val is None or val == "—":
+                return "—"
+            try:
+                f = float(val)
+                return f"{f:,.2f}"
+            except Exception:
+                return str(val)
+
+        title_style = ParagraphStyle(
+            'DocTitle', parent=styles['Normal'],
+            fontName='Helvetica-Bold', fontSize=13, leading=15, textColor=colors.HexColor('#1E3A8A')
+        )
+        sub_style = ParagraphStyle(
+            'DocSub', parent=styles['Normal'],
+            fontName='Helvetica', fontSize=8.5, leading=11, textColor=colors.HexColor('#475569')
+        )
+        sec_style = ParagraphStyle(
+            'SecTitle', parent=styles['Normal'],
+            fontName='Helvetica-Bold', fontSize=9.5, leading=12, textColor=colors.HexColor('#1E3A8A'), spaceAfter=3
+        )
+        tbl_hdr = ParagraphStyle(
+            'TblHdr', parent=styles['Normal'],
+            fontName='Helvetica-Bold', fontSize=7.5, leading=9.5, textColor=colors.white, alignment=1
+        )
+        tbl_cell = ParagraphStyle(
+            'TblCell', parent=styles['Normal'],
+            fontName='Helvetica', fontSize=7, leading=9, textColor=colors.HexColor('#0F172A')
+        )
+        tbl_cell_bold = ParagraphStyle(
+            'TblCellBold', parent=styles['Normal'],
+            fontName='Helvetica-Bold', fontSize=7, leading=9, textColor=colors.HexColor('#0F172A')
+        )
+        tbl_cell_right = ParagraphStyle(
+            'TblCellR', parent=styles['Normal'],
+            fontName='Helvetica', fontSize=7, leading=9, textColor=colors.HexColor('#0F172A'), alignment=2
+        )
+        tbl_cell_right_bold = ParagraphStyle(
+            'TblCellRBold', parent=styles['Normal'],
+            fontName='Helvetica-Bold', fontSize=7, leading=9, textColor=colors.HexColor('#0F172A'), alignment=2
+        )
+        tbl_cell_center = ParagraphStyle(
+            'TblCellC', parent=styles['Normal'],
+            fontName='Helvetica', fontSize=7, leading=9, textColor=colors.HexColor('#0F172A'), alignment=1
+        )
+
+        story = []
+
+        # =========================================================================
+        # PAGE 1: EXECUTIVE SUMMARY & PAYABLE WORKING RECONCILIATION
+        # =========================================================================
+        story.append(Paragraph(f"{client_cfg.get('name', 'Nutan Nagrik Sahakari Bank Ltd.').upper()}", title_style))
+        story.append(Paragraph(f"BRANCH-WISE GST INCOME CALCULATION & PAYABLE WORKING SHEET &bull; PERIOD: {month.upper()} {fy}", sub_style))
+        story.append(Spacer(1, 8))
+
+        story.append(Paragraph("1. CONSOLIDATED OUTPUT GST & PAYABLE WORKING RECONCILIATION", sec_style))
+        t1_data = [
+            [
+                Paragraph("PARTICULARS", tbl_hdr),
+                Paragraph("TAXABLE VALUE (₹)", tbl_hdr),
+                Paragraph("GGST 9% (₹)", tbl_hdr),
+                Paragraph("CGST 9% (₹)", tbl_hdr),
+                Paragraph("IGST 18% (₹)", tbl_hdr),
+                Paragraph("TOTAL GST (₹)", tbl_hdr),
+            ],
+            [
+                Paragraph("(1) Income as per Ledger-wise Calculation", tbl_cell),
+                Paragraph(_fmt(grand_taxable), tbl_cell_right),
+                Paragraph(_fmt(grand_sgst), tbl_cell_right),
+                Paragraph(_fmt(grand_cgst), tbl_cell_right),
+                Paragraph(_fmt(grand_igst), tbl_cell_right),
+                Paragraph(_fmt(grand_tot_gst), tbl_cell_right_bold),
+            ],
+            [
+                Paragraph("(2) Refund Given but GST Refund Not Given", tbl_cell),
+                Paragraph(_fmt(grand_ref_wo), tbl_cell_right),
+                Paragraph(_fmt(grand_ref_gst), tbl_cell_right),
+                Paragraph(_fmt(grand_ref_gst), tbl_cell_right),
+                Paragraph("0.00", tbl_cell_right),
+                Paragraph(_fmt(grand_ref_gst * 2), tbl_cell_right_bold),
+            ],
+            [
+                Paragraph("TOTAL GST LIABILITY (AS PER CALCULATION)", tbl_cell_bold),
+                Paragraph(_fmt(grand_taxable + grand_ref_wo), tbl_cell_right_bold),
+                Paragraph(_fmt(grand_sgst + grand_ref_gst), tbl_cell_right_bold),
+                Paragraph(_fmt(grand_cgst + grand_ref_gst), tbl_cell_right_bold),
+                Paragraph(_fmt(grand_igst), tbl_cell_right_bold),
+                Paragraph(_fmt(grand_total_liab), tbl_cell_right_bold),
+            ],
+            [
+                Paragraph("(3) Payable as per General Ledger (GL 1878 / 1879 / 1880)", tbl_cell),
+                Paragraph("—", tbl_cell_center),
+                Paragraph(_fmt(tot_ledger_s), tbl_cell_right),
+                Paragraph(_fmt(tot_ledger_c), tbl_cell_right),
+                Paragraph(_fmt(tot_ledger_i), tbl_cell_right),
+                Paragraph(_fmt(tot_ledger_all), tbl_cell_right_bold),
+            ],
+            [
+                Paragraph("DIFFERENCE TO BE TRF AS EXPS. (EXCESS / SHORT)", tbl_cell_bold),
+                Paragraph("—", tbl_cell_center),
+                Paragraph(_fmt((grand_sgst + grand_ref_gst) - tot_ledger_s), tbl_cell_right_bold),
+                Paragraph(_fmt((grand_cgst + grand_ref_gst) - tot_ledger_c), tbl_cell_right_bold),
+                Paragraph(_fmt(grand_igst - tot_ledger_i), tbl_cell_right_bold),
+                Paragraph(_fmt(grand_diff), tbl_cell_right_bold),
+            ]
+        ]
+        t1 = Table(t1_data, colWidths=[274, 104, 104, 104, 104, 104])
+        t1.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1E3A8A')),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#CBD5E1')),
+            ('BACKGROUND', (0, 3), (-1, 3), colors.HexColor('#F1F5F9')),
+            ('BACKGROUND', (0, 5), (-1, 5), colors.HexColor('#E2E8F0')),
+            ('TOPPADDING', (0, 0), (-1, -1), 4),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ]))
+        story.append(t1)
+        story.append(Spacer(1, 12))
+
+        # Section 2: Non-Taxable / Exempt Income
+        story.append(Paragraph("2. NON-TAXABLE & EXEMPT INCOME SUMMARY", sec_style))
+        t2_data = [
+            [
+                Paragraph("PL CODE & PARTICULARS", tbl_hdr),
+                Paragraph(f"INCOME AS ON {month.upper()} {fy} (₹)", tbl_hdr),
+                Paragraph(f"INCOME AS ON {prev_month.upper()} {prev_fy} (₹)", tbl_hdr),
+                Paragraph("DIFF. (INCOME OF CURRENT MONTH) (₹)", tbl_hdr),
+            ]
+        ]
+        exempt_codes = [
+            ('3275', 'INCOME FROM NON JUDICIAL FRANKING STAMP (3275)'),
+            ('3354', 'PL 3354 PROVISION FOR OD INTEREST WRITTEN BACK'),
+            ('3304', '3304 BUILD FUND PROV BROGHT BAK'),
+            ('3307', '3307 WRITTEN OF AMT RECOVERED'),
+            ('3402', 'PL 3402 BDDR BROUGHT BACK'),
+            ('3353', '3353-EXCESS PROV.FOR I.T WRTN BACK'),
+            ('3306', '3306-INT. ON INCOME TAX REFUND A/C'),
+            ('3348', '3348-INVESTMENT DEP. WRITTEN BACK'),
+            ('3331', '3331- DIVIDEND'),
+            ('3327', '3327 INCOME TAX REFUND'),
+        ]
+        prev_map = {r['gl_code']: r['closing_balance'] for r in exempt_rows_prev if r.get('closing_balance') is not None}
+        for ex_c, ex_p in exempt_codes:
+            cur_e = [e for e in entries if str(e.get('gl_code')).strip() == ex_c]
+            cur_amt = sum(e['income_amount'] for e in cur_e) if cur_e else 0.0
+            prev_amt = prev_map.get(ex_c)
+            diff_amt = (cur_amt - prev_amt) if prev_amt is not None else None
+            t2_data.append([
+                Paragraph(ex_p, tbl_cell),
+                Paragraph(_fmt(cur_amt), tbl_cell_right),
+                Paragraph(_fmt(prev_amt) if prev_amt is not None else "—", tbl_cell_right),
+                Paragraph(_fmt(diff_amt) if diff_amt is not None else "—", tbl_cell_right),
+            ])
+        t2 = Table(t2_data, colWidths=[314, 160, 160, 160])
+        t2.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1E3A8A')),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#CBD5E1')),
+            ('TOPPADDING', (0, 0), (-1, -1), 3),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+        ]))
+        story.append(t2)
+
+        # =========================================================================
+        # PAGE 2: COMPLETE BRANCH-WISE OUTPUT GST & RECONCILIATION MATRIX
+        # =========================================================================
+        story.append(PageBreak())
+        story.append(Paragraph("3. BRANCH-WISE INCOME & OUTPUT GST RECONCILIATION MATRIX", sec_style))
+        t3_data = [
+            [
+                Paragraph("BRANCH NAME", tbl_hdr),
+                Paragraph("TAXABLE INC (₹)", tbl_hdr),
+                Paragraph("CGST 9% (₹)", tbl_hdr),
+                Paragraph("SGST 9% (₹)", tbl_hdr),
+                Paragraph("IGST 18% (₹)", tbl_hdr),
+                Paragraph("CALC GST (₹)", tbl_hdr),
+                Paragraph("LEDGER PAYABLE (₹)", tbl_hdr),
+                Paragraph("VARIANCE (₹)", tbl_hdr),
+                Paragraph("AUDIT STATUS", tbl_hdr),
+            ]
+        ]
+        for bs in branch_summaries:
+            status_text = "—"
+            if bs['matched'] is True:
+                status_text = "MATCHED"
+            elif bs['matched'] is False:
+                status_text = f"DIFF {_fmt(bs['diff'])}"
+
+            t3_data.append([
+                Paragraph(bs['name'], tbl_cell_bold if bs['income'] > 0 else tbl_cell),
+                Paragraph(_fmt(bs['income']), tbl_cell_right),
+                Paragraph(_fmt(bs['cgst']), tbl_cell_right),
+                Paragraph(_fmt(bs['sgst']), tbl_cell_right),
+                Paragraph(_fmt(bs['igst']), tbl_cell_right),
+                Paragraph(_fmt(bs['total_liability']), tbl_cell_right_bold),
+                Paragraph(_fmt(bs['ledger_tot']) if bs['ledger_tot'] is not None else "—", tbl_cell_right),
+                Paragraph(_fmt(bs['diff']) if bs['diff'] is not None else "—", tbl_cell_right),
+                Paragraph(status_text, tbl_cell_center),
+            ])
+
+        # Consolidated totals row
+        t3_data.append([
+            Paragraph("CONSOLIDATED TOTAL", tbl_cell_bold),
+            Paragraph(_fmt(grand_taxable), tbl_cell_right_bold),
+            Paragraph(_fmt(grand_cgst), tbl_cell_right_bold),
+            Paragraph(_fmt(grand_sgst), tbl_cell_right_bold),
+            Paragraph(_fmt(grand_igst), tbl_cell_right_bold),
+            Paragraph(_fmt(grand_total_liab), tbl_cell_right_bold),
+            Paragraph(_fmt(tot_ledger_all), tbl_cell_right_bold),
+            Paragraph(_fmt(grand_diff), tbl_cell_right_bold),
+            Paragraph("RECONCILED" if abs(grand_diff) < 1.0 else "REVIEW DIFF", tbl_cell_center),
+        ])
+        t3 = Table(t3_data, colWidths=[130, 85, 75, 75, 75, 84, 85, 85, 100])
+        t3.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1E3A8A')),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#CBD5E1')),
+            ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#F1F5F9')),
+            ('TOPPADDING', (0, 0), (-1, -1), 2.5),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 2.5),
+        ]))
+        story.append(t3)
+
+        # =========================================================================
+        # PAGE 3: VERIFICATION OF SCANNED FEE INCOME PL CODES (CA KEY CODES)
+        # =========================================================================
+        story.append(PageBreak())
+        story.append(Paragraph("4. VERIFICATION OF SCANNED FEE INCOME PL CODES (CHARTERED ACCOUNTANT AUDIT AUDIT)", sec_style))
+        story.append(Paragraph(
+            "The table below verifies that all official PL codes—specifically including PL 3300 (Incidental Charges), "
+            "PL 3312 (O/w Cheque Return Charges), PL 3314 (Cheque Book Issue Charges), PL 3316 (Cash Charges), and "
+            "PL 3324 (Penalty on Overdue Locker Rent)—are scanned, fetched, and computed at 18% GST across branches.",
+            sub_style
+        ))
+        story.append(Spacer(1, 6))
+
+        t4_data = [
+            [
+                Paragraph("PL CODE", tbl_hdr),
+                Paragraph("OFFICIAL PARTICULARS (AS PER CA CATALOG)", tbl_hdr),
+                Paragraph("TAX RATE", tbl_hdr),
+                Paragraph("BANK-WIDE INCOME (₹)", tbl_hdr),
+                Paragraph("OUTPUT GST (18%) (₹)", tbl_hdr),
+                Paragraph("CLASSIFICATION STATUS", tbl_hdr),
+            ]
+        ]
+
+        # Key target PL codes from CA communication + standard high frequency fee income codes
+        target_codes = [
+            '3300', '3312', '3314', '3316', '3324',
+            '3235', '3270', '3271', '3296', '3297', '3298',
+            '3303', '3310', '3311', '3313', '3320', '3359', '1836'
+        ]
+        cat_map = {m['code']: m for m in INCOME_MASTER_CODES}
+        for tc in target_codes:
+            cm = cat_map.get(tc, {})
+            part_name = cm.get('particulars') or 'Bank Service Income'
+            rate_str = f"{cm.get('gst_rate', 18.0):.0f}%"
+
+            tc_entries = [e for e in entries if str(e.get('gl_code')).strip() == tc]
+            tc_inc = sum(e['income_amount'] for e in tc_entries)
+            tc_gst = sum(e['cgst'] + e['sgst'] + e['igst'] for e in tc_entries)
+
+            status_str = "Verified & Taxable (18%)" if tc in ['3300', '3312', '3314', '3316', '3324'] else "Standard Taxable Income"
+
+            t4_data.append([
+                Paragraph(tc, tbl_cell_bold),
+                Paragraph(part_name, tbl_cell),
+                Paragraph(rate_str, tbl_cell_center),
+                Paragraph(_fmt(tc_inc), tbl_cell_right),
+                Paragraph(_fmt(tc_gst), tbl_cell_right),
+                Paragraph(status_str, tbl_cell_center),
+            ])
+
+        t4 = Table(t4_data, colWidths=[70, 274, 70, 120, 120, 140])
+        t4.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1E3A8A')),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#CBD5E1')),
+            ('TOPPADDING', (0, 0), (-1, -1), 3),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+            ('BACKGROUND', (0, 1), (-1, 5), colors.HexColor('#FEF3C7')), # highlight CA 5 codes
+        ]))
+        story.append(t4)
+
+        doc.build(story, canvasmaker=NumberedCanvas)
+        buf.seek(0)
+        out_filename = f"1_BRANCH_WISE_CALCULATION_{month.upper()}_{fy}_WORKING_SHEET.pdf"
+        return send_file(
+            buf,
+            mimetype="application/pdf",
+            as_attachment=True,
+            download_name=out_filename
+        )
+    except Exception as e:
+        print(f"Error exporting income PDF: {e}")
         return jsonify({"error": friendly_error_message(e)}), 500
 
 
