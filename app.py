@@ -8656,22 +8656,15 @@ def export_income_working_sheet():
                             igst_amt = _num(item.get('igst'))
                             ref_wo = _num(item.get('refund_without_gst'))
                             ref_w = _num(item.get('refund_with_gst'))
-                            if sname.strip().upper() == 'DEMAT' and not igst_amt:
-                                tpl_igst = _num(ws_b.cell(r, 6).value)
-                                if tpl_igst > 0:
-                                    igst_amt = tpl_igst
-                                    if ws_b.cell(r, 4).value is not None:
-                                        sgst_amt = _num(ws_b.cell(r, 4).value)
-                                    if ws_b.cell(r, 5).value is not None:
-                                        cgst_amt = _num(ws_b.cell(r, 5).value)
                             _set(ws_b, r, 3, inc_amt)
                             _set(ws_b, r, 4, sgst_amt)
                             _set(ws_b, r, 5, cgst_amt)
                             _set(ws_b, r, 6, igst_amt if igst_amt else None)
                             _set(ws_b, r, 7, ref_wo if ref_wo else None)
                             _set(ws_b, r, 8, ref_w if ref_w else None)
-                        elif matched_dict:
-                            # Branch statement uploaded; codes not present in statement have 0.0 for this period
+                        else:
+                            # Branch not uploaded or code not present in statement:
+                            # Strictly write 0.0/None so template baseline numbers NEVER leak into downloaded sheet
                             inc_amt = sgst_amt = cgst_amt = igst_amt = ref_wo = ref_w = 0.0
                             _set(ws_b, r, 3, 0.0)
                             _set(ws_b, r, 4, 0.0)
@@ -8679,14 +8672,6 @@ def export_income_working_sheet():
                             _set(ws_b, r, 6, None)
                             _set(ws_b, r, 7, None)
                             _set(ws_b, r, 8, None)
-                        else:
-                            # Preserve master template baseline only if no statements uploaded for branch
-                            inc_amt = _num(ws_b.cell(r, 3).value)
-                            sgst_amt = _num(ws_b.cell(r, 4).value)
-                            cgst_amt = _num(ws_b.cell(r, 5).value)
-                            igst_amt = _num(ws_b.cell(r, 6).value)
-                            ref_wo = _num(ws_b.cell(r, 7).value)
-                            ref_w = _num(ws_b.cell(r, 8).value)
 
                         b_tot_inc += inc_amt
                         b_tot_ggst += sgst_amt
@@ -8711,6 +8696,17 @@ def export_income_working_sheet():
                             s1cl['igst'] += igst_amt
                             s1cl['refwo'] += ref_wo
                             s1cl['refw'] += ref_w
+
+                    # Ensure non-code data rows (e.g. SALE OF ASSET, NOT ACCRUED) between row 9 and total_row
+                    # do not carry over stale template numerical values
+                    for r_nc in range(9, total_row):
+                        c_nc_val = ws_b.cell(r_nc, 1).value
+                        c_nc_str = str(c_nc_val or '').strip()
+                        if not code_row_re.match(c_nc_str):
+                            for col_idx in range(3, 9):
+                                cell_val = ws_b.cell(r_nc, col_idx).value
+                                if cell_val is not None and not str(cell_val).startswith('='):
+                                    _set(ws_b, r_nc, col_idx, None)
 
                     _set(ws_b, total_row, 3, b_tot_inc)
                     _set(ws_b, total_row, 4, b_tot_ggst)
@@ -8792,9 +8788,11 @@ def export_income_working_sheet():
                         _set(ws_b, r_diff, 4, diff_ggst)
                         _set(ws_b, r_diff, 5, diff_cgst)
                         _set(ws_b, r_diff, 6, diff_igst)
+                        _set(ws_b, r_diff, 7, None)
+                        _set(ws_b, r_diff, 8, None)
 
                     # Step 5: highlight this branch's tab when computed payable
-                    # differs from the ledger's own closing balance by > Rs 10.
+                    # differs from the ledger's own closing balance by > Rs 10 (only if data uploaded).
                     diffs = []
                     if ledger_vals.get('CGST_PAYABLE') is not None:
                         diffs.append(abs(round(b_tot_cgst - ledger_vals['CGST_PAYABLE'], 2)))
@@ -8802,7 +8800,7 @@ def export_income_working_sheet():
                         diffs.append(abs(round(b_tot_ggst - ledger_vals['SGST_PAYABLE'], 2)))
                     if ledger_vals.get('IGST_PAYABLE') is not None:
                         diffs.append(abs(round(b_tot_igst - ledger_vals['IGST_PAYABLE'], 2)))
-                    ws_b.sheet_properties.tabColor = "FF0000" if diffs and max(diffs) > 10 else None
+                    ws_b.sheet_properties.tabColor = "FF0000" if (matched_dict or ledger_vals) and diffs and max(diffs) > 10 else None
 
                     if sname.strip().upper() not in ('HO', 'DEMAT'):
                         s1_grand['inc'] += b_tot_inc
@@ -8895,6 +8893,9 @@ def export_income_working_sheet():
                 if 'SUMMARY SHEET GST' in wb.sheetnames:
                     ws_sum = wb['SUMMARY SHEET GST']
                     _set(ws_sum, 3, 2, f"GST CALCULATION SUMMARY FOR THE MONTH OF {period_str}")
+                    _set(ws_sum, 6, 4, f"INCOME AS ON {period_str}")
+                    prev_period_str = get_period_label(prev_month or 'Previous Month', prev_fy or fy) if (prev_month and prev_fy) else "PREVIOUS MONTH"
+                    _set(ws_sum, 6, 5, f"INCOME AS ON {prev_period_str}")
 
                     # Step 7: Update Section (1) Non-Taxable / Exempt Income (Rows 7 to 20)
                     EXEMPT_ROW_MAP = {
@@ -8910,12 +8911,20 @@ def export_income_working_sheet():
                         '3327': 20,  # 3327 INCOME TAX REFUND
                     }
                     for ex_code, ex_row in EXEMPT_ROW_MAP.items():
-                        if ex_code in exempt_current_has:
-                            _set(ws_sum, ex_row, 4, round(exempt_current_sum[ex_code], 2))
-                        if ex_code in exempt_previous_has:
-                            _set(ws_sum, ex_row, 5, round(exempt_previous_sum[ex_code], 2))
-                        if ex_code in exempt_current_has and ex_code in exempt_previous_has:
-                            _set(ws_sum, ex_row, 6, round(exempt_current_sum[ex_code] - exempt_previous_sum[ex_code], 2))
+                        c_val_cur = round(exempt_current_sum[ex_code], 2) if ex_code in exempt_current_has else None
+                        c_val_prev = round(exempt_previous_sum[ex_code], 2) if ex_code in exempt_previous_has else None
+                        diff_val = round((c_val_cur or 0.0) - (c_val_prev or 0.0), 2) if (c_val_cur is not None and c_val_prev is not None) else None
+                        _set(ws_sum, ex_row, 4, c_val_cur)
+                        _set(ws_sum, ex_row, 5, c_val_prev)
+                        _set(ws_sum, ex_row, 6, diff_val)
+
+                    # Clear unmapped template rows (7, 9, 10, 13, 21) if no current exempt income is uploaded
+                    # so historical July figures (e.g. 77 Cr) never appear in downloaded sheets
+                    if not exempt_current_has:
+                        for unmapped_r in [7, 9, 10, 13, 21]:
+                            _set(ws_sum, unmapped_r, 4, None)
+                            _set(ws_sum, unmapped_r, 5, None)
+                            _set(ws_sum, unmapped_r, 6, None)
 
                     # Section 2: Taxable income, rolled up from branch totals
                     _set(ws_sum, 27, 3, grand_income)
@@ -9000,6 +9009,27 @@ def export_income_working_sheet():
                     ws_recon.cell(row=r_ptr, column=10, value=round(bc['sgst'] - l_sgst, 2) if l_sgst is not None else "—")
                     ws_recon.cell(row=r_ptr, column=11, value=round(bc['igst'] - l_igst, 2) if l_igst is not None else "—")
                     r_ptr += 1
+
+                tot_recon_inc = sum(vals['inc'] for vals in branch_computed.values())
+                tot_recon_cgst = sum(vals['cgst'] for vals in branch_computed.values())
+                tot_recon_sgst = sum(vals['sgst'] for vals in branch_computed.values())
+                tot_recon_igst = sum(vals['igst'] for vals in branch_computed.values())
+                tot_l_cgst = sum(r['closing_balance'] for r in ledger_rows if r.get('ledger_role') == 'CGST_PAYABLE' and r.get('closing_balance') is not None)
+                tot_l_sgst = sum(r['closing_balance'] for r in ledger_rows if r.get('ledger_role') == 'SGST_PAYABLE' and r.get('closing_balance') is not None)
+                tot_l_igst = sum(r['closing_balance'] for r in ledger_rows if r.get('ledger_role') == 'IGST_PAYABLE' and r.get('closing_balance') is not None)
+                has_any_ledger = bool(ledger_rows)
+
+                ws_recon.cell(row=r_ptr, column=1, value="TOTAL").font = Font(bold=True)
+                ws_recon.cell(row=r_ptr, column=2, value=round(tot_recon_inc, 2)).font = Font(bold=True)
+                ws_recon.cell(row=r_ptr, column=3, value=round(tot_recon_cgst, 2)).font = Font(bold=True)
+                ws_recon.cell(row=r_ptr, column=4, value=round(tot_recon_sgst, 2)).font = Font(bold=True)
+                ws_recon.cell(row=r_ptr, column=5, value=round(tot_recon_igst, 2)).font = Font(bold=True)
+                ws_recon.cell(row=r_ptr, column=6, value=round(tot_l_cgst, 2) if has_any_ledger else "—").font = Font(bold=True)
+                ws_recon.cell(row=r_ptr, column=7, value=round(tot_l_sgst, 2) if has_any_ledger else "—").font = Font(bold=True)
+                ws_recon.cell(row=r_ptr, column=8, value=round(tot_l_igst, 2) if has_any_ledger else "—").font = Font(bold=True)
+                ws_recon.cell(row=r_ptr, column=9, value=round(tot_recon_cgst - tot_l_cgst, 2) if has_any_ledger else "—").font = Font(bold=True)
+                ws_recon.cell(row=r_ptr, column=10, value=round(tot_recon_sgst - tot_l_sgst, 2) if has_any_ledger else "—").font = Font(bold=True)
+                ws_recon.cell(row=r_ptr, column=11, value=round(tot_recon_igst - tot_l_igst, 2) if has_any_ledger else "—").font = Font(bold=True)
 
                 for col_i in range(1, len(recon_headers) + 1):
                     ws_recon.column_dimensions[get_column_letter(col_i)].width = 16
