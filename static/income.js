@@ -21,6 +21,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Elements
     const clientTabs = document.querySelectorAll('.client-tab-btn[data-client-id]');
     const branchTabsBar = document.getElementById('branchTabsBar');
+    const selectBranchFilter = document.getElementById('selectBranchFilter');
     const incomeTableBody = document.getElementById('incomeTableBody');
     const searchIncomeInput = document.getElementById('searchIncomeInput');
     const filterTaxable = document.getElementById('filterTaxable');
@@ -119,20 +120,46 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
-    // 2. Load Branch Pills
+    // 2. Load Branch Pills & Dropdown
+    function selectBranch(b) {
+        currentBranch = b;
+        if (selectBranchFilter && selectBranchFilter.value !== b) {
+            selectBranchFilter.value = b;
+        }
+        document.querySelectorAll('.branch-pill').forEach(p => {
+            if (p.getAttribute('data-branch') === b) {
+                p.classList.add('active');
+                p.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+            } else {
+                p.classList.remove('active');
+            }
+        });
+        renderTableRows();
+    }
+
     function renderBranchPills(branches) {
         masterBranches = branches || [];
         branchTabsBar.innerHTML = '';
+
+        // Populate selectBranchFilter dropdown while keeping existing pills
+        if (selectBranchFilter) {
+            selectBranchFilter.innerHTML = '<option value="ALL">All Branches</option>';
+            masterBranches.forEach(b => {
+                const opt = document.createElement('option');
+                opt.value = b;
+                opt.textContent = b;
+                if (currentBranch === b) opt.selected = true;
+                selectBranchFilter.appendChild(opt);
+            });
+            selectBranchFilter.value = currentBranch;
+        }
         
         const allBtn = document.createElement('button');
         allBtn.className = `branch-pill ${currentBranch === 'ALL' ? 'active' : ''}`;
         allBtn.setAttribute('data-branch', 'ALL');
         allBtn.textContent = 'All Branches';
         allBtn.addEventListener('click', () => {
-            currentBranch = 'ALL';
-            document.querySelectorAll('.branch-pill').forEach(p => p.classList.remove('active'));
-            allBtn.classList.add('active');
-            renderTableRows();
+            selectBranch('ALL');
         });
         branchTabsBar.appendChild(allBtn);
 
@@ -142,12 +169,15 @@ document.addEventListener('DOMContentLoaded', () => {
             pill.setAttribute('data-branch', b);
             pill.textContent = b;
             pill.addEventListener('click', () => {
-                currentBranch = b;
-                document.querySelectorAll('.branch-pill').forEach(p => p.classList.remove('active'));
-                pill.classList.add('active');
-                renderTableRows();
+                selectBranch(b);
             });
             branchTabsBar.appendChild(pill);
+        });
+    }
+
+    if (selectBranchFilter) {
+        selectBranchFilter.addEventListener('change', () => {
+            selectBranch(selectBranchFilter.value);
         });
     }
 
