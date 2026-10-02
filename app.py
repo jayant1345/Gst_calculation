@@ -8649,6 +8649,7 @@ def export_income_working_sheet():
                             except Exception:
                                 return 0.0
 
+                        rate_str = "2.5%" if norm_code == '3325' else "9%"
                         if item:
                             inc_amt = _num(item.get('income_amount'))
                             sgst_amt = _num(item.get('sgst'))
@@ -8657,21 +8658,20 @@ def export_income_working_sheet():
                             ref_wo = _num(item.get('refund_without_gst'))
                             ref_w = _num(item.get('refund_with_gst'))
                             _set(ws_b, r, 3, inc_amt)
-                            _set(ws_b, r, 4, sgst_amt)
-                            _set(ws_b, r, 5, cgst_amt)
-                            _set(ws_b, r, 6, igst_amt if igst_amt else None)
-                            _set(ws_b, r, 7, ref_wo if ref_wo else None)
-                            _set(ws_b, r, 8, ref_w if ref_w else None)
+                            _set(ws_b, r, 4, f"=+C{r}*{rate_str}")
+                            _set(ws_b, r, 5, f"=+D{r}")
+                            _set(ws_b, r, 6, igst_amt if igst_amt else 0.0)
+                            _set(ws_b, r, 7, ref_wo if ref_wo else 0.0)
+                            _set(ws_b, r, 8, ref_w if ref_w else 0.0)
                         else:
                             # Branch not uploaded or code not present in statement:
-                            # Strictly write 0.0/None so template baseline numbers NEVER leak into downloaded sheet
                             inc_amt = sgst_amt = cgst_amt = igst_amt = ref_wo = ref_w = 0.0
-                            _set(ws_b, r, 3, 0.0)
-                            _set(ws_b, r, 4, 0.0)
-                            _set(ws_b, r, 5, 0.0)
-                            _set(ws_b, r, 6, None)
-                            _set(ws_b, r, 7, None)
-                            _set(ws_b, r, 8, None)
+                            _set(ws_b, r, 3, 0.0 if bool(matched_dict) else None)
+                            _set(ws_b, r, 4, f"=+C{r}*{rate_str}")
+                            _set(ws_b, r, 5, f"=+D{r}")
+                            _set(ws_b, r, 6, 0.0 if bool(matched_dict) else None)
+                            _set(ws_b, r, 7, 0.0 if bool(matched_dict) else None)
+                            _set(ws_b, r, 8, 0.0 if bool(matched_dict) else None)
 
                         b_tot_inc += inc_amt
                         b_tot_ggst += sgst_amt
@@ -8708,12 +8708,29 @@ def export_income_working_sheet():
                                 if cell_val is not None and not str(cell_val).startswith('='):
                                     _set(ws_b, r_nc, col_idx, None)
 
-                    _set(ws_b, total_row, 3, b_tot_inc)
-                    _set(ws_b, total_row, 4, b_tot_ggst)
-                    _set(ws_b, total_row, 5, b_tot_cgst)
-                    _set(ws_b, total_row, 6, b_tot_igst if b_tot_igst else None)
-                    _set(ws_b, total_row, 7, b_tot_ref_wo if b_tot_ref_wo else None)
-                    _set(ws_b, total_row, 8, b_tot_ref_w if b_tot_ref_w else None)
+                    is_ho = sname.strip().upper() == 'HO'
+                    is_demat = sname.strip().upper() == 'DEMAT'
+                    if is_ho:
+                        _set(ws_b, total_row, 3, f"=SUM(C8:C{total_row-4})")
+                        _set(ws_b, total_row, 4, f"=SUM(D8:D{total_row-4})")
+                        _set(ws_b, total_row, 5, f"=SUM(E8:E{total_row-4})")
+                        _set(ws_b, total_row, 6, f"=SUM(F8:F{total_row-4})")
+                        _set(ws_b, total_row, 7, f"=SUM(G8:G{total_row-4})")
+                        _set(ws_b, total_row, 8, f"=SUM(H8:H{total_row-4})")
+                    elif is_demat:
+                        _set(ws_b, total_row, 3, f"=+SUM(C8:C{total_row-2})")
+                        _set(ws_b, total_row, 4, f"=+SUM(D8:D{total_row-2})")
+                        _set(ws_b, total_row, 5, f"=+SUM(E8:E{total_row-2})")
+                        _set(ws_b, total_row, 6, f"=+SUM(F8:F{total_row-2})")
+                        _set(ws_b, total_row, 7, f"=+SUM(G7:G{total_row-1})")
+                        _set(ws_b, total_row, 8, f"=+SUM(H7:H{total_row-1})")
+                    else:
+                        _set(ws_b, total_row, 3, f"=SUM(C9:C{total_row-1})")
+                        _set(ws_b, total_row, 4, f"=SUM(D9:D{total_row-1})")
+                        _set(ws_b, total_row, 5, f"=SUM(E9:E{total_row-1})")
+                        _set(ws_b, total_row, 6, f"=SUM(F9:F{total_row-1})")
+                        _set(ws_b, total_row, 7, f"=+SUM(G9:G{total_row-2})")
+                        _set(ws_b, total_row, 8, f"=SUM(H9:H{total_row-2})")
 
                     grand_income += b_tot_inc
                     grand_ggst += b_tot_ggst
@@ -8749,58 +8766,83 @@ def export_income_working_sheet():
                         r_pay = b_rows['pay']
                         r_diff = b_rows.get('diff', r_pay + 1)
 
-                        # (1) Income as per Ledger-wise Calculation
-                        _set(ws_b, r_inc, 3, b_tot_inc)
-                        _set(ws_b, r_inc, 4, b_tot_ggst)
-                        _set(ws_b, r_inc, 5, b_tot_cgst)
-                        _set(ws_b, r_inc, 6, b_tot_igst if b_tot_igst else 0.0)
-
-                        # (2) Refund Given but GST Refund Not Given
-                        ref_gst_b = round(b_tot_ref_wo * 0.09, 2)
-                        _set(ws_b, r_ref, 3, b_tot_ref_wo)
-                        _set(ws_b, r_ref, 4, ref_gst_b)
-                        _set(ws_b, r_ref, 5, ref_gst_b)
-                        _set(ws_b, r_ref, 6, 0.0)
-
-                        # Total
-                        b_tot_liab_ggst = round(b_tot_ggst + ref_gst_b, 2)
-                        b_tot_liab_cgst = round(b_tot_cgst + ref_gst_b, 2)
-                        b_tot_liab_igst = round(b_tot_igst, 2)
-                        _set(ws_b, r_tot, 3, round(b_tot_inc + b_tot_ref_wo, 2))
-                        _set(ws_b, r_tot, 4, b_tot_liab_ggst)
-                        _set(ws_b, r_tot, 5, b_tot_liab_cgst)
-                        _set(ws_b, r_tot, 6, b_tot_liab_igst if b_tot_liab_igst else 0.0)
-
-                        # (3) Payable as per Ledger: GGST (GL 1878), CGST (GL 1879), IGST (GL 1880)
                         l_sgst = ledger_vals.get('SGST_PAYABLE')
                         l_cgst = ledger_vals.get('CGST_PAYABLE')
                         l_igst = ledger_vals.get('IGST_PAYABLE')
 
-                        _set(ws_b, r_pay, 4, round(l_sgst, 2) if l_sgst is not None else 0.0)
-                        _set(ws_b, r_pay, 5, round(l_cgst, 2) if l_cgst is not None else 0.0)
-                        _set(ws_b, r_pay, 6, round(l_igst, 2) if l_igst is not None else 0.0)
+                        if is_ho:
+                            _set(ws_b, r_inc, 3, f"=+C{total_row}")
+                            _set(ws_b, r_inc, 4, f"=+D{total_row}")
+                            _set(ws_b, r_inc, 5, f"=+E{total_row}")
+                            _set(ws_b, r_inc, 6, f"=+F{total_row}")
+                            _set(ws_b, r_inc, 8, f"=+D{r_inc}-D{r_pay}")
 
-                        # Difference
-                        diff_ggst = round(b_tot_liab_ggst - (l_sgst or 0.0), 2)
-                        diff_cgst = round(b_tot_liab_cgst - (l_cgst or 0.0), 2)
-                        diff_igst = round(b_tot_liab_igst - (l_igst or 0.0), 2)
+                            _set(ws_b, r_ref, 3, f"=+G{total_row}")
+                            _set(ws_b, r_ref, 4, f"=+C{r_ref}*0.09")
+                            _set(ws_b, r_ref, 5, f"=+C{r_ref}*0.09")
+                            _set(ws_b, r_ref, 6, "=G30*18%")
 
-                        _set(ws_b, r_diff, 4, diff_ggst)
-                        _set(ws_b, r_diff, 5, diff_cgst)
-                        _set(ws_b, r_diff, 6, diff_igst)
-                        _set(ws_b, r_diff, 7, None)
-                        _set(ws_b, r_diff, 8, None)
+                            _set(ws_b, r_tot, 4, f"=+D{r_inc}+D{r_ref}")
+                            _set(ws_b, r_tot, 5, f"=+E{r_inc}+E{r_ref}")
+                            _set(ws_b, r_tot, 6, f"=+F{r_inc}+F{r_ref}")
 
-                    # Step 5: highlight this branch's tab when computed payable
-                    # differs from the ledger's own closing balance by > Rs 10 (only if data uploaded).
-                    diffs = []
-                    if ledger_vals.get('CGST_PAYABLE') is not None:
-                        diffs.append(abs(round(b_tot_cgst - ledger_vals['CGST_PAYABLE'], 2)))
-                    if ledger_vals.get('SGST_PAYABLE') is not None:
-                        diffs.append(abs(round(b_tot_ggst - ledger_vals['SGST_PAYABLE'], 2)))
-                    if ledger_vals.get('IGST_PAYABLE') is not None:
-                        diffs.append(abs(round(b_tot_igst - ledger_vals['IGST_PAYABLE'], 2)))
-                    ws_b.sheet_properties.tabColor = "FF0000" if (matched_dict or ledger_vals) and diffs and max(diffs) > 10 else None
+                            _set(ws_b, r_pay, 4, round(l_sgst, 2) if l_sgst is not None else 0.0)
+                            _set(ws_b, r_pay, 5, f"=+D{r_pay}")
+                            _set(ws_b, r_pay, 6, round(l_igst, 2) if l_igst is not None else 0.0)
+
+                            _set(ws_b, r_diff, 4, f"=+D{r_tot}-D{r_pay}")
+                            _set(ws_b, r_diff, 5, f"=+E{r_tot}-E{r_pay}")
+                            _set(ws_b, r_diff, 6, f"=+F{r_tot}-F{r_pay}")
+                            _set(ws_b, r_diff, 7, f"=+D{r_diff}/9*100")
+                        elif is_demat:
+                            _set(ws_b, r_inc, 3, f"=+C{total_row}")
+                            _set(ws_b, r_inc, 4, f"=+D{total_row}")
+                            _set(ws_b, r_inc, 5, f"=+E{total_row}")
+                            _set(ws_b, r_inc, 6, f"=+F{total_row}")
+
+                            _set(ws_b, r_ref, 3, f"=+G{total_row}")
+                            _set(ws_b, r_ref, 4, f"=+C{r_ref}*9%")
+                            _set(ws_b, r_ref, 5, f"=+D{r_ref}")
+                            _set(ws_b, r_ref, 6, 0.0)
+
+                            _set(ws_b, r_tot, 4, f"=+D{r_inc}+D{r_ref}")
+                            _set(ws_b, r_tot, 5, f"=+E{r_inc}+E{r_ref}")
+                            _set(ws_b, r_tot, 6, f"=+F{r_inc}+F{r_ref}")
+
+                            _set(ws_b, r_pay, 4, round(l_sgst, 2) if l_sgst is not None else 0.0)
+                            _set(ws_b, r_pay, 5, f"=+D{r_pay}")
+                            _set(ws_b, r_pay, 6, round(l_igst, 2) if l_igst is not None else 0.0)
+
+                            _set(ws_b, r_diff, 4, f"=+D{r_tot}-D{r_pay}")
+                            _set(ws_b, r_diff, 5, f"=+E{r_tot}-E{r_pay}")
+                            _set(ws_b, r_diff, 6, f"=+F{r_tot}-F{r_pay}")
+                            _set(ws_b, r_diff, 8, f"=+D{r_diff}+E{r_diff}")
+                        else:
+                            # Standard branch
+                            _set(ws_b, r_inc, 4, f"=+D{total_row}")
+                            _set(ws_b, r_inc, 5, f"=+E{total_row}")
+                            _set(ws_b, r_inc, 6, f"=+F{total_row}")
+
+                            _set(ws_b, r_ref, 3, f"=+G{total_row}")
+                            _set(ws_b, r_ref, 4, f"=C{r_ref}*0.09")
+                            _set(ws_b, r_ref, 5, f"=+C{r_ref}*0.09")
+                            _set(ws_b, r_ref, 6, 0.0)
+
+                            _set(ws_b, r_tot, 4, f"=+D{r_inc}+D{r_ref}")
+                            _set(ws_b, r_tot, 5, f"=+E{r_inc}+E{r_ref}")
+                            _set(ws_b, r_tot, 6, f"=SUM(F{r_inc}:F{r_ref})")
+
+                            _set(ws_b, r_pay, 4, round(l_sgst, 2) if l_sgst is not None else 0.0)
+                            _set(ws_b, r_pay, 5, f"=+D{r_pay}")
+                            _set(ws_b, r_pay, 6, round(l_igst, 2) if l_igst is not None else 0.0)
+
+                            _set(ws_b, r_diff, 4, f"=+D{r_tot}-D{r_pay}")
+                            _set(ws_b, r_diff, 5, f"=+E{r_tot}-E{r_pay}")
+                            _set(ws_b, r_diff, 6, f"=+F{r_pay}-F{r_inc}")
+                            _set(ws_b, r_diff, 7, f"=+D{r_diff}/9%")
+
+                    # Tab color: Green FF92D050 if statements were uploaded for this branch (completed branch)
+                    ws_b.sheet_properties.tabColor = openpyxl.styles.colors.Color(rgb="FF92D050") if bool(matched_dict) else None
 
                     if sname.strip().upper() not in ('HO', 'DEMAT'):
                         s1_grand['inc'] += b_tot_inc
@@ -8811,83 +8853,57 @@ def export_income_working_sheet():
 
                 if 'Sheet1' in wb.sheetnames:
                     # Sheet1 is a bank-wide (all branches except HO & DEMAT), GL-code
-                    # level roll-up - the same code_level totals accumulated above,
-                    # written the same zero-if-absent way as each branch sheet so no
-                    # template-contaminated figure can survive.
+                    # level roll-up with dynamic formulas matching CA office format.
                     ws_s1 = wb['Sheet1']
                     ws_s1['A5'] = f"SUMMARY OF INCOME FOR THE MONTH OF {period_str}"
                     ws_s1['A5'].font = Font(name="Arial", size=12, bold=True)
-                    s1_total = {'inc': 0.0, 'sgst': 0.0, 'cgst': 0.0, 'igst': 0.0, 'refwo': 0.0}
-                    for r in range(9, 68):
+                    for r in range(9, 64):
                         c_val = ws_s1.cell(r, 1).value
                         if c_val is None:
                             continue
                         m_code = code_row_re.match(str(c_val).strip())
                         if not m_code:
                             continue
-                        cl = s1_code_level.get(m_code.group(1))
+                        norm_code = m_code.group(1)
+                        cl = s1_code_level.get(norm_code)
                         inc_amt = cl['inc'] if cl else 0.0
-                        sgst_amt = cl['sgst'] if cl else 0.0
-                        cgst_amt = cl['cgst'] if cl else 0.0
                         igst_amt = cl['igst'] if cl else 0.0
                         refwo_amt = cl['refwo'] if cl else 0.0
-                        _set(ws_s1, r, 3, inc_amt)
-                        _set(ws_s1, r, 4, sgst_amt)
-                        _set(ws_s1, r, 5, cgst_amt)
+                        rate_str = "2.5%" if norm_code == '3325' else "9%"
+                        _set(ws_s1, r, 3, inc_amt if inc_amt else None)
+                        _set(ws_s1, r, 4, f"=+C{r}*{rate_str}")
+                        _set(ws_s1, r, 5, f"=+D{r}")
                         _set(ws_s1, r, 6, igst_amt if igst_amt else None)
                         _set(ws_s1, r, 7, refwo_amt if refwo_amt else None)
-                        s1_total['inc'] += inc_amt
-                        s1_total['sgst'] += sgst_amt
-                        s1_total['cgst'] += cgst_amt
-                        s1_total['igst'] += igst_amt
-                        s1_total['refwo'] += refwo_amt
 
-                    _set(ws_s1, 64, 3, s1_total['inc'])
-                    _set(ws_s1, 64, 4, s1_total['sgst'])
-                    _set(ws_s1, 64, 5, s1_total['cgst'])
-                    _set(ws_s1, 64, 6, s1_total['igst'] if s1_total['igst'] else None)
-                    _set(ws_s1, 64, 7, s1_total['refwo'] if s1_total['refwo'] else None)
+                    _set(ws_s1, 64, 3, "=SUM(C9:C63)")
+                    _set(ws_s1, 64, 4, "=SUM(D9:D63)")
+                    _set(ws_s1, 64, 5, "=SUM(E9:E63)")
+                    _set(ws_s1, 64, 6, "=SUM(F9:F62)")
+                    _set(ws_s1, 64, 7, "='ODHAV '!C62+RAKHIAL!C62+CHANGODAR!C63+'NEW SHARDA'!C62+ISANPUR!C62+MANINAGAR!C62+'SHANTI COMM'!C62+MASKATI!C62+VEJALPUR!C62+'JODHPUR-SATELLITE'!C62+PANJRAPOLE!C62+'ASHRAM ROAD'!C62+NARAYANNAGAR!C62+NARANPURA!C62+'DRIVE IN'!C63+'VASANA '!C62+SURAT!C62+'LAW GARDEN'!C62+'NEW CLOTH'!C62+BAPUNAGAR!C62+BOPAL!C63+THALTEJ!C62")
 
-                    for rr in range(73, 78):
-                        for cc in range(3, 8):
-                            _set(ws_s1, rr, cc, None)
-                    _set(ws_s1, 73, 3, s1_grand['inc'])
-                    _set(ws_s1, 73, 4, s1_grand['sgst'])
-                    _set(ws_s1, 73, 5, s1_grand['cgst'])
-                    _set(ws_s1, 73, 6, s1_grand['igst'])
-                    ref_gst_s1 = round(s1_grand['refwo'] * 0.09, 2)
-                    _set(ws_s1, 74, 3, s1_grand['refwo'])
-                    _set(ws_s1, 74, 4, ref_gst_s1)
-                    _set(ws_s1, 74, 5, ref_gst_s1)
-                    _set(ws_s1, 75, 3, s1_grand['inc'] + s1_grand['refwo'])
-                    _set(ws_s1, 75, 4, s1_grand['sgst'] + ref_gst_s1)
-                    _set(ws_s1, 75, 5, s1_grand['cgst'] + ref_gst_s1)
-                    _set(ws_s1, 75, 6, s1_grand['igst'])
+                    _set(ws_s1, 73, 3, "=+C64")
+                    _set(ws_s1, 73, 4, "='ODHAV '!D71+RAKHIAL!D71+'NEW SHARDA'!D71+CHANGODAR!D71+ISANPUR!D71+MANINAGAR!D71+'SHANTI COMM'!D71+MASKATI!D71+VEJALPUR!D71+'JODHPUR-SATELLITE'!D71+PANJRAPOLE!D71+'ASHRAM ROAD'!D71+NARAYANNAGAR!D71+NARANPURA!D71+'DRIVE IN'!D71+'VASANA '!D71+SURAT!D71+'LAW GARDEN'!D71+'NEW CLOTH'!D71+BOPAL!D72+THALTEJ!D72+BAPUNAGAR!D71+CHANDKHEDA!D71+VASTRAL!D71")
+                    _set(ws_s1, 73, 5, "='ODHAV '!E71+RAKHIAL!E71+'NEW SHARDA'!E71+CHANGODAR!E71+ISANPUR!E71+MANINAGAR!E71+'SHANTI COMM'!E71+MASKATI!E71+VEJALPUR!E71+'JODHPUR-SATELLITE'!E71+PANJRAPOLE!E71+'ASHRAM ROAD'!E71+NARAYANNAGAR!E71+NARANPURA!E71+'DRIVE IN'!E71+'VASANA '!E71+SURAT!E71+'LAW GARDEN'!E71+'NEW CLOTH'!E71+BOPAL!E72+THALTEJ!E72+BAPUNAGAR!E71+CHANDKHEDA!E71+VASTRAL!E71")
+                    _set(ws_s1, 73, 6, "=+F64")
 
-                    # Sheet1 (3) Payable as per Ledger & Difference
-                    s1_ledger_sgst = sum(
-                        (lv.get('SGST_PAYABLE') or 0.0)
-                        for b_k, lv in ledger_by_branch.items()
-                        if b_k not in ('HO', 'DEMAT')
-                    )
-                    s1_ledger_cgst = sum(
-                        (lv.get('CGST_PAYABLE') or 0.0)
-                        for b_k, lv in ledger_by_branch.items()
-                        if b_k not in ('HO', 'DEMAT')
-                    )
-                    s1_ledger_igst = sum(
-                        (lv.get('IGST_PAYABLE') or 0.0)
-                        for b_k, lv in ledger_by_branch.items()
-                        if b_k not in ('HO', 'DEMAT')
-                    )
+                    _set(ws_s1, 74, 3, "='ODHAV '!C72+RAKHIAL!C72+'NEW SHARDA'!C72+CHANGODAR!C72+ISANPUR!C72+MANINAGAR!C72+'SHANTI COMM'!C72+MASKATI!C72+VEJALPUR!C72+'JODHPUR-SATELLITE'!C72+PANJRAPOLE!C72+'ASHRAM ROAD'!C72+NARAYANNAGAR!C72+NARANPURA!C72+'DRIVE IN'!C72+'VASANA '!C72+SURAT!C72+'LAW GARDEN'!C72+'NEW CLOTH'!C72+BAPUNAGAR!C72+BOPAL!C73+THALTEJ!C73")
+                    _set(ws_s1, 74, 4, "='ODHAV '!D72+RAKHIAL!D72+'NEW SHARDA'!D72+CHANGODAR!D72+ISANPUR!D72+MANINAGAR!D72+'SHANTI COMM'!D72+MASKATI!D72+VEJALPUR!D72+'JODHPUR-SATELLITE'!D72+PANJRAPOLE!D72+'ASHRAM ROAD'!D72+NARAYANNAGAR!D72+NARANPURA!D72+'DRIVE IN'!D72+'VASANA '!D72+SURAT!D72+'LAW GARDEN'!D72+'NEW CLOTH'!D72+BOPAL!D73+THALTEJ!D73+BAPUNAGAR!D72+CHANDKHEDA!D72+VASTRAL!D72")
+                    _set(ws_s1, 74, 5, "='ODHAV '!E72+RAKHIAL!E72+'NEW SHARDA'!E72+CHANGODAR!E72+ISANPUR!E72+MANINAGAR!E72+'SHANTI COMM'!E72+MASKATI!E72+VEJALPUR!E72+'JODHPUR-SATELLITE'!E72+PANJRAPOLE!E72+'ASHRAM ROAD'!E72+NARAYANNAGAR!E72+NARANPURA!E72+'DRIVE IN'!E72+'VASANA '!E72+SURAT!E72+'LAW GARDEN'!E72+'NEW CLOTH'!E72+BOPAL!E73+THALTEJ!E73+BAPUNAGAR!E72+CHANDKHEDA!E72+VASTRAL!E72")
+                    _set(ws_s1, 74, 6, 0.0)
 
-                    _set(ws_s1, 76, 4, round(s1_ledger_sgst, 2))
-                    _set(ws_s1, 76, 5, round(s1_ledger_cgst, 2))
-                    _set(ws_s1, 76, 6, round(s1_ledger_igst, 2))
+                    _set(ws_s1, 75, 3, "=+C73+C74")
+                    _set(ws_s1, 75, 4, "=SUM(D73:D74)")
+                    _set(ws_s1, 75, 5, "=SUM(E73:E74)")
+                    _set(ws_s1, 75, 6, "=+F73+F74")
 
-                    _set(ws_s1, 77, 4, round((s1_grand['sgst'] + ref_gst_s1) - s1_ledger_sgst, 2))
-                    _set(ws_s1, 77, 5, round((s1_grand['cgst'] + ref_gst_s1) - s1_ledger_cgst, 2))
-                    _set(ws_s1, 77, 6, round(s1_grand['igst'] - s1_ledger_igst, 2))
+                    _set(ws_s1, 76, 4, "='ODHAV '!D74+RAKHIAL!D74+'NEW SHARDA'!D74+CHANGODAR!D74+ISANPUR!D74+MANINAGAR!D74+'SHANTI COMM'!D74+MASKATI!D74+VEJALPUR!D74+'JODHPUR-SATELLITE'!D74+PANJRAPOLE!D74+'ASHRAM ROAD'!D74+NARAYANNAGAR!D74+NARANPURA!D74+'DRIVE IN'!D74+'VASANA '!D74+SURAT!D74+'LAW GARDEN'!D74+'NEW CLOTH'!D74+BAPUNAGAR!D74+BOPAL!D75+THALTEJ!D75+CHANDKHEDA!D74+VASTRAL!D74")
+                    _set(ws_s1, 76, 5, "='ODHAV '!E74+RAKHIAL!E74+'NEW SHARDA'!E74+CHANGODAR!E74+ISANPUR!E74+MANINAGAR!E74+'SHANTI COMM'!E74+MASKATI!E74+VEJALPUR!E74+'JODHPUR-SATELLITE'!E74+PANJRAPOLE!E74+'ASHRAM ROAD'!E74+NARAYANNAGAR!E74+NARANPURA!E74+'DRIVE IN'!E74+'VASANA '!E74+SURAT!E74+'LAW GARDEN'!E74+'NEW CLOTH'!E74+BAPUNAGAR!E74+BOPAL!E75+THALTEJ!E75+CHANDKHEDA!E74+VASTRAL!E74")
+                    _set(ws_s1, 76, 6, "='ODHAV '!F74+RAKHIAL!F74+CHANGODAR!F74+'NEW SHARDA'!F74+ISANPUR!F74+MANINAGAR!F74+'SHANTI COMM'!F74+MASKATI!F74+VEJALPUR!F74+'JODHPUR-SATELLITE'!F74+PANJRAPOLE!F74+'ASHRAM ROAD'!F74+NARAYANNAGAR!F74+NARANPURA!F74+'DRIVE IN'!F74+'VASANA '!F74+SURAT!F74+'LAW GARDEN'!F74+'NEW CLOTH'!F74+BAPUNAGAR!F74+BOPAL!F75+THALTEJ!F75")
+
+                    _set(ws_s1, 77, 4, "='ODHAV '!D75+RAKHIAL!D75+'NEW SHARDA'!D75+CHANGODAR!D75+ISANPUR!D75+MANINAGAR!D75+'SHANTI COMM'!D75+MASKATI!D75+VEJALPUR!D75+'JODHPUR-SATELLITE'!D75+PANJRAPOLE!D75+'ASHRAM ROAD'!D75+NARAYANNAGAR!D75+NARANPURA!D75+'DRIVE IN'!D75+'VASANA '!D75+SURAT!D75+'LAW GARDEN'!D75+'NEW CLOTH'!D75+BAPUNAGAR!D75+BOPAL!D76+THALTEJ!D76")
+                    _set(ws_s1, 77, 5, "='ODHAV '!E75+RAKHIAL!E75+CHANGODAR!E75+'NEW SHARDA'!E75+ISANPUR!E75+MANINAGAR!E75+'SHANTI COMM'!E75+MASKATI!E75+VEJALPUR!E75+'JODHPUR-SATELLITE'!E75+PANJRAPOLE!E75+'ASHRAM ROAD'!E75+NARAYANNAGAR!E75+NARANPURA!E75+'DRIVE IN'!E75+'VASANA '!E75+SURAT!E75+'LAW GARDEN'!E75+'NEW CLOTH'!E75+BAPUNAGAR!E75+BOPAL!E76+THALTEJ!E76")
+                    _set(ws_s1, 77, 6, "=+F75-F76")
 
                 # SUMMARY SHEET GST - Section (1) Exempt Income, Section (2) Taxable Income & Section (8) GSTR-1 Working
                 if 'SUMMARY SHEET GST' in wb.sheetnames:
@@ -8926,42 +8942,41 @@ def export_income_working_sheet():
                             _set(ws_sum, unmapped_r, 5, None)
                             _set(ws_sum, unmapped_r, 6, None)
 
-                    # Section 2: Taxable income, rolled up from branch totals
-                    _set(ws_sum, 27, 3, grand_income)
-                    _set(ws_sum, 27, 4, grand_ggst)
-                    _set(ws_sum, 27, 5, grand_cgst)
-                    _set(ws_sum, 27, 6, grand_igst)
-                    _set(ws_sum, 27, 7, grand_ggst + grand_cgst + grand_igst)
+                    # Section 2: Taxable income with CA Office dynamic cross-sheet formulas
+                    _set(ws_sum, 27, 3, "=+Sheet1!C73+HO!C57+DEMAT!C40")
+                    _set(ws_sum, 27, 4, "=+Sheet1!D73+HO!D57+DEMAT!D40-D28")
+                    _set(ws_sum, 27, 5, "=+Sheet1!E73+HO!E57+DEMAT!E40-E28")
+                    _set(ws_sum, 27, 6, "=+Sheet1!F73+HO!F57+DEMAT!F40")
+                    _set(ws_sum, 27, 7, "=SUM(D27:F27)")
 
-                    _set(ws_sum, 29, 3, grand_ref_wo)
-                    ref_gst = round(grand_ref_wo * 0.09, 2)
-                    _set(ws_sum, 29, 4, ref_gst)
-                    _set(ws_sum, 29, 5, ref_gst)
-                    _set(ws_sum, 29, 7, ref_gst * 2)
+                    _set(ws_sum, 28, 3, 0.0)
+                    _set(ws_sum, 28, 4, 0.0)
+                    _set(ws_sum, 28, 5, "=+D28")
+                    _set(ws_sum, 28, 6, 0.0)
+                    _set(ws_sum, 28, 7, "=SUM(D28:F28)")
 
-                    tot_inc = grand_income + grand_ref_wo
-                    tot_ggst = grand_ggst + ref_gst
-                    tot_cgst = grand_cgst + ref_gst
-                    _set(ws_sum, 30, 3, tot_inc)
-                    _set(ws_sum, 30, 4, tot_ggst)
-                    _set(ws_sum, 30, 5, tot_cgst)
-                    _set(ws_sum, 30, 6, grand_igst)
-                    _set(ws_sum, 30, 7, tot_ggst + tot_cgst + grand_igst)
+                    _set(ws_sum, 29, 3, "=+Sheet1!C74+HO!C58+DEMAT!C41")
+                    _set(ws_sum, 29, 4, "=+Sheet1!D74+HO!D58+DEMAT!D41")
+                    _set(ws_sum, 29, 5, "=+Sheet1!E74+HO!E58+DEMAT!E41")
+                    _set(ws_sum, 29, 6, "=+Sheet1!F74+HO!F58+DEMAT!F41")
+                    _set(ws_sum, 29, 7, "=SUM(D29:F29)")
+
+                    _set(ws_sum, 30, 3, "=+C27+C29+C28")
+                    _set(ws_sum, 30, 4, "=SUM(D27:D29)")
+                    _set(ws_sum, 30, 5, "=SUM(E27:E29)")
+                    _set(ws_sum, 30, 6, "=SUM(F27:F29)")
+                    _set(ws_sum, 30, 7, "=SUM(D30:F30)")
 
                     # Step 3 & 4: Payable as per Ledger (Row 31) & Difference (Row 32)
-                    tot_ledger_cgst = sum(r['closing_balance'] for r in ledger_rows if r.get('ledger_role') == 'CGST_PAYABLE' and r.get('closing_balance') is not None)
-                    tot_ledger_sgst = sum(r['closing_balance'] for r in ledger_rows if r.get('ledger_role') == 'SGST_PAYABLE' and r.get('closing_balance') is not None)
-                    tot_ledger_igst = sum(r['closing_balance'] for r in ledger_rows if r.get('ledger_role') == 'IGST_PAYABLE' and r.get('closing_balance') is not None)
+                    _set(ws_sum, 31, 4, "=+Sheet1!D76+HO!D60+DEMAT!D43")
+                    _set(ws_sum, 31, 5, "=+Sheet1!E76+HO!E60+DEMAT!E43")
+                    _set(ws_sum, 31, 6, "=+Sheet1!F76+HO!F60+DEMAT!F43")
+                    _set(ws_sum, 31, 7, "=SUM(D31:F31)")
 
-                    # Always write rows 31 & 32 so template baseline figures never leak into current period
-                    _set(ws_sum, 31, 4, round(tot_ledger_sgst, 2))
-                    _set(ws_sum, 31, 5, round(tot_ledger_cgst, 2))
-                    _set(ws_sum, 31, 6, round(tot_ledger_igst, 2))
-                    _set(ws_sum, 31, 7, round(tot_ledger_sgst + tot_ledger_cgst + tot_ledger_igst, 2))
-                    _set(ws_sum, 32, 4, round(tot_ggst - tot_ledger_sgst, 2))
-                    _set(ws_sum, 32, 5, round(tot_cgst - tot_ledger_cgst, 2))
-                    _set(ws_sum, 32, 6, round(grand_igst - tot_ledger_igst, 2))
-                    _set(ws_sum, 32, 7, round((tot_ggst - tot_ledger_sgst) + (tot_cgst - tot_ledger_cgst) + (grand_igst - tot_ledger_igst), 2))
+                    _set(ws_sum, 32, 4, "=+D30-D31-D28")
+                    _set(ws_sum, 32, 5, "=+E30-E31-E28")
+                    _set(ws_sum, 32, 6, "=+F30-F31-F28")
+                    _set(ws_sum, 32, 7, "=SUM(D32:F32)")
 
                 # New sheet (CA steps 3-4-6): per-branch computed-from-income
                 # GST payable vs the bank's own ledger closing balance (GL
