@@ -689,8 +689,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
     incomeFileInput.addEventListener('change', () => {
         if (incomeFileInput.files && incomeFileInput.files.length > 0) {
-            const files = Array.from(incomeFileInput.files).filter(isSupportedIncomeFile);
-            if (files.length > 0) handleFileUpload(files);
+            const allSelected = Array.from(incomeFileInput.files);
+            const files = allSelected.filter(isSupportedIncomeFile);
+            if (files.length > 0) {
+                handleFileUpload(files);
+            } else {
+                const rejected = allSelected.map(f => f.name).join('\n');
+                alert(`None of the selected file(s) could be uploaded - they don't have a recognized extension (.pdf, .xlsx, .xls, .csv, .zip):\n\n${rejected}\n\nIf a file is missing its extension (e.g. named "GL 1878 SEP 2026" instead of "GL 1878 SEP 2026.xls"), rename it to add the correct extension and try again.`);
+            }
         }
         incomeFileInput.value = '';
     });
