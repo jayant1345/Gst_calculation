@@ -6243,6 +6243,35 @@ def _capture_closing_balance_value(lines, start_idx, max_lookahead=15):
     return None
 
 
+def _capture_r009007_closing_balance(rows):
+    """The "R009007 - Statement of GL Account" format (used for GL 1878/1879/
+    1880 payable-ledger statements) never prints a "Closing Balance" text
+    label anywhere, so _capture_closing_balance_value's anchor never fires
+    for it - confirmed against 2 real CA-uploaded files (GL 1878 and GL
+    1879), both ~6400 rows, single account per sheet. Its own trailing
+    "Total" row instead repeats the true closing figure as its own last
+    numeric cell (verified in both real files: this exactly matches the
+    last individual transaction row's running-balance figure). Returns the
+    last numeric cell of the first row whose first cell is literally "Total"
+    (not "Total :"/"Total:", which other formats already handle correctly
+    via the existing closing-balance path), or None if no such row exists."""
+    for row in rows:
+        first_cell = row[0] if row else None
+        if first_cell is not None and str(first_cell).strip().lower() == 'total':
+            nums = []
+            for v in row:
+                if isinstance(v, (int, float)):
+                    nums.append(float(v))
+                elif isinstance(v, str) and _LEDGER_NUM_RE.match(v.strip()):
+                    parsed = _ledger_num(v)
+                    if parsed is not None:
+                        nums.append(parsed)
+            if nums:
+                return round(nums[-1], 2)
+            return None
+    return None
+
+
 def _extract_ledger_code(cand):
     cand = cand.strip()
     cand_clean = re.sub(r'^(?:PL|GL|P/L|G/L)[\s\-_.:]*', '', cand, flags=re.IGNORECASE).strip()
@@ -6708,6 +6737,7 @@ def extract_raw_ledger_accounts_xlsx(file_bytes, filename):
         branch = _extract_branch_from_folder_path(filename) or _detect_ledger_branch(flat_text, filename)
         branch_code = _extract_branch_code(flat_text)
         det_month, det_fy = detect_statement_period(flat_text, filename, rows)
+        is_r009007 = bool(re.search(r'R009007|Statement\s+of\s+GL\s+Account', flat_text, re.IGNORECASE))
         for a in accounts:
             a['branch'] = branch
             a['branch_code'] = branch_code
@@ -6716,6 +6746,8 @@ def extract_raw_ledger_accounts_xlsx(file_bytes, filename):
                 a['month'] = det_month
             if det_fy:
                 a['financial_year'] = det_fy
+            if is_r009007 and a.get('closing_balance') is None:
+                a['closing_balance'] = _capture_r009007_closing_balance(rows)
         all_accounts.extend(accounts)
     return all_accounts
 
@@ -6757,6 +6789,7 @@ def extract_raw_ledger_accounts_xls(file_bytes, filename):
         branch = _extract_branch_from_folder_path(filename) or _detect_ledger_branch(flat_text, filename)
         branch_code = _extract_branch_code(flat_text)
         det_month, det_fy = detect_statement_period(flat_text, filename, rows)
+        is_r009007 = bool(re.search(r'R009007|Statement\s+of\s+GL\s+Account', flat_text, re.IGNORECASE))
         for a in accounts:
             a['branch'] = branch
             a['branch_code'] = branch_code
@@ -6765,6 +6798,8 @@ def extract_raw_ledger_accounts_xls(file_bytes, filename):
                 a['month'] = det_month
             if det_fy:
                 a['financial_year'] = det_fy
+            if is_r009007 and a.get('closing_balance') is None:
+                a['closing_balance'] = _capture_r009007_closing_balance(rows)
         all_accounts.extend(accounts)
     return all_accounts
 
