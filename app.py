@@ -8988,9 +8988,21 @@ def export_income_working_sheet():
                             _set(ws_b, r_tot, 5, f"=+E{r_inc}+E{r_ref}")
                             _set(ws_b, r_tot, 6, f"=+F{r_inc}+F{r_ref}")
 
-                            _set(ws_b, r_pay, 4, round(l_sgst, 2) if l_sgst is not None else 0.0)
-                            _set(ws_b, r_pay, 5, f"=+D{r_pay}")
-                            _set(ws_b, r_pay, 6, round(l_igst, 2) if l_igst is not None else 0.0)
+                            # Only overwrite the template's existing "Payable as
+                            # per Ledger" cell when a fresh GL 1878/1879/1880
+                            # upload actually produced a real closing balance.
+                            # The master template ships with CA-verified
+                            # reference figures pre-filled for many branches
+                            # (confirmed: VASANA's template value, 35950.57,
+                            # matches our own independently-parsed real closing
+                            # balance to the cent) - unconditionally zeroing
+                            # this out whenever fresh data is missing destroys
+                            # that real, already-correct number.
+                            if l_sgst is not None:
+                                _set(ws_b, r_pay, 4, round(l_sgst, 2))
+                                _set(ws_b, r_pay, 5, f"=+D{r_pay}")
+                            if l_igst is not None:
+                                _set(ws_b, r_pay, 6, round(l_igst, 2))
 
                             _set(ws_b, r_diff, 4, f"=+D{r_tot}-D{r_pay}")
                             _set(ws_b, r_diff, 5, f"=+E{r_tot}-E{r_pay}")
@@ -9011,9 +9023,21 @@ def export_income_working_sheet():
                             _set(ws_b, r_tot, 5, f"=+E{r_inc}+E{r_ref}")
                             _set(ws_b, r_tot, 6, f"=+F{r_inc}+F{r_ref}")
 
-                            _set(ws_b, r_pay, 4, round(l_sgst, 2) if l_sgst is not None else 0.0)
-                            _set(ws_b, r_pay, 5, f"=+D{r_pay}")
-                            _set(ws_b, r_pay, 6, round(l_igst, 2) if l_igst is not None else 0.0)
+                            # Only overwrite the template's existing "Payable as
+                            # per Ledger" cell when a fresh GL 1878/1879/1880
+                            # upload actually produced a real closing balance.
+                            # The master template ships with CA-verified
+                            # reference figures pre-filled for many branches
+                            # (confirmed: VASANA's template value, 35950.57,
+                            # matches our own independently-parsed real closing
+                            # balance to the cent) - unconditionally zeroing
+                            # this out whenever fresh data is missing destroys
+                            # that real, already-correct number.
+                            if l_sgst is not None:
+                                _set(ws_b, r_pay, 4, round(l_sgst, 2))
+                                _set(ws_b, r_pay, 5, f"=+D{r_pay}")
+                            if l_igst is not None:
+                                _set(ws_b, r_pay, 6, round(l_igst, 2))
 
                             _set(ws_b, r_diff, 4, f"=+D{r_tot}-D{r_pay}")
                             _set(ws_b, r_diff, 5, f"=+E{r_tot}-E{r_pay}")
@@ -9034,9 +9058,21 @@ def export_income_working_sheet():
                             _set(ws_b, r_tot, 5, f"=+E{r_inc}+E{r_ref}")
                             _set(ws_b, r_tot, 6, f"=SUM(F{r_inc}:F{r_ref})")
 
-                            _set(ws_b, r_pay, 4, round(l_sgst, 2) if l_sgst is not None else 0.0)
-                            _set(ws_b, r_pay, 5, f"=+D{r_pay}")
-                            _set(ws_b, r_pay, 6, round(l_igst, 2) if l_igst is not None else 0.0)
+                            # Only overwrite the template's existing "Payable as
+                            # per Ledger" cell when a fresh GL 1878/1879/1880
+                            # upload actually produced a real closing balance.
+                            # The master template ships with CA-verified
+                            # reference figures pre-filled for many branches
+                            # (confirmed: VASANA's template value, 35950.57,
+                            # matches our own independently-parsed real closing
+                            # balance to the cent) - unconditionally zeroing
+                            # this out whenever fresh data is missing destroys
+                            # that real, already-correct number.
+                            if l_sgst is not None:
+                                _set(ws_b, r_pay, 4, round(l_sgst, 2))
+                                _set(ws_b, r_pay, 5, f"=+D{r_pay}")
+                            if l_igst is not None:
+                                _set(ws_b, r_pay, 6, round(l_igst, 2))
 
                             _set(ws_b, r_diff, 4, f"=+D{r_tot}-D{r_pay}")
                             _set(ws_b, r_diff, 5, f"=+E{r_tot}-E{r_pay}")
@@ -9565,18 +9601,18 @@ def export_income_working_sheet():
             ws_b.cell(row=b_row, column=5, value=tot_liab_cgst).font = bold_num_font
             ws_b.cell(row=b_row, column=6, value=round(b_tot_igst, 2)).font = bold_num_font
             b_row += 1
-            l_sgst = round(l_vals.get('SGST_PAYABLE', 0.0) or 0.0, 2)
-            l_cgst = round(l_vals.get('CGST_PAYABLE', 0.0) or 0.0, 2)
-            l_igst = round(l_vals.get('IGST_PAYABLE', 0.0) or 0.0, 2)
+            l_sgst_raw = l_vals.get('SGST_PAYABLE')
+            l_cgst_raw = l_vals.get('CGST_PAYABLE')
+            l_igst_raw = l_vals.get('IGST_PAYABLE')
             ws_b.cell(row=b_row, column=1, value="(3) PAYABLE AS PER LEDGER").font = num_font
-            ws_b.cell(row=b_row, column=4, value=l_sgst).font = num_font
-            ws_b.cell(row=b_row, column=5, value=l_cgst).font = num_font
-            ws_b.cell(row=b_row, column=6, value=l_igst).font = num_font
+            ws_b.cell(row=b_row, column=4, value=round(l_sgst_raw, 2) if l_sgst_raw is not None else "—").font = num_font
+            ws_b.cell(row=b_row, column=5, value=round(l_cgst_raw, 2) if l_cgst_raw is not None else "—").font = num_font
+            ws_b.cell(row=b_row, column=6, value=round(l_igst_raw, 2) if l_igst_raw is not None else "—").font = num_font
             b_row += 1
             ws_b.cell(row=b_row, column=1, value="DIFFERENCE").font = bold_num_font
-            ws_b.cell(row=b_row, column=4, value=round(tot_liab_ggst - l_sgst, 2)).font = bold_num_font
-            ws_b.cell(row=b_row, column=5, value=round(tot_liab_cgst - l_cgst, 2)).font = bold_num_font
-            ws_b.cell(row=b_row, column=6, value=round(b_tot_igst - l_igst, 2)).font = bold_num_font
+            ws_b.cell(row=b_row, column=4, value=round(tot_liab_ggst - l_sgst_raw, 2) if l_sgst_raw is not None else "—").font = bold_num_font
+            ws_b.cell(row=b_row, column=5, value=round(tot_liab_cgst - l_cgst_raw, 2) if l_cgst_raw is not None else "—").font = bold_num_font
+            ws_b.cell(row=b_row, column=6, value=round(b_tot_igst - l_igst_raw, 2) if l_igst_raw is not None else "—").font = bold_num_font
 
         for sheet in wb.worksheets:
             for col in sheet.columns:
