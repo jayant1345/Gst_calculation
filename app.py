@@ -6776,6 +6776,15 @@ def extract_raw_ledger_accounts_xls(file_bytes, filename):
 # affected entries for the CA to check manually, rather than to guess a number.
 RECLASS_PAIR_CODES = {'1836': '3320', '1720': '3230'}
 
+# Codes that are a genuine bank-internal mirror entry: the SAME code number
+# is, correctly, an expense at HO (interest HO pays out to branches) but
+# real taxable income at every other branch (interest that branch receives
+# from HO) - confirmed for 3170 via VASANA's September statement, where the
+# whole entry was silently dropped because the code also exists in the
+# expense catalog. Only exclude these from income when the branch really is
+# HO; every other branch still gets the income.
+HO_ONLY_EXPENSE_CODES = {'3170'}
+
 
 def finalize_ledger_accounts(raw_accounts, financial_year='2026-27', month='July'):
     """Group raw {branch, gl_code, dr, cr, net} accounts by branch, apply the
@@ -6844,9 +6853,16 @@ def finalize_ledger_accounts(raw_accounts, financial_year='2026-27', month='July
 
             if meta is None:
                 exp_meta = get_expense_code_meta(code)
-                if exp_meta:
+                if exp_meta and not (code in HO_ONLY_EXPENSE_CODES and branch.strip().upper() != 'HO'):
                     # Account is an Expense PL Code (from CA PL CODE_EXPENSE.xlsx catalog)
                     # Exclude from income_entries so it never falsely taxes operational bank expenses.
+                    # Exception: a small set of codes are a genuine bank-internal
+                    # mirror entry - HO's "interest paid to branches" EXPENSE and
+                    # a branch's "interest received from HO" INCOME share the
+                    # same code number (confirmed for 3170 - VASANA's real
+                    # income under this code was being silently dropped because
+                    # the same code is, correctly, an expense at HO itself).
+                    # Only exclude for HO, where it really is an expense.
                     continue
 
             # GL codes the catalog marks as a payable-ledger account (GL
