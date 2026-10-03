@@ -6497,6 +6497,26 @@ def _detect_ledger_branch(text, filename):
     return None
 
 
+# Authoritative branch-code -> name mapping, as supplied directly by the CA
+# office (BRANCH CODE LIST.xlsx - the bank's own official branch numbering).
+# Far more reliable than in-batch code-learning (which only resolves a code
+# if some OTHER file in the same upload happens to also carry a recognizable
+# branch name) or text-detection (which can misfire on spelling mismatches
+# like "Vasna" vs catalog "VASANA", or false-match a short name like "HO"
+# inside unrelated narration text). Keys are the numeric code as a string
+# (matching _extract_branch_code's output); values are catalog-canonical
+# branch names.
+BRANCH_CODE_TO_NAME = {
+    '1': 'HO', '2': 'MASKATI', '3': 'NEW CLOTH', '4': 'SHANTI COMM',
+    '5': 'ASHRAM ROAD', '6': 'RAKHIAL', '7': 'BAPUNAGAR', '8': 'VASANA',
+    '9': 'DRIVE IN', '10': 'PANJRAPOLE', '11': 'JODHPUR-SATELLITE',
+    '12': 'LAW GARDEN', '13': 'ISANPUR', '14': 'NARANPURA',
+    '15': 'NARAYANNAGAR', '16': 'NEW SHARDA', '17': 'VEJALPUR',
+    '18': 'THALTEJ', '19': 'MANINAGAR', '20': 'CHANGODAR', '21': 'ODHAV',
+    '22': 'BOPAL', '23': 'CHANDKHEDA', '24': 'VASTRAL', '41': 'SURAT',
+    '99': 'DEMAT',
+}
+
 _BRANCH_CODE_RE = re.compile(r'(?:For\s+the\s+Branch|Branch\s*Code|LBrCode|Branch)\s*[:\|]?\s*\|?\s*(\d{1,3})\b', re.IGNORECASE)
 
 def _extract_branch_code(text):
@@ -6505,9 +6525,10 @@ def _extract_branch_code(text):
     -> "11"). Some statement layouts ("Statement Of Account" format) print
     only this numeric code and never a branch name anywhere in the document,
     so name-based detection has nothing to match - this gives
-    upload_income_api() a second signal to resolve the branch via a code
-    learned from another file in the same upload batch (see there). Returns
-    None, never a guess, if no such label is found."""
+    upload_income_api() a second signal to resolve the branch via
+    BRANCH_CODE_TO_NAME (or, failing that, a code learned from another file
+    in the same upload batch - see there). Returns None, never a guess, if
+    no such label is found."""
     m = _BRANCH_CODE_RE.search(text)
     return m.group(1) if m else None
 
@@ -8052,6 +8073,10 @@ def upload_income_api():
         bc, br = a.get('branch_code'), a.get('branch')
         if bc and br and br in INCOME_MASTER_BRANCHES:
             code_to_branch.setdefault(bc, br)
+    # The CA-supplied authoritative table wins over whatever was learned at
+    # runtime from this batch alone - it's correct even for a single-file
+    # upload with no other file to learn a code from.
+    code_to_branch.update({k: v for k, v in BRANCH_CODE_TO_NAME.items() if v in INCOME_MASTER_BRANCHES})
     if code_to_branch:
         for a in raw_accounts:
             bc = a.get('branch_code')
