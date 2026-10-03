@@ -388,7 +388,7 @@
                     
                     <input type="file" id="incomeFileInput" multiple accept=".pdf,.xlsx,.xls,.csv,.zip" style="display: none;">
                     <input type="file" id="incomeFolderInput" webkitdirectory directory multiple style="display: none;">
-                    
+
                     <div style="display: flex; gap: 12px; justify-content: center; margin-top: 18px; flex-wrap: wrap;">
                         <button type="button" class="btn-primary" style="padding: 10px 20px; border-radius: 10px; font-weight: 700; border: none; background: #2563eb; color: #ffffff; cursor: pointer; display: flex; align-items: center; gap: 8px; box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);" onclick="document.getElementById('incomeFileInput').click();">
                             <i class="fa-solid fa-file-circle-plus"></i> Select Files
@@ -396,6 +396,16 @@
                         <button type="button" class="btn-secondary" style="padding: 10px 20px; border-radius: 10px; font-weight: 700; border: 1px solid var(--border-color); background: #ffffff; color: #0f172a; cursor: pointer; display: flex; align-items: center; gap: 8px; box-shadow: 0 2px 6px rgba(0,0,0,0.04);" onclick="document.getElementById('incomeFolderInput').click();">
                             <i class="fa-solid fa-folder-tree" style="color: #2563eb;"></i> Select Folder (All Branches)
                         </button>
+                    </div>
+
+                    <div style="display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 16px; flex-wrap: wrap;">
+                        <label for="incomeUploadBranchSelect" style="font-size: 13px; font-weight: 700; color: #475569;">
+                            <i class="fa-solid fa-building" style="color: #2563eb;"></i> Branch for these files:
+                        </label>
+                        <select id="incomeUploadBranchSelect" style="padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border-color); font-size: 13.5px; font-weight: 600; color: #0f172a; background: #ffffff; min-width: 220px;">
+                            <option value="">Auto-detect (mixed/multi-branch)</option>
+                        </select>
+                        <span style="font-size: 12px; color: #94a3b8;">Only for "Select Files" / single-voucher uploads - picking a branch here skips text-detection entirely and forces every file in this upload to that branch.</span>
                     </div>
                 </div>
                 

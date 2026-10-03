@@ -6461,9 +6461,35 @@ def _extract_branch_from_folder_path(filename):
     return None
 
 
+# Some branches are spelled differently in the CA's own catalog than in the
+# bank's own statement headers (e.g. catalog "VASANA" vs the bank ledger's own
+# "For the Branch : 8 - Vasna") - confirmed in practice: every "Vasna" sheet
+# across a real 68-sheet bulk statement failed to match "VASANA" as a
+# substring either direction, so the branch's income silently never reached
+# income_entries at all. Mapped here (not by editing the catalog) since the
+# catalog name is the one shown throughout the UI/exports and must stay as-is.
+_BRANCH_TEXT_ALIASES = {
+    'VASNA': 'VASANA',
+}
+
+
 def _detect_ledger_branch(text, filename):
+    text_u = text.upper()
+    filename_u = filename.upper()
+    for alias, canonical in _BRANCH_TEXT_ALIASES.items():
+        if canonical in INCOME_MASTER_BRANCHES and (alias in filename_u or alias in text_u):
+            return canonical
     for b in INCOME_MASTER_BRANCHES:
-        if b.upper() in filename.upper() or b.upper() in text.upper():
+        bu = b.upper()
+        if len(bu) <= 3:
+            # Very short canonical names (e.g. "HO") are prone to accidental
+            # substring matches inside unrelated narration/customer-name text
+            # (seen in practice: a customer surname containing "HO" as a
+            # substring) - require a real word boundary for these instead of
+            # raw substring containment.
+            if re.search(r'\b' + re.escape(bu) + r'\b', filename_u) or re.search(r'\b' + re.escape(bu) + r'\b', text_u):
+                return b
+        elif bu in filename_u or bu in text_u:
             return b
     for b in INCOME_MASTER_BRANCHES:
         if re.search(r'\b' + re.escape(b) + r'\b', filename, re.IGNORECASE):
@@ -7988,6 +8014,25 @@ def upload_income_api():
                             raw_accounts.extend(raw)
             except Exception as ze:
                 print(f"Error reading zip file {fname}: {ze}")
+
+    # If the CA explicitly picked a single branch for this upload batch (e.g.
+    # uploading one voucher/file known to belong to one specific branch), that
+    # explicit choice is the highest-confidence signal available - it
+    # overrides any auto-detected (or failed-to-detect) branch from the
+    # document text entirely. This is exactly the case that caused VASANA's
+    # income to be silently dropped when the bank's own statement spelled the
+    # branch differently than the catalog, and the case that caused other
+    # single-account "Statement Of Account" files (no branch name printed at
+    # all) to fall back to an accidental text match. Folder uploads should
+    # NOT normally combine this with a single forced branch (the frontend
+    # warns the CA before allowing that combination), but the override is
+    # still honoured here unconditionally if present, since the CA may have
+    # deliberately confirmed it.
+    selected_branch = (request.form.get('selected_branch') or '').strip()
+    if selected_branch and selected_branch in INCOME_MASTER_BRANCHES:
+        for a in raw_accounts:
+            a['branch'] = selected_branch
+            unrecognized_branch_files.discard(a.get('filename'))
 
     # Some statement layouts ("Statement Of Account" format - single account
     # per file, used for several branches' individual PL-code exports) never

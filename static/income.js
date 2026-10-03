@@ -28,6 +28,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const incomeDropZone = document.getElementById('incomeDropZone');
     const incomeFileInput = document.getElementById('incomeFileInput');
     const incomeFolderInput = document.getElementById('incomeFolderInput');
+    const incomeUploadBranchSelect = document.getElementById('incomeUploadBranchSelect');
     const uploadProgress = document.getElementById('uploadIncomeProgress');
     const incomeProgressText = document.getElementById('incomeProgressText');
     const incomeProgressCount = document.getElementById('incomeProgressCount');
@@ -153,7 +154,22 @@ document.addEventListener('DOMContentLoaded', () => {
             });
             selectBranchFilter.value = currentBranch;
         }
-        
+
+        // Populate the upload-time branch override dropdown (single-voucher
+        // uploads) the same way - keeps it in sync with whatever the backend
+        // currently recognizes as a valid branch, without a separate fetch.
+        if (incomeUploadBranchSelect) {
+            const prevUploadVal = incomeUploadBranchSelect.value;
+            incomeUploadBranchSelect.innerHTML = '<option value="">Auto-detect (mixed/multi-branch)</option>';
+            masterBranches.forEach(b => {
+                const opt = document.createElement('option');
+                opt.value = b;
+                opt.textContent = b;
+                incomeUploadBranchSelect.appendChild(opt);
+            });
+            incomeUploadBranchSelect.value = prevUploadVal;
+        }
+
         const allBtn = document.createElement('button');
         allBtn.className = `branch-pill ${currentBranch === 'ALL' ? 'active' : ''}`;
         allBtn.setAttribute('data-branch', 'ALL');
@@ -684,6 +700,13 @@ document.addEventListener('DOMContentLoaded', () => {
             if (incomeFolderInput.files && incomeFolderInput.files.length > 0) {
                 const files = Array.from(incomeFolderInput.files).filter(isSupportedIncomeFile);
                 if (files.length > 0) {
+                    if (incomeUploadBranchSelect && incomeUploadBranchSelect.value) {
+                        const forced = incomeUploadBranchSelect.value;
+                        const ok = confirm(`You selected "${forced}" in the branch dropdown, but you're uploading a FOLDER (which normally carries its own per-subfolder branch). Continuing will force EVERY file in this folder to "${forced}", ignoring their actual subfolder names.\n\nClick OK to force all files to ${forced}, or Cancel to clear the dropdown and auto-detect each file's branch from its subfolder instead.`);
+                        if (!ok) {
+                            incomeUploadBranchSelect.value = '';
+                        }
+                    }
                     handleFileUpload(files);
                 } else {
                     alert('No supported income files (PDF, XLSX, XLS, CSV) were found in that folder.');
@@ -721,7 +744,10 @@ document.addEventListener('DOMContentLoaded', () => {
             formData.append('client_id', currentClientId);
             formData.append('financial_year', currentFinancialYear);
             formData.append('month', currentMonth);
-            
+            if (incomeUploadBranchSelect && incomeUploadBranchSelect.value) {
+                formData.append('selected_branch', incomeUploadBranchSelect.value);
+            }
+
             currentChunk.forEach(file => {
                 const uploadName = file.webkitRelativePath || file.name;
                 formData.append('income_files', file, uploadName);
@@ -750,6 +776,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         uploadProgress.style.display = 'none';
+        if (incomeUploadBranchSelect) incomeUploadBranchSelect.value = '';
 
         let summary = `Upload Complete!\nSuccessfully processed and saved ${totalSaved} income statement records across branches for ${currentMonth} ${currentFinancialYear}.`;
         if (totalReview > 0) {
