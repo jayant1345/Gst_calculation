@@ -8851,7 +8851,6 @@ def export_income_working_sheet():
                             except Exception:
                                 return 0.0
 
-                        rate_str = "2.5%" if norm_code == '3325' else "9%"
                         if item:
                             inc_amt = _num(item.get('income_amount'))
                             sgst_amt = _num(item.get('sgst'))
@@ -8859,9 +8858,18 @@ def export_income_working_sheet():
                             igst_amt = _num(item.get('igst'))
                             ref_wo = _num(item.get('refund_without_gst'))
                             ref_w = _num(item.get('refund_with_gst'))
+                            # sgst_amt/cgst_amt are already the real computed
+                            # figures (from finalize_ledger_accounts) - write
+                            # them directly as plain numbers rather than an
+                            # Excel formula recomputing the same thing from
+                            # the income cell. openpyxl cannot evaluate
+                            # formulas itself, so a formula-written cell
+                            # stays blank until Excel recalculates it, which
+                            # depends on that installation's calculation
+                            # settings and was confirmed unreliable.
                             _set(ws_b, r, 3, inc_amt)
-                            _set(ws_b, r, 4, f"=+C{r}*{rate_str}")
-                            _set(ws_b, r, 5, f"=+D{r}")
+                            _set(ws_b, r, 4, round(sgst_amt, 2))
+                            _set(ws_b, r, 5, round(cgst_amt, 2))
                             _set(ws_b, r, 6, igst_amt if igst_amt else 0.0)
                             _set(ws_b, r, 7, ref_wo if ref_wo else 0.0)
                             _set(ws_b, r, 8, ref_w if ref_w else 0.0)
@@ -8869,8 +8877,8 @@ def export_income_working_sheet():
                             # Branch not uploaded or code not present in statement:
                             inc_amt = sgst_amt = cgst_amt = igst_amt = ref_wo = ref_w = 0.0
                             _set(ws_b, r, 3, 0.0 if bool(matched_dict) else None)
-                            _set(ws_b, r, 4, f"=+C{r}*{rate_str}")
-                            _set(ws_b, r, 5, f"=+D{r}")
+                            _set(ws_b, r, 4, 0.0 if bool(matched_dict) else None)
+                            _set(ws_b, r, 5, 0.0 if bool(matched_dict) else None)
                             _set(ws_b, r, 6, 0.0 if bool(matched_dict) else None)
                             _set(ws_b, r, 7, 0.0 if bool(matched_dict) else None)
                             _set(ws_b, r, 8, 0.0 if bool(matched_dict) else None)
@@ -8912,27 +8920,21 @@ def export_income_working_sheet():
 
                     is_ho = sname.strip().upper() == 'HO'
                     is_demat = sname.strip().upper() == 'DEMAT'
-                    if is_ho:
-                        _set(ws_b, total_row, 3, f"=SUM(C8:C{total_row-4})")
-                        _set(ws_b, total_row, 4, f"=SUM(D8:D{total_row-4})")
-                        _set(ws_b, total_row, 5, f"=SUM(E8:E{total_row-4})")
-                        _set(ws_b, total_row, 6, f"=SUM(F8:F{total_row-4})")
-                        _set(ws_b, total_row, 7, f"=SUM(G8:G{total_row-4})")
-                        _set(ws_b, total_row, 8, f"=SUM(H8:H{total_row-4})")
-                    elif is_demat:
-                        _set(ws_b, total_row, 3, f"=+SUM(C8:C{total_row-2})")
-                        _set(ws_b, total_row, 4, f"=+SUM(D8:D{total_row-2})")
-                        _set(ws_b, total_row, 5, f"=+SUM(E8:E{total_row-2})")
-                        _set(ws_b, total_row, 6, f"=+SUM(F8:F{total_row-2})")
-                        _set(ws_b, total_row, 7, f"=+SUM(G7:G{total_row-1})")
-                        _set(ws_b, total_row, 8, f"=+SUM(H7:H{total_row-1})")
-                    else:
-                        _set(ws_b, total_row, 3, f"=SUM(C9:C{total_row-1})")
-                        _set(ws_b, total_row, 4, f"=SUM(D9:D{total_row-1})")
-                        _set(ws_b, total_row, 5, f"=SUM(E9:E{total_row-1})")
-                        _set(ws_b, total_row, 6, f"=SUM(F9:F{total_row-1})")
-                        _set(ws_b, total_row, 7, f"=+SUM(G9:G{total_row-2})")
-                        _set(ws_b, total_row, 8, f"=SUM(H9:H{total_row-2})")
+                    # Written as plain computed numbers, not Excel SUM formulas -
+                    # b_tot_* already holds the exact same total Python just
+                    # accumulated row-by-row in the loop above. openpyxl cannot
+                    # evaluate formulas itself, so a formula-written cell stays
+                    # blank until Excel recalculates it - which depends on that
+                    # specific installation's calculation settings and isn't
+                    # reliable (confirmed: branches were showing blank totals
+                    # until the CA manually forced a recalc). A plain number
+                    # displays correctly immediately, in any viewer, always.
+                    _set(ws_b, total_row, 3, round(b_tot_inc, 2))
+                    _set(ws_b, total_row, 4, round(b_tot_ggst, 2))
+                    _set(ws_b, total_row, 5, round(b_tot_cgst, 2))
+                    _set(ws_b, total_row, 6, round(b_tot_igst, 2))
+                    _set(ws_b, total_row, 7, round(b_tot_ref_wo, 2))
+                    _set(ws_b, total_row, 8, round(b_tot_ref_w, 2))
 
                     grand_income += b_tot_inc
                     grand_ggst += b_tot_ggst
@@ -8972,112 +8974,171 @@ def export_income_working_sheet():
                         l_cgst = ledger_vals.get('CGST_PAYABLE')
                         l_igst = ledger_vals.get('IGST_PAYABLE')
 
+                        def _coerce_num(v):
+                            if v is None:
+                                return None
+                            if isinstance(v, (int, float)):
+                                return float(v)
+                            s = str(v).strip().replace(',', '')
+                            if not s or s.startswith('='):
+                                return None
+                            try:
+                                return float(s)
+                            except ValueError:
+                                return None
+
                         if is_ho:
-                            _set(ws_b, r_inc, 3, f"=+C{total_row}")
-                            _set(ws_b, r_inc, 4, f"=+D{total_row}")
-                            _set(ws_b, r_inc, 5, f"=+E{total_row}")
-                            _set(ws_b, r_inc, 6, f"=+F{total_row}")
-                            _set(ws_b, r_inc, 8, f"=+D{r_inc}-D{r_pay}")
+                            # Plain computed numbers, not formulas - see the
+                            # standard-branch comment below for why.
+                            r_inc_c = round(b_tot_inc, 2)
+                            r_inc_d = round(b_tot_ggst, 2)
+                            r_inc_e = round(b_tot_cgst, 2)
+                            r_inc_f = round(b_tot_igst, 2)
 
-                            _set(ws_b, r_ref, 3, f"=+G{total_row}")
-                            _set(ws_b, r_ref, 4, f"=+C{r_ref}*0.09")
-                            _set(ws_b, r_ref, 5, f"=+C{r_ref}*0.09")
-                            _set(ws_b, r_ref, 6, "=G30*18%")
+                            ref_c = round(b_tot_ref_wo, 2)
+                            ref_9pct = round(ref_c * 0.09, 2)
+                            g30_val = _coerce_num(ws_b.cell(30, 7).value) or 0.0
+                            ref_f = round(g30_val * 0.18, 2)
 
-                            _set(ws_b, r_tot, 4, f"=+D{r_inc}+D{r_ref}")
-                            _set(ws_b, r_tot, 5, f"=+E{r_inc}+E{r_ref}")
-                            _set(ws_b, r_tot, 6, f"=+F{r_inc}+F{r_ref}")
+                            r_tot_d = round(r_inc_d + ref_9pct, 2)
+                            r_tot_e = round(r_inc_e + ref_9pct, 2)
+                            r_tot_f = round(r_inc_f + ref_f, 2)
 
-                            # Only overwrite the template's existing "Payable as
-                            # per Ledger" cell when a fresh GL 1878/1879/1880
-                            # upload actually produced a real closing balance.
-                            # The master template ships with CA-verified
-                            # reference figures pre-filled for many branches
-                            # (confirmed: VASANA's template value, 35950.57,
-                            # matches our own independently-parsed real closing
-                            # balance to the cent) - unconditionally zeroing
-                            # this out whenever fresh data is missing destroys
-                            # that real, already-correct number.
-                            if l_sgst is not None:
-                                _set(ws_b, r_pay, 4, round(l_sgst, 2))
-                                _set(ws_b, r_pay, 5, f"=+D{r_pay}")
-                            if l_igst is not None:
-                                _set(ws_b, r_pay, 6, round(l_igst, 2))
+                            existing_pay_d = _coerce_num(ws_b.cell(r_pay, 4).value)
+                            existing_pay_f = _coerce_num(ws_b.cell(r_pay, 6).value)
+                            r_pay_d = round(l_sgst, 2) if l_sgst is not None else existing_pay_d
+                            r_pay_f = round(l_igst, 2) if l_igst is not None else existing_pay_f
+                            r_pay_d_n = r_pay_d if r_pay_d is not None else 0.0
+                            r_pay_f_n = r_pay_f if r_pay_f is not None else 0.0
 
-                            _set(ws_b, r_diff, 4, f"=+D{r_tot}-D{r_pay}")
-                            _set(ws_b, r_diff, 5, f"=+E{r_tot}-E{r_pay}")
-                            _set(ws_b, r_diff, 6, f"=+F{r_tot}-F{r_pay}")
-                            _set(ws_b, r_diff, 7, f"=+D{r_diff}/9*100")
+                            _set(ws_b, r_inc, 3, r_inc_c)
+                            _set(ws_b, r_inc, 4, r_inc_d)
+                            _set(ws_b, r_inc, 5, r_inc_e)
+                            _set(ws_b, r_inc, 6, r_inc_f)
+                            _set(ws_b, r_inc, 8, round(r_inc_d - r_pay_d_n, 2))
+
+                            _set(ws_b, r_ref, 3, ref_c)
+                            _set(ws_b, r_ref, 4, ref_9pct)
+                            _set(ws_b, r_ref, 5, ref_9pct)
+                            _set(ws_b, r_ref, 6, ref_f)
+
+                            _set(ws_b, r_tot, 4, r_tot_d)
+                            _set(ws_b, r_tot, 5, r_tot_e)
+                            _set(ws_b, r_tot, 6, r_tot_f)
+
+                            _set(ws_b, r_pay, 4, r_pay_d if r_pay_d is not None else "—")
+                            _set(ws_b, r_pay, 5, r_pay_d if r_pay_d is not None else "—")
+                            _set(ws_b, r_pay, 6, r_pay_f if r_pay_f is not None else "—")
+
+                            diff_d = round(r_tot_d - r_pay_d_n, 2) if r_pay_d is not None else None
+                            diff_e = round(r_tot_e - r_pay_d_n, 2) if r_pay_d is not None else None
+                            diff_f = round(r_tot_f - r_pay_f_n, 2) if r_pay_f is not None else None
+                            _set(ws_b, r_diff, 4, diff_d if diff_d is not None else "—")
+                            _set(ws_b, r_diff, 5, diff_e if diff_e is not None else "—")
+                            _set(ws_b, r_diff, 6, diff_f if diff_f is not None else "—")
+                            _set(ws_b, r_diff, 7, round(diff_d / 0.09, 2) if diff_d is not None else "—")
                         elif is_demat:
-                            _set(ws_b, r_inc, 3, f"=+C{total_row}")
-                            _set(ws_b, r_inc, 4, f"=+D{total_row}")
-                            _set(ws_b, r_inc, 5, f"=+E{total_row}")
-                            _set(ws_b, r_inc, 6, f"=+F{total_row}")
+                            r_inc_c = round(b_tot_inc, 2)
+                            r_inc_d = round(b_tot_ggst, 2)
+                            r_inc_e = round(b_tot_cgst, 2)
+                            r_inc_f = round(b_tot_igst, 2)
 
-                            _set(ws_b, r_ref, 3, f"=+G{total_row}")
-                            _set(ws_b, r_ref, 4, f"=+C{r_ref}*9%")
-                            _set(ws_b, r_ref, 5, f"=+D{r_ref}")
-                            _set(ws_b, r_ref, 6, 0.0)
+                            ref_c = round(b_tot_ref_wo, 2)
+                            ref_d = round(ref_c * 0.09, 2)
+                            ref_e = ref_d
+                            ref_f = 0.0
 
-                            _set(ws_b, r_tot, 4, f"=+D{r_inc}+D{r_ref}")
-                            _set(ws_b, r_tot, 5, f"=+E{r_inc}+E{r_ref}")
-                            _set(ws_b, r_tot, 6, f"=+F{r_inc}+F{r_ref}")
+                            r_tot_d = round(r_inc_d + ref_d, 2)
+                            r_tot_e = round(r_inc_e + ref_e, 2)
+                            r_tot_f = round(r_inc_f + ref_f, 2)
 
-                            # Only overwrite the template's existing "Payable as
-                            # per Ledger" cell when a fresh GL 1878/1879/1880
-                            # upload actually produced a real closing balance.
-                            # The master template ships with CA-verified
-                            # reference figures pre-filled for many branches
-                            # (confirmed: VASANA's template value, 35950.57,
-                            # matches our own independently-parsed real closing
-                            # balance to the cent) - unconditionally zeroing
-                            # this out whenever fresh data is missing destroys
-                            # that real, already-correct number.
-                            if l_sgst is not None:
-                                _set(ws_b, r_pay, 4, round(l_sgst, 2))
-                                _set(ws_b, r_pay, 5, f"=+D{r_pay}")
-                            if l_igst is not None:
-                                _set(ws_b, r_pay, 6, round(l_igst, 2))
+                            existing_pay_d = _coerce_num(ws_b.cell(r_pay, 4).value)
+                            existing_pay_f = _coerce_num(ws_b.cell(r_pay, 6).value)
+                            r_pay_d = round(l_sgst, 2) if l_sgst is not None else existing_pay_d
+                            r_pay_f = round(l_igst, 2) if l_igst is not None else existing_pay_f
+                            r_pay_d_n = r_pay_d if r_pay_d is not None else 0.0
+                            r_pay_f_n = r_pay_f if r_pay_f is not None else 0.0
 
-                            _set(ws_b, r_diff, 4, f"=+D{r_tot}-D{r_pay}")
-                            _set(ws_b, r_diff, 5, f"=+E{r_tot}-E{r_pay}")
-                            _set(ws_b, r_diff, 6, f"=+F{r_tot}-F{r_pay}")
-                            _set(ws_b, r_diff, 8, f"=+D{r_diff}+E{r_diff}")
+                            _set(ws_b, r_inc, 3, r_inc_c)
+                            _set(ws_b, r_inc, 4, r_inc_d)
+                            _set(ws_b, r_inc, 5, r_inc_e)
+                            _set(ws_b, r_inc, 6, r_inc_f)
+
+                            _set(ws_b, r_ref, 3, ref_c)
+                            _set(ws_b, r_ref, 4, ref_d)
+                            _set(ws_b, r_ref, 5, ref_e)
+                            _set(ws_b, r_ref, 6, ref_f)
+
+                            _set(ws_b, r_tot, 4, r_tot_d)
+                            _set(ws_b, r_tot, 5, r_tot_e)
+                            _set(ws_b, r_tot, 6, r_tot_f)
+
+                            _set(ws_b, r_pay, 4, r_pay_d if r_pay_d is not None else "—")
+                            _set(ws_b, r_pay, 5, r_pay_d if r_pay_d is not None else "—")
+                            _set(ws_b, r_pay, 6, r_pay_f if r_pay_f is not None else "—")
+
+                            diff_d = round(r_tot_d - r_pay_d_n, 2) if r_pay_d is not None else None
+                            diff_e = round(r_tot_e - r_pay_d_n, 2) if r_pay_d is not None else None
+                            diff_f = round(r_tot_f - r_pay_f_n, 2) if r_pay_f is not None else None
+                            _set(ws_b, r_diff, 4, diff_d if diff_d is not None else "—")
+                            _set(ws_b, r_diff, 5, diff_e if diff_e is not None else "—")
+                            _set(ws_b, r_diff, 6, diff_f if diff_f is not None else "—")
+                            _set(ws_b, r_diff, 8, round(diff_d + diff_e, 2) if (diff_d is not None and diff_e is not None) else "—")
                         else:
-                            # Standard branch
-                            _set(ws_b, r_inc, 4, f"=+D{total_row}")
-                            _set(ws_b, r_inc, 5, f"=+E{total_row}")
-                            _set(ws_b, r_inc, 6, f"=+F{total_row}")
+                            # Standard branch. Written as plain computed numbers,
+                            # not Excel formulas - openpyxl cannot evaluate
+                            # formulas itself, so a formula-written cell stays
+                            # blank until Excel recalculates it, which depends
+                            # on that installation's calculation settings and
+                            # was confirmed unreliable (branches showed blank
+                            # totals until manually forced to recalculate). A
+                            # plain number always displays correctly, in any
+                            # viewer, with no manual step required.
+                            r_inc_d = round(b_tot_ggst, 2)
+                            r_inc_e = round(b_tot_cgst, 2)
+                            r_inc_f = round(b_tot_igst, 2)
+                            _set(ws_b, r_inc, 4, r_inc_d)
+                            _set(ws_b, r_inc, 5, r_inc_e)
+                            _set(ws_b, r_inc, 6, r_inc_f)
 
-                            _set(ws_b, r_ref, 3, f"=+G{total_row}")
-                            _set(ws_b, r_ref, 4, f"=C{r_ref}*0.09")
-                            _set(ws_b, r_ref, 5, f"=+C{r_ref}*0.09")
+                            ref_9pct = round(b_tot_ref_wo * 0.09, 2)
+                            _set(ws_b, r_ref, 3, round(b_tot_ref_wo, 2))
+                            _set(ws_b, r_ref, 4, ref_9pct)
+                            _set(ws_b, r_ref, 5, ref_9pct)
                             _set(ws_b, r_ref, 6, 0.0)
 
-                            _set(ws_b, r_tot, 4, f"=+D{r_inc}+D{r_ref}")
-                            _set(ws_b, r_tot, 5, f"=+E{r_inc}+E{r_ref}")
-                            _set(ws_b, r_tot, 6, f"=SUM(F{r_inc}:F{r_ref})")
+                            r_tot_d = round(r_inc_d + ref_9pct, 2)
+                            r_tot_e = round(r_inc_e + ref_9pct, 2)
+                            r_tot_f = round(r_inc_f, 2)
+                            _set(ws_b, r_tot, 4, r_tot_d)
+                            _set(ws_b, r_tot, 5, r_tot_e)
+                            _set(ws_b, r_tot, 6, r_tot_f)
 
-                            # Only overwrite the template's existing "Payable as
-                            # per Ledger" cell when a fresh GL 1878/1879/1880
-                            # upload actually produced a real closing balance.
-                            # The master template ships with CA-verified
-                            # reference figures pre-filled for many branches
-                            # (confirmed: VASANA's template value, 35950.57,
-                            # matches our own independently-parsed real closing
-                            # balance to the cent) - unconditionally zeroing
-                            # this out whenever fresh data is missing destroys
-                            # that real, already-correct number.
-                            if l_sgst is not None:
-                                _set(ws_b, r_pay, 4, round(l_sgst, 2))
-                                _set(ws_b, r_pay, 5, f"=+D{r_pay}")
-                            if l_igst is not None:
-                                _set(ws_b, r_pay, 6, round(l_igst, 2))
+                            # Resolve the effective "Payable as per Ledger"
+                            # figure: a fresh GL 1878/1879/1880 upload wins;
+                            # otherwise fall back to whatever the master
+                            # template already had pre-filled (a CA-verified
+                            # reference figure for many branches - confirmed:
+                            # VASANA's template value, 35950.57, matches our
+                            # own independently-parsed real closing balance to
+                            # the cent); if genuinely nothing exists either
+                            # way, show "—" rather than fabricating a 0 (same
+                            # "don't invent a number" convention already used
+                            # on the GST Payable Reconciliation sheet).
+                            existing_pay_d = _coerce_num(ws_b.cell(r_pay, 4).value)
+                            existing_pay_f = _coerce_num(ws_b.cell(r_pay, 6).value)
+                            r_pay_d = round(l_sgst, 2) if l_sgst is not None else existing_pay_d
+                            r_pay_f = round(l_igst, 2) if l_igst is not None else existing_pay_f
+                            _set(ws_b, r_pay, 4, r_pay_d if r_pay_d is not None else "—")
+                            _set(ws_b, r_pay, 5, r_pay_d if r_pay_d is not None else "—")
+                            _set(ws_b, r_pay, 6, r_pay_f if r_pay_f is not None else "—")
 
-                            _set(ws_b, r_diff, 4, f"=+D{r_tot}-D{r_pay}")
-                            _set(ws_b, r_diff, 5, f"=+E{r_tot}-E{r_pay}")
-                            _set(ws_b, r_diff, 6, f"=+F{r_pay}-F{r_inc}")
-                            _set(ws_b, r_diff, 7, f"=+D{r_diff}/9%")
+                            r_pay_d_n = r_pay_d if r_pay_d is not None else 0.0
+                            r_pay_f_n = r_pay_f if r_pay_f is not None else 0.0
+                            _set(ws_b, r_diff, 4, round(r_tot_d - r_pay_d_n, 2) if r_pay_d is not None else "—")
+                            _set(ws_b, r_diff, 5, round(r_tot_e - r_pay_d_n, 2) if r_pay_d is not None else "—")
+                            _set(ws_b, r_diff, 6, round(r_pay_f_n - r_inc_f, 2) if r_pay_f is not None else "—")
+                            _set(ws_b, r_diff, 7, round((r_tot_d - r_pay_d_n) / 0.09, 2) if r_pay_d is not None else "—")
 
                     # Tab color: Green FF92D050 if statements were uploaded for this branch (completed branch)
                     ws_b.sheet_properties.tabColor = openpyxl.styles.colors.Color(rgb="FF92D050") if bool(matched_dict) else None
@@ -9105,12 +9166,17 @@ def export_income_working_sheet():
                         norm_code = m_code.group(1)
                         cl = s1_code_level.get(norm_code)
                         inc_amt = cl['inc'] if cl else 0.0
+                        sgst_amt = cl['sgst'] if cl else 0.0
+                        cgst_amt = cl['cgst'] if cl else 0.0
                         igst_amt = cl['igst'] if cl else 0.0
                         refwo_amt = cl['refwo'] if cl else 0.0
-                        rate_str = "2.5%" if norm_code == '3325' else "9%"
+                        # Plain numbers, not formulas - see the per-branch loop
+                        # above for why (openpyxl can't evaluate formulas, so
+                        # a formula-written cell stays blank until Excel
+                        # recalculates it).
                         _set(ws_s1, r, 3, inc_amt if inc_amt else None)
-                        _set(ws_s1, r, 4, f"=+C{r}*{rate_str}")
-                        _set(ws_s1, r, 5, f"=+D{r}")
+                        _set(ws_s1, r, 4, round(sgst_amt, 2) if sgst_amt else None)
+                        _set(ws_s1, r, 5, round(cgst_amt, 2) if cgst_amt else None)
                         _set(ws_s1, r, 6, igst_amt if igst_amt else None)
                         _set(ws_s1, r, 7, refwo_amt if refwo_amt else None)
 
