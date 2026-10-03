@@ -6251,7 +6251,13 @@ def _extract_ledger_code(cand):
         return m2.group(1), m2.group(2).strip()
     if '/' in cand_clean:
         parts = [p.strip() for p in cand_clean.split('/') if p.strip()]
-        for p in parts:
+        # Some branches' "Account Id" is printed as "<generic head code>/<real
+        # PL code>" (e.g. "3000/ 3215", "3000/ 3230") - 3000 is a constant
+        # income-head group code shared by every account in the file, never
+        # itself a real catalog code, with the specific code always coming
+        # *after* the slash. Check the LAST numeric segment first so that
+        # real code wins over the generic head code when both are present.
+        for p in reversed(parts):
             p_code = re.sub(r'^(?:PL|GL|P/L|G/L)[\s\-_.:]*', '', p, flags=re.IGNORECASE).strip()
             if re.match(r'^\d{3,6}$', p_code):
                 return p_code, None
@@ -6427,6 +6433,34 @@ def _flatten_ledger_rows(rows_iter):
     return lines
 
 
+def _extract_branch_from_folder_path(filename):
+    """When uploaded via "Select Folder (All Branches)", the browser sends
+    each file's path relative to the selected folder (e.g. "RAKHIAL/1720.xls"
+    or "PL CODE BRANCH-WISE/RAKHIAL/1720.xls" - see income.js's
+    file.webkitRelativePath) - the immediate parent folder is the CA's own
+    branch-wise organization of the files, a far more direct and reliable
+    signal than anything printed inside the statement itself, and it's
+    available regardless of which statement format/layout is inside.
+    Returns the canonical branch name if the immediate parent folder matches
+    one (exact or substring either way - handles e.g. "SHANTI COMMERCIAL"
+    folder matching canonical "SHANTI COMM"), else None - a folder name that
+    doesn't match anything (e.g. a misspelled branch folder) is never
+    guessed at here, only reported via the existing unrecognized-branch
+    warning once every fallback has been tried."""
+    norm = filename.replace('\\', '/')
+    if '/' not in norm:
+        return None  # single-file upload - no folder info to go on
+    folder_name = norm.rsplit('/', 2)[-2].strip()
+    if not folder_name:
+        return None
+    fu = folder_name.upper()
+    for b in INCOME_MASTER_BRANCHES:
+        bu = b.upper()
+        if bu == fu or bu in fu or fu in bu:
+            return b
+    return None
+
+
 def _detect_ledger_branch(text, filename):
     for b in INCOME_MASTER_BRANCHES:
         if b.upper() in filename.upper() or b.upper() in text.upper():
@@ -6435,6 +6469,21 @@ def _detect_ledger_branch(text, filename):
         if re.search(r'\b' + re.escape(b) + r'\b', filename, re.IGNORECASE):
             return b
     return None
+
+
+_BRANCH_CODE_RE = re.compile(r'(?:For\s+the\s+Branch|Branch\s*Code|LBrCode|Branch)\s*[:\|]?\s*\|?\s*(\d{1,3})\b', re.IGNORECASE)
+
+def _extract_branch_code(text):
+    """Best-effort numeric branch code from the document text (e.g. "For the
+    Branch : 6 - Rakhial" -> "6", "Branch Code | 11 |" -> "11", "Branch : 11"
+    -> "11"). Some statement layouts ("Statement Of Account" format) print
+    only this numeric code and never a branch name anywhere in the document,
+    so name-based detection has nothing to match - this gives
+    upload_income_api() a second signal to resolve the branch via a code
+    learned from another file in the same upload batch (see there). Returns
+    None, never a guess, if no such label is found."""
+    m = _BRANCH_CODE_RE.search(text)
+    return m.group(1) if m else None
 
 
 
@@ -6579,10 +6628,12 @@ def extract_raw_ledger_accounts_pdf(file_bytes, filename):
         accounts = _scan_ledger_lines(lines, _LEDGER_XLSX_ACCOUNT_LABELS, _LEDGER_XLSX_TOTAL_LABELS)
     else:
         accounts = _scan_ledger_lines(lines, _LEDGER_PDF_ACCOUNT_LABELS, _LEDGER_PDF_TOTAL_LABELS)
-    branch = _detect_ledger_branch(text, filename)
+    branch = _extract_branch_from_folder_path(filename) or _detect_ledger_branch(text, filename)
+    branch_code = _extract_branch_code(text)
     det_month, det_fy = detect_statement_period(text, filename)
     for a in accounts:
         a['branch'] = branch
+        a['branch_code'] = branch_code
         a['filename'] = filename
         if det_month:
             a['month'] = det_month
@@ -6607,10 +6658,12 @@ def extract_raw_ledger_accounts_xlsx(file_bytes, filename):
             accounts = _scan_ledger_lines(lines, _LEDGER_PDF_ACCOUNT_LABELS, _LEDGER_PDF_TOTAL_LABELS)
         else:
             continue
-        branch = _detect_ledger_branch(flat_text, filename)
+        branch = _extract_branch_from_folder_path(filename) or _detect_ledger_branch(flat_text, filename)
+        branch_code = _extract_branch_code(flat_text)
         det_month, det_fy = detect_statement_period(flat_text, filename, rows)
         for a in accounts:
             a['branch'] = branch
+            a['branch_code'] = branch_code
             a['filename'] = filename
             if det_month:
                 a['month'] = det_month
@@ -6654,10 +6707,12 @@ def extract_raw_ledger_accounts_xls(file_bytes, filename):
             accounts = _scan_ledger_lines(lines, _LEDGER_XLSX_ACCOUNT_LABELS, _LEDGER_XLSX_TOTAL_LABELS)
         else:
             accounts = _scan_ledger_lines(lines, _LEDGER_PDF_ACCOUNT_LABELS, _LEDGER_PDF_TOTAL_LABELS)
-        branch = _detect_ledger_branch(flat_text, filename)
+        branch = _extract_branch_from_folder_path(filename) or _detect_ledger_branch(flat_text, filename)
+        branch_code = _extract_branch_code(flat_text)
         det_month, det_fy = detect_statement_period(flat_text, filename, rows)
         for a in accounts:
             a['branch'] = branch
+            a['branch_code'] = branch_code
             a['filename'] = filename
             if det_month:
                 a['month'] = det_month
@@ -7933,6 +7988,32 @@ def upload_income_api():
                             raw_accounts.extend(raw)
             except Exception as ze:
                 print(f"Error reading zip file {fname}: {ze}")
+
+    # Some statement layouts ("Statement Of Account" format - single account
+    # per file, used for several branches' individual PL-code exports) never
+    # print a branch NAME anywhere in the document, only a numeric branch
+    # code ("Branch : 11"). Name-based detection then has nothing reliable to
+    # match, and can even false-positive: a short canonical name like "HO"
+    # can accidentally match inside an unrelated word in the statement (seen
+    # in practice - a customer surname "GHODA" contains "HO"). Build a
+    # branch-code -> name map from whatever OTHER files in this same upload
+    # batch resolved a branch name reliably (via the existing, unchanged
+    # _detect_ledger_branch) and also carry a recognizable branch code, then
+    # use that higher-confidence, in-batch-learned mapping to fix any
+    # account whose branch is still unknown, or was only guessed via an
+    # accidental text match that disagrees with the learned code.
+    code_to_branch = {}
+    for a in raw_accounts:
+        bc, br = a.get('branch_code'), a.get('branch')
+        if bc and br and br in INCOME_MASTER_BRANCHES:
+            code_to_branch.setdefault(bc, br)
+    if code_to_branch:
+        for a in raw_accounts:
+            bc = a.get('branch_code')
+            resolved = code_to_branch.get(bc) if bc else None
+            if resolved and a.get('branch') != resolved:
+                a['branch'] = resolved
+                unrecognized_branch_files.discard(a.get('filename'))
 
     finalized_from_raw, ledger_entries, exempt_entries, ingest_warnings = finalize_ledger_accounts(
         raw_accounts, financial_year=upload_fy, month=upload_month
