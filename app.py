@@ -4,6 +4,7 @@ import re
 import json
 import base64
 import urllib.request
+import urllib.error
 import ssl
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask import Flask, request, jsonify, render_template, send_file, redirect, url_for, session, flash
@@ -962,9 +963,20 @@ def run_brevo_contacts_backup():
 
     headers = {"api-key": BREVO_API_KEY, "Content-Type": "application/json", "Accept": "application/json"}
 
+    def _http_error_detail(e):
+        """Brevo returns a JSON body explaining exactly what's wrong with a
+        4xx/5xx response - surface that instead of just the generic status
+        text, so a bad request is immediately actionable."""
+        if isinstance(e, urllib.error.HTTPError):
+            try:
+                return f"{e}: {e.read().decode('utf-8')}"
+            except Exception:
+                return str(e)
+        return str(e)
+
     export_req = urllib.request.Request(
         "https://api.brevo.com/v3/contacts/export",
-        data=json.dumps({"exportAttributes": []}).encode("utf-8"),
+        data=json.dumps({"customContactFilter": {"actionForContacts": "allContacts"}}).encode("utf-8"),
         headers=headers,
         method="POST"
     )
@@ -972,17 +984,21 @@ def run_brevo_contacts_backup():
         with urllib.request.urlopen(export_req, context=ctx, timeout=30) as res:
             export_resp = json.loads(res.read().decode("utf-8"))
     except Exception as e:
-        return False, f"Failed to start Brevo contacts export: {e}"
+        return False, f"Failed to start Brevo contacts export: {_http_error_detail(e)}"
 
     process_id = export_resp.get("processId") or export_resp.get("processID")
     if not process_id:
         return False, f"Brevo export did not return a processId: {export_resp}"
 
     download_url = None
+    last_status = None
     for _ in range(20):  # bounded poll, ~60s max
         time.sleep(3)
+        # Contact export status is checked via Brevo's generic async-process
+        # endpoint (GET /v3/processes/{processId}), not a contacts-specific
+        # one - confirmed against Brevo's own API reference.
         status_req = urllib.request.Request(
-            f"https://api.brevo.com/v3/contacts/export/{process_id}",
+            f"https://api.brevo.com/v3/processes/{process_id}",
             headers=headers,
             method="GET"
         )
@@ -990,20 +1006,23 @@ def run_brevo_contacts_backup():
             with urllib.request.urlopen(status_req, context=ctx, timeout=30) as res:
                 status_resp = json.loads(res.read().decode("utf-8"))
         except Exception as e:
-            return False, f"Failed to check Brevo export status: {e}"
-        if str(status_resp.get("status", "")).lower() == "completed":
-            download_url = status_resp.get("downloadLink") or status_resp.get("outputFilePath")
+            return False, f"Failed to check Brevo export status: {_http_error_detail(e)}"
+        last_status = str(status_resp.get("status", "")).lower()
+        if last_status == "completed":
+            download_url = status_resp.get("export_url")
             break
+        if last_status in ("failed", "cancelled"):
+            return False, f"Brevo export job ended with status '{last_status}': {status_resp}"
 
     if not download_url:
-        return False, "Brevo export did not complete within the expected time (60s) - try again shortly."
+        return False, f"Brevo export did not complete within the expected time (60s, last status: {last_status}) - try again shortly."
 
     dl_req = urllib.request.Request(download_url, headers=headers, method="GET")
     try:
         with urllib.request.urlopen(dl_req, context=ctx, timeout=60) as res:
             file_bytes = res.read()
     except Exception as e:
-        return False, f"Failed to download Brevo export file: {e}"
+        return False, f"Failed to download Brevo export file: {_http_error_detail(e)}"
 
     today_str = datetime.datetime.now().strftime("%Y-%m-%d")
     email_body = {
@@ -1026,7 +1045,7 @@ def run_brevo_contacts_backup():
         with urllib.request.urlopen(send_req, context=ctx, timeout=30) as res:
             send_resp = json.loads(res.read().decode("utf-8"))
     except Exception as e:
-        return False, f"Backup file was exported but the email failed to send: {e}"
+        return False, f"Backup file was exported but the email failed to send: {_http_error_detail(e)}"
 
     return True, f"Backup emailed to {BREVO_BACKUP_RECIPIENT} (messageId: {send_resp.get('messageId', 'n/a')})"
 
