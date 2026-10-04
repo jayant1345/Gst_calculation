@@ -346,7 +346,9 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 expires_at TIMESTAMP NOT NULL,
                 status VARCHAR(20) NOT NULL DEFAULT 'generating',
-                backup_data BYTEA
+                backup_data BYTEA,
+                tables_done INTEGER NOT NULL DEFAULT 0,
+                tables_total INTEGER NOT NULL DEFAULT 0
             );
         ''')
 
@@ -1125,17 +1127,20 @@ DB_BACKUP_TABLES_IN_ORDER = [
 ]
 
 
-def _build_db_backup_zip():
+def _build_db_backup_zip(progress_cb=None):
     """Exports every table in DB_BACKUP_TABLES_IN_ORDER via PostgreSQL's
     native COPY format (full fidelity - every column, including binary
     file_data blobs), plus a restore.sql driver script and a README
     explaining the restore procedure, bundled into an in-memory zip.
     Read-only: only ever executes COPY ... TO (a read operation) against
-    the existing tables, nothing is modified. Returns zip bytes."""
+    the existing tables, nothing is modified. If given, progress_cb(done,
+    total) is called after each table so callers can surface real
+    progress (see run_db_backup_export). Returns zip bytes."""
     import zipfile
 
     conn = get_db_connection()
     cur = conn.cursor()
+    total_tables = len(DB_BACKUP_TABLES_IN_ORDER)
 
     zip_buf = io.BytesIO()
     with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zf:
@@ -1149,7 +1154,7 @@ def _build_db_backup_zip():
             "-- before duplicate_rejections) so foreign keys are satisfied.",
             "",
         ]
-        for table in DB_BACKUP_TABLES_IN_ORDER:
+        for i, table in enumerate(DB_BACKUP_TABLES_IN_ORDER, start=1):
             copy_buf = io.BytesIO()
             try:
                 cur.copy_expert(f'COPY "{table}" TO STDOUT', copy_buf)
@@ -1159,9 +1164,13 @@ def _build_db_backup_zip():
                 # backup - note it and continue with everything else.
                 restore_lines.append(f"-- SKIPPED {table}: {e}")
                 conn.rollback()
+                if progress_cb:
+                    progress_cb(i, total_tables)
                 continue
             zf.writestr(f"{table}.copy", copy_buf.getvalue())
             restore_lines.append(f"\\copy \"{table}\" FROM '{table}.copy'")
+            if progress_cb:
+                progress_cb(i, total_tables)
 
         zf.writestr("restore.sql", "\n".join(restore_lines) + "\n")
         zf.writestr("README.txt", (
@@ -1229,17 +1238,21 @@ def run_db_backup_export():
     gunicorn's request timeout would tolerate running inline. The email
     with the download link is only sent once generation genuinely finishes
     (see _generate_and_notify below); visiting the link before then shows
-    a clear "still generating" message rather than failing. Returns
-    (success, message) describing whether the background job started, not
-    whether the backup itself succeeded yet."""
+    a clear "still generating" message rather than failing. Progress
+    (tables_done/tables_total) is updated as each table completes, so the
+    UI can show a real percentage via GET /api/db-backup/status/<token>.
+    Returns (success, message, token) - success/message describe whether
+    the background job started, not whether the backup itself succeeded
+    yet; token is None if it couldn't even be created."""
     if not BREVO_API_KEY:
-        return False, "BREVO_API_KEY is not configured."
+        return False, "BREVO_API_KEY is not configured.", None
     if not BREVO_BACKUP_SENDER or not BREVO_BACKUP_RECIPIENT:
-        return False, "BREVO_BACKUP_SENDER / BREVO_BACKUP_RECIPIENT is not configured."
+        return False, "BREVO_BACKUP_SENDER / BREVO_BACKUP_RECIPIENT is not configured.", None
 
     import secrets
     token = secrets.token_urlsafe(32)
     expires_at = datetime.datetime.now() + datetime.timedelta(days=7)
+    total_tables = len(DB_BACKUP_TABLES_IN_ORDER)
     try:
         conn = get_db_connection()
         cur = conn.cursor()
@@ -1248,18 +1261,29 @@ def run_db_backup_export():
         # doesn't grow unbounded with every month's backup piling up.
         cur.execute("DELETE FROM db_backup_tokens WHERE expires_at < CURRENT_TIMESTAMP")
         cur.execute(
-            "INSERT INTO db_backup_tokens (token, expires_at, status) VALUES (%s, %s, 'generating')",
-            (token, expires_at)
+            "INSERT INTO db_backup_tokens (token, expires_at, status, tables_total) VALUES (%s, %s, 'generating', %s)",
+            (token, expires_at, total_tables)
         )
         conn.commit()
         cur.close()
         conn.close()
     except Exception as e:
-        return False, f"Failed to create backup download token: {e}"
+        return False, f"Failed to create backup download token: {e}", None
+
+    def _update_progress(done, total):
+        try:
+            conn_p = get_db_connection()
+            cur_p = conn_p.cursor()
+            cur_p.execute("UPDATE db_backup_tokens SET tables_done = %s WHERE token = %s", (done, token))
+            conn_p.commit()
+            cur_p.close()
+            conn_p.close()
+        except Exception as e:
+            print(f"[DB Backup] progress update failed (non-fatal): {e}")
 
     def _generate_and_notify():
         try:
-            zip_bytes = _build_db_backup_zip()
+            zip_bytes = _build_db_backup_zip(progress_cb=_update_progress)
             conn2 = get_db_connection()
             cur2 = conn2.cursor()
             cur2.execute(
@@ -1284,7 +1308,7 @@ def run_db_backup_export():
                 print(f"[DB Backup] failed to even record the failure: {e2}")
 
     threading.Thread(target=_generate_and_notify, daemon=True).start()
-    return True, "Backup generation started - you'll receive an email with the download link once it's ready (this can take several minutes)."
+    return True, "Backup generation started - you'll receive an email with the download link once it's ready (this can take several minutes).", token
 
 
 def _scheduled_db_backup_tick():
@@ -1295,8 +1319,8 @@ def _scheduled_db_backup_tick():
         return
     if not _claim_scheduled_job_run('db_backup_export'):
         return  # another worker already claimed today's run
-    success, message = run_db_backup_export()
-    print(f"[Scheduled DB Backup] success={success} message={message}")
+    success, message, token = run_db_backup_export()
+    print(f"[Scheduled DB Backup] success={success} message={message} token={token}")
 
 
 def call_vision_model(system_prompt, user_prompt, base64_data, mime_type):
@@ -1906,7 +1930,12 @@ def settings():
             except Exception as e:
                 error = f"Database connection error: {e}"
 
-    return render_template('settings.html', error=error, is_admin=is_admin_user(), api_key_configured=bool(ANTHROPIC_API_KEY or OPENROUTER_API_KEY), ai_model_name=AI_MODEL_DISPLAY_NAME)
+    return render_template(
+        'settings.html', error=error, is_admin=is_admin_user(),
+        api_key_configured=bool(ANTHROPIC_API_KEY or OPENROUTER_API_KEY), ai_model_name=AI_MODEL_DISPLAY_NAME,
+        brevo_sender=BREVO_BACKUP_SENDER or '(not configured)', brevo_recipient=BREVO_BACKUP_RECIPIENT or '(not configured)',
+        db_sender=BREVO_BACKUP_SENDER or '(not configured)', db_recipient=BREVO_BACKUP_RECIPIENT or '(not configured)'
+    )
 
 # Admin User Management Routes
 @app.route('/users', methods=['GET'])
@@ -7612,13 +7641,43 @@ def db_backup_page():
 @login_required
 def push_db_backup():
     try:
-        success, message = run_db_backup_export()
+        success, message, token = run_db_backup_export()
         if success:
             log_activity(session['user_id'], 'db_backup_pushed', message)
-            return jsonify({"success": True, "message": message})
+            return jsonify({"success": True, "message": message, "token": token})
         return jsonify({"success": False, "error": message}), 500
     except Exception as e:
         return jsonify({"success": False, "error": friendly_error_message(e)}), 500
+
+@app.route('/api/db-backup/status/<token>')
+@login_required
+def db_backup_status(token):
+    """Lets the page that triggered a backup poll real progress (tables_done
+    / tables_total) and know the moment it's actually ready, instead of the
+    user guessing when to check email. Read-only."""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(
+            "SELECT status, tables_done, tables_total FROM db_backup_tokens WHERE token = %s",
+            (token,)
+        )
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        return jsonify({"error": friendly_error_message(e)}), 500
+
+    if not row:
+        return jsonify({"error": "Unknown backup token."}), 404
+    total = row['tables_total'] or 1
+    percent = min(100, round((row['tables_done'] or 0) / total * 100))
+    return jsonify({
+        "status": row['status'],
+        "tables_done": row['tables_done'],
+        "tables_total": row['tables_total'],
+        "percent": percent
+    })
 
 @app.route('/api/db-backup/download/<token>')
 def download_db_backup(token):

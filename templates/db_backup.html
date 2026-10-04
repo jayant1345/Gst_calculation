@@ -94,6 +94,16 @@
                         <i class="fa-solid fa-paper-plane"></i> Push Backup Now
                     </button>
 
+                    <div id="progressWrap" style="display: none; margin-top: 20px;">
+                        <div style="display: flex; justify-content: space-between; font-size: 12.5px; color: #475569; margin-bottom: 6px;">
+                            <span id="progressLabel">Generating backup...</span>
+                            <span id="progressPct">0%</span>
+                        </div>
+                        <div style="width: 100%; height: 10px; background: #e2e8f0; border-radius: 6px; overflow: hidden;">
+                            <div id="progressBar" style="height: 100%; width: 0%; background: #2563eb; transition: width 0.4s ease;"></div>
+                        </div>
+                    </div>
+
                     <div id="pushStatus" style="margin-top: 18px; font-size: 13.5px; display: none;"></div>
                 </div>
             </div>
@@ -103,31 +113,73 @@
     <script>
         const btn = document.getElementById('btnPushBackup');
         const statusEl = document.getElementById('pushStatus');
+        const progressWrap = document.getElementById('progressWrap');
+        const progressBar = document.getElementById('progressBar');
+        const progressPct = document.getElementById('progressPct');
+        const progressLabel = document.getElementById('progressLabel');
+        const recipientEmail = {{ recipient | tojson }};
+        let pollTimer = null;
+
+        function stopPolling() {
+            if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+        }
+
+        function showResult(ok, html) {
+            statusEl.style.display = 'block';
+            statusEl.style.color = ok ? '#15803d' : '#b91c1c';
+            statusEl.innerHTML = html;
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fa-solid fa-paper-plane"></i> Push Backup Now';
+        }
+
+        function pollStatus(token) {
+            pollTimer = setInterval(async () => {
+                try {
+                    const res = await fetch(`/api/db-backup/status/${token}`);
+                    const data = await res.json();
+                    if (data.error) { stopPolling(); showResult(false, `<i class="fa-solid fa-triangle-exclamation"></i> ${data.error}`); return; }
+
+                    progressBar.style.width = data.percent + '%';
+                    progressPct.textContent = data.percent + '%';
+                    progressLabel.textContent = `Generating backup... (${data.tables_done}/${data.tables_total} tables)`;
+
+                    if (data.status === 'ready') {
+                        stopPolling();
+                        progressWrap.style.display = 'none';
+                        showResult(true, `<i class="fa-solid fa-circle-check"></i> Backup ready! <strong>Check your email now</strong> (${recipientEmail}) for the download link.`);
+                    } else if (data.status === 'failed') {
+                        stopPolling();
+                        progressWrap.style.display = 'none';
+                        showResult(false, `<i class="fa-solid fa-triangle-exclamation"></i> Backup generation failed. Please try again.`);
+                    }
+                } catch (err) {
+                    // transient network hiccup while polling - keep trying, don't abort
+                }
+            }, 3000);
+        }
 
         btn.addEventListener('click', async () => {
             btn.disabled = true;
-            const originalHtml = btn.innerHTML;
-            btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Creating backup link & sending...';
+            btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Starting...';
             statusEl.style.display = 'none';
+            progressWrap.style.display = 'block';
+            progressBar.style.width = '0%';
+            progressPct.textContent = '0%';
+            progressLabel.textContent = 'Starting backup...';
 
             try {
                 const res = await fetch('/api/db-backup/push', { method: 'POST' });
                 const data = await res.json();
-                statusEl.style.display = 'block';
-                if (data.success) {
-                    statusEl.style.color = '#15803d';
-                    statusEl.innerHTML = `<i class="fa-solid fa-circle-check"></i> ${data.message}`;
+                if (data.success && data.token) {
+                    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Generating...';
+                    pollStatus(data.token);
                 } else {
-                    statusEl.style.color = '#b91c1c';
-                    statusEl.innerHTML = `<i class="fa-solid fa-triangle-exclamation"></i> ${data.error || 'Backup failed.'}`;
+                    progressWrap.style.display = 'none';
+                    showResult(false, `<i class="fa-solid fa-triangle-exclamation"></i> ${data.error || 'Backup failed to start.'}`);
                 }
             } catch (err) {
-                statusEl.style.display = 'block';
-                statusEl.style.color = '#b91c1c';
-                statusEl.innerHTML = `<i class="fa-solid fa-triangle-exclamation"></i> Request failed: ${err}`;
-            } finally {
-                btn.disabled = false;
-                btn.innerHTML = originalHtml;
+                progressWrap.style.display = 'none';
+                showResult(false, `<i class="fa-solid fa-triangle-exclamation"></i> Request failed: ${err}`);
             }
         });
     </script>
