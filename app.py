@@ -314,6 +314,21 @@ def init_db():
         cur.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT FALSE;')
         cur.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_data TEXT;')
 
+        # Idempotency lock for scheduled background jobs (e.g. the monthly
+        # Brevo contacts backup) - gunicorn runs multiple worker processes,
+        # each with its own independent scheduler, so without this a
+        # monthly job would fire once per worker. Whichever worker's
+        # scheduler ticks first claims the day via the unique constraint;
+        # the others see a conflict and skip.
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS scheduled_job_runs (
+                job_name VARCHAR(100) NOT NULL,
+                run_date DATE NOT NULL,
+                ran_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (job_name, run_date)
+            );
+        ''')
+
 
         # Create invoices table (using numeric for high-precision currency values)
         cur.execute('''
@@ -753,6 +768,27 @@ try:
 except Exception as e:
     print(f"Startup DB init error: {e}")
 
+# Monthly Brevo contacts backup - ticks hourly (not a single exact-time cron
+# fire) so a mid-day Railway restart can't cause the whole day to be missed;
+# _scheduled_brevo_backup_tick() itself only acts on the 21st and only once
+# per day even across gunicorn's multiple worker processes (see
+# _claim_scheduled_job_run). Each worker process starts its own ticker, which
+# is fine - the DB-level claim is what actually prevents duplicate runs.
+try:
+    from apscheduler.schedulers.background import BackgroundScheduler
+    from apscheduler.triggers.interval import IntervalTrigger
+    _brevo_backup_scheduler = BackgroundScheduler(daemon=True)
+    _brevo_backup_scheduler.add_job(
+        _scheduled_brevo_backup_tick,
+        IntervalTrigger(hours=1),
+        id='brevo_monthly_backup_tick',
+        replace_existing=True,
+        next_run_time=datetime.datetime.now()  # also check immediately on startup
+    )
+    _brevo_backup_scheduler.start()
+except Exception as e:
+    print(f"Brevo backup scheduler failed to start: {e}")
+
 # Decorator to secure endpoints
 def login_required(f):
     @wraps(f)
@@ -903,6 +939,132 @@ def call_openrouter_api(payload):
     except Exception as e:
         print(f"Error calling OpenRouter API: {e}")
         raise e
+
+# Brevo contacts backup - read-only against Brevo (only ever calls its
+# export/send endpoints, never anything that creates/updates/deletes a
+# contact or account setting), additive to the rest of this app.
+BREVO_API_KEY = os.getenv("BREVO_API_KEY")
+BREVO_BACKUP_SENDER = os.getenv("BREVO_BACKUP_SENDER")
+BREVO_BACKUP_RECIPIENT = os.getenv("BREVO_BACKUP_RECIPIENT")
+
+
+def run_brevo_contacts_backup():
+    """Exports all Brevo contacts (Brevo's own async export job - read-only,
+    never modifies any contact or account setting) and emails the resulting
+    file as an attachment via Brevo's own Transactional Email API, from
+    BREVO_BACKUP_SENDER to BREVO_BACKUP_RECIPIENT. Returns (success, message)."""
+    import time
+
+    if not BREVO_API_KEY:
+        return False, "BREVO_API_KEY is not configured."
+    if not BREVO_BACKUP_SENDER or not BREVO_BACKUP_RECIPIENT:
+        return False, "BREVO_BACKUP_SENDER / BREVO_BACKUP_RECIPIENT is not configured."
+
+    headers = {"api-key": BREVO_API_KEY, "Content-Type": "application/json", "Accept": "application/json"}
+
+    export_req = urllib.request.Request(
+        "https://api.brevo.com/v3/contacts/export",
+        data=json.dumps({"exportAttributes": []}).encode("utf-8"),
+        headers=headers,
+        method="POST"
+    )
+    try:
+        with urllib.request.urlopen(export_req, context=ctx, timeout=30) as res:
+            export_resp = json.loads(res.read().decode("utf-8"))
+    except Exception as e:
+        return False, f"Failed to start Brevo contacts export: {e}"
+
+    process_id = export_resp.get("processId") or export_resp.get("processID")
+    if not process_id:
+        return False, f"Brevo export did not return a processId: {export_resp}"
+
+    download_url = None
+    for _ in range(20):  # bounded poll, ~60s max
+        time.sleep(3)
+        status_req = urllib.request.Request(
+            f"https://api.brevo.com/v3/contacts/export/{process_id}",
+            headers=headers,
+            method="GET"
+        )
+        try:
+            with urllib.request.urlopen(status_req, context=ctx, timeout=30) as res:
+                status_resp = json.loads(res.read().decode("utf-8"))
+        except Exception as e:
+            return False, f"Failed to check Brevo export status: {e}"
+        if str(status_resp.get("status", "")).lower() == "completed":
+            download_url = status_resp.get("downloadLink") or status_resp.get("outputFilePath")
+            break
+
+    if not download_url:
+        return False, "Brevo export did not complete within the expected time (60s) - try again shortly."
+
+    dl_req = urllib.request.Request(download_url, headers=headers, method="GET")
+    try:
+        with urllib.request.urlopen(dl_req, context=ctx, timeout=60) as res:
+            file_bytes = res.read()
+    except Exception as e:
+        return False, f"Failed to download Brevo export file: {e}"
+
+    today_str = datetime.datetime.now().strftime("%Y-%m-%d")
+    email_body = {
+        "sender": {"email": BREVO_BACKUP_SENDER},
+        "to": [{"email": BREVO_BACKUP_RECIPIENT}],
+        "subject": f"Brevo Contacts Backup - {today_str}",
+        "htmlContent": f"<p>Automated Brevo contacts backup for {today_str} is attached.</p>",
+        "attachment": [{
+            "content": base64.b64encode(file_bytes).decode("utf-8"),
+            "name": f"brevo_contacts_backup_{today_str}.zip"
+        }]
+    }
+    send_req = urllib.request.Request(
+        "https://api.brevo.com/v3/smtp/email",
+        data=json.dumps(email_body).encode("utf-8"),
+        headers=headers,
+        method="POST"
+    )
+    try:
+        with urllib.request.urlopen(send_req, context=ctx, timeout=30) as res:
+            send_resp = json.loads(res.read().decode("utf-8"))
+    except Exception as e:
+        return False, f"Backup file was exported but the email failed to send: {e}"
+
+    return True, f"Backup emailed to {BREVO_BACKUP_RECIPIENT} (messageId: {send_resp.get('messageId', 'n/a')})"
+
+
+def _claim_scheduled_job_run(job_name):
+    """Atomic claim for today's run of a scheduled job - see
+    scheduled_job_runs in init_db(). Returns True only for the single
+    worker process that wins the race; all others get False and must skip,
+    so a multi-worker gunicorn deployment never runs the job more than once
+    on the same day."""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO scheduled_job_runs (job_name, run_date) VALUES (%s, CURRENT_DATE) ON CONFLICT DO NOTHING",
+            (job_name,)
+        )
+        claimed = cur.rowcount > 0
+        conn.commit()
+        cur.close()
+        conn.close()
+        return claimed
+    except Exception as e:
+        print(f"Error claiming scheduled job run for {job_name}: {e}")
+        return False
+
+
+def _scheduled_brevo_backup_tick():
+    """Runs once a day (see scheduler setup below); only actually performs
+    the backup on the 21st, and only once even across multiple gunicorn
+    worker processes."""
+    if datetime.datetime.now().day != 21:
+        return
+    if not _claim_scheduled_job_run('brevo_contacts_backup'):
+        return  # another worker already claimed today's run
+    success, message = run_brevo_contacts_backup()
+    print(f"[Scheduled Brevo Backup] success={success} message={message}")
+
 
 def call_vision_model(system_prompt, user_prompt, base64_data, mime_type):
     """Calls the ultra-fast primary vision model (Gemini 2.5 Flash via OpenRouter)
@@ -7182,6 +7344,27 @@ def parse_full_workbook_excel(file_bytes, filename, financial_year='2026-27', mo
 @login_required
 def income_page():
     return render_template('income.html', is_admin=is_admin_user())
+
+@app.route('/brevo-backup')
+@login_required
+def brevo_backup_page():
+    return render_template(
+        'brevo_backup.html',
+        recipient=BREVO_BACKUP_RECIPIENT or '(not configured)',
+        sender=BREVO_BACKUP_SENDER or '(not configured)'
+    )
+
+@app.route('/api/brevo-backup/push', methods=['POST'])
+@login_required
+def push_brevo_backup():
+    try:
+        success, message = run_brevo_contacts_backup()
+        if success:
+            log_activity(session['user_id'], 'brevo_backup_pushed', message)
+            return jsonify({"success": True, "message": message})
+        return jsonify({"success": False, "error": message}), 500
+    except Exception as e:
+        return jsonify({"success": False, "error": friendly_error_message(e)}), 500
 
 @app.route('/api/income-codes-master', methods=['GET'])
 @login_required

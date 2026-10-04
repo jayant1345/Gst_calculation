@@ -8,3 +8,4 @@ xlrd
 python-dotenv
 psycopg2-binary
 reportlab
+apscheduler
