@@ -351,6 +351,11 @@ def init_db():
                 tables_total INTEGER NOT NULL DEFAULT 0
             );
         ''')
+        # Table existed before tables_done/tables_total were added - CREATE
+        # TABLE IF NOT EXISTS above doesn't retrofit columns onto an
+        # already-existing table, so add them explicitly for older deploys.
+        cur.execute('ALTER TABLE db_backup_tokens ADD COLUMN IF NOT EXISTS tables_done INTEGER NOT NULL DEFAULT 0;')
+        cur.execute('ALTER TABLE db_backup_tokens ADD COLUMN IF NOT EXISTS tables_total INTEGER NOT NULL DEFAULT 0;')
 
 
         # Create invoices table (using numeric for high-precision currency values)
@@ -962,107 +967,6 @@ def _http_error_detail(e):
     return str(e)
 
 
-def run_brevo_contacts_backup():
-    """Exports all Brevo contacts (Brevo's own async export job - read-only,
-    never modifies any contact or account setting) and emails the resulting
-    file as an attachment via Brevo's own Transactional Email API, from
-    BREVO_BACKUP_SENDER to BREVO_BACKUP_RECIPIENT. Returns (success, message)."""
-    import time
-
-    if not BREVO_API_KEY:
-        return False, "BREVO_API_KEY is not configured."
-    if not BREVO_BACKUP_SENDER or not BREVO_BACKUP_RECIPIENT:
-        return False, "BREVO_BACKUP_SENDER / BREVO_BACKUP_RECIPIENT is not configured."
-
-    headers = {"api-key": BREVO_API_KEY, "Content-Type": "application/json", "Accept": "application/json"}
-
-    export_req = urllib.request.Request(
-        "https://api.brevo.com/v3/contacts/export",
-        # Brevo additionally requires one of modifiedSince/createdSince/
-        # segmentId/listId even with actionForContacts="allContacts"
-        # (confirmed live: "Please provide at least one of the following:
-        # modifiedSince, createdSince, segmentId or listId") - createdSince
-        # far in the past captures every contact ever created, i.e. all of
-        # them, without narrowing to a specific list/segment.
-        data=json.dumps({"customContactFilter": {
-            "actionForContacts": "allContacts",
-            "createdSince": "2000-01-01T00:00:00.000Z"
-        }}).encode("utf-8"),
-        headers=headers,
-        method="POST"
-    )
-    try:
-        with urllib.request.urlopen(export_req, context=ctx, timeout=30) as res:
-            export_resp = json.loads(res.read().decode("utf-8"))
-    except Exception as e:
-        return False, f"Failed to start Brevo contacts export: {_http_error_detail(e)}"
-
-    process_id = export_resp.get("processId") or export_resp.get("processID")
-    if not process_id:
-        return False, f"Brevo export did not return a processId: {export_resp}"
-
-    download_url = None
-    last_status = None
-    for _ in range(20):  # bounded poll, ~60s max
-        time.sleep(3)
-        # Contact export status is checked via Brevo's generic async-process
-        # endpoint (GET /v3/processes/{processId}), not a contacts-specific
-        # one - confirmed against Brevo's own API reference.
-        status_req = urllib.request.Request(
-            f"https://api.brevo.com/v3/processes/{process_id}",
-            headers=headers,
-            method="GET"
-        )
-        try:
-            with urllib.request.urlopen(status_req, context=ctx, timeout=30) as res:
-                status_resp = json.loads(res.read().decode("utf-8"))
-        except Exception as e:
-            return False, f"Failed to check Brevo export status: {_http_error_detail(e)}"
-        last_status = str(status_resp.get("status", "")).lower()
-        if last_status == "completed":
-            download_url = status_resp.get("export_url")
-            break
-        if last_status in ("failed", "cancelled"):
-            return False, f"Brevo export job ended with status '{last_status}': {status_resp}"
-
-    if not download_url:
-        return False, f"Brevo export did not complete within the expected time (60s, last status: {last_status}) - try again shortly."
-
-    # Email the download link itself rather than attaching the exported file -
-    # confirmed via a live test + Brevo's own delivery logs that Gmail's
-    # security scanner hard-blocks the .zip attachment outright ("552-5.7.0
-    # ... potential security issue"), a known Gmail restriction unrelated to
-    # the file's actual contents. A link sidesteps that entirely, and is the
-    # same pattern Brevo's own "export complete" notification already uses
-    # successfully. The link is Brevo-hosted and may expire after a period -
-    # download and store it promptly rather than relying on it indefinitely.
-    today_str = datetime.datetime.now().strftime("%Y-%m-%d")
-    email_body = {
-        "sender": {"email": BREVO_BACKUP_SENDER},
-        "to": [{"email": BREVO_BACKUP_RECIPIENT}],
-        "subject": f"Brevo Contacts Backup - {today_str}",
-        "htmlContent": (
-            f"<p>Automated Brevo contacts backup for {today_str}.</p>"
-            f"<p><a href=\"{download_url}\">Download the exported contacts file here</a></p>"
-            f"<p>This link is hosted by Brevo and may expire after some time - "
-            f"please download and store it promptly.</p>"
-        )
-    }
-    send_req = urllib.request.Request(
-        "https://api.brevo.com/v3/smtp/email",
-        data=json.dumps(email_body).encode("utf-8"),
-        headers=headers,
-        method="POST"
-    )
-    try:
-        with urllib.request.urlopen(send_req, context=ctx, timeout=30) as res:
-            send_resp = json.loads(res.read().decode("utf-8"))
-    except Exception as e:
-        return False, f"Backup file was exported but the email failed to send: {_http_error_detail(e)}"
-
-    return True, f"Backup emailed to {BREVO_BACKUP_RECIPIENT} (messageId: {send_resp.get('messageId', 'n/a')})"
-
-
 def _claim_scheduled_job_run(job_name):
     """Atomic claim for today's run of a scheduled job - see
     scheduled_job_runs in init_db(). Returns True only for the single
@@ -1084,18 +988,6 @@ def _claim_scheduled_job_run(job_name):
     except Exception as e:
         print(f"Error claiming scheduled job run for {job_name}: {e}")
         return False
-
-
-def _scheduled_brevo_backup_tick():
-    """Runs once a day (see scheduler setup below); only actually performs
-    the backup on the 21st, and only once even across multiple gunicorn
-    worker processes."""
-    if datetime.datetime.now().day != 21:
-        return
-    if not _claim_scheduled_job_run('brevo_contacts_backup'):
-        return  # another worker already claimed today's run
-    success, message = run_brevo_contacts_backup()
-    print(f"[Scheduled Brevo Backup] success={success} message={message}")
 
 
 # Database backup - a genuinely RESTORABLE snapshot of this app's own
@@ -1200,9 +1092,9 @@ def _build_db_backup_zip(progress_cb=None):
 
 def _send_db_backup_ready_email(token):
     """Emails the download link via Brevo once a backup has actually
-    finished generating (see run_db_backup_export) - mirrors
-    run_brevo_contacts_backup's link-based delivery (Gmail blocks zip
-    attachments outright, confirmed live). Returns (success, message)."""
+    finished generating (see run_db_backup_export) - a link rather than a
+    zip attachment, since Gmail's security scanner blocks zip attachments
+    outright (confirmed live). Returns (success, message)."""
     download_url = f"{APP_BASE_URL}/api/db-backup/download/{token}"
     today_str = datetime.datetime.now().strftime("%Y-%m-%d")
     headers = {"api-key": BREVO_API_KEY, "Content-Type": "application/json", "Accept": "application/json"}
@@ -1964,7 +1856,7 @@ def admin_users():
     except Exception as e:
         error = f"Database connection error: {e}"
 
-    return render_template('users.html', users=users, error=error, is_admin=True, api_key_configured=bool(ANTHROPIC_API_KEY or OPENROUTER_API_KEY), ai_model_name=AI_MODEL_DISPLAY_NAME)
+    return render_template('users.html', users=users, error=error, is_admin=True, api_key_configured=bool(ANTHROPIC_API_KEY or OPENROUTER_API_KEY), ai_model_name=AI_MODEL_DISPLAY_NAME, db_backup_recipient=BREVO_BACKUP_RECIPIENT or '(not configured)')
 
 @app.route('/admin/users/create', methods=['POST'])
 @admin_required
@@ -7607,36 +7499,6 @@ def parse_full_workbook_excel(file_bytes, filename, financial_year='2026-27', mo
 def income_page():
     return render_template('income.html', is_admin=is_admin_user())
 
-@app.route('/brevo-backup')
-@login_required
-def brevo_backup_page():
-    return render_template(
-        'brevo_backup.html',
-        recipient=BREVO_BACKUP_RECIPIENT or '(not configured)',
-        sender=BREVO_BACKUP_SENDER or '(not configured)'
-    )
-
-@app.route('/api/brevo-backup/push', methods=['POST'])
-@login_required
-def push_brevo_backup():
-    try:
-        success, message = run_brevo_contacts_backup()
-        if success:
-            log_activity(session['user_id'], 'brevo_backup_pushed', message)
-            return jsonify({"success": True, "message": message})
-        return jsonify({"success": False, "error": message}), 500
-    except Exception as e:
-        return jsonify({"success": False, "error": friendly_error_message(e)}), 500
-
-@app.route('/db-backup')
-@login_required
-def db_backup_page():
-    return render_template(
-        'db_backup.html',
-        recipient=BREVO_BACKUP_RECIPIENT or '(not configured)',
-        sender=BREVO_BACKUP_SENDER or '(not configured)'
-    )
-
 @app.route('/api/db-backup/push', methods=['POST'])
 @login_required
 def push_db_backup():
@@ -11195,39 +11057,32 @@ def export_gstr1_json():
         return jsonify({"error": friendly_error_message(e)}), 500
 
 
-# Monthly backup scheduler (Brevo contacts + this app's own database) -
-# registered here, at the end of the file, so every function it references
-# is already defined (an earlier version of this block ran right after
-# init_db(), far above both _scheduled_*_tick functions' definitions -
-# NameError on every startup, silently swallowed by the try/except below,
-# meaning the automatic monthly run was never actually registered even
-# though the manual "Push Backup Now" buttons worked fine, since route
-# handlers only run later, at request time). Ticks hourly rather than a
-# single exact-time cron fire, so a mid-day Railway restart can't cause the
-# whole day to be missed; each tick function itself only acts on the 21st
-# and only once per day even across gunicorn's multiple worker processes
-# (see _claim_scheduled_job_run) - every worker starts its own ticker,
-# which is fine, the DB-level claim is what actually prevents duplicates.
+# Monthly database backup scheduler - registered here, at the end of the
+# file, so _scheduled_db_backup_tick is already defined (an earlier version
+# of this block ran right after init_db(), far above that function's
+# definition - NameError on every startup, silently swallowed by the
+# try/except below, meaning the automatic monthly run was never actually
+# registered even though the manual "Push Backup Now" button worked fine,
+# since route handlers only run later, at request time). Ticks hourly rather
+# than a single exact-time cron fire, so a mid-day Railway restart can't
+# cause the whole day to be missed; the tick function itself only acts on
+# the 21st and only once per day even across gunicorn's multiple worker
+# processes (see _claim_scheduled_job_run) - every worker starts its own
+# ticker, which is fine, the DB-level claim is what actually prevents
+# duplicates.
 try:
     from apscheduler.schedulers.background import BackgroundScheduler
     from apscheduler.triggers.interval import IntervalTrigger
     _monthly_backup_scheduler = BackgroundScheduler(daemon=True)
     _monthly_backup_scheduler.add_job(
-        _scheduled_brevo_backup_tick,
-        IntervalTrigger(hours=1),
-        id='brevo_monthly_backup_tick',
-        replace_existing=True,
-        next_run_time=datetime.datetime.now()  # also check immediately on startup
-    )
-    _monthly_backup_scheduler.add_job(
         _scheduled_db_backup_tick,
         IntervalTrigger(hours=1),
         id='db_monthly_backup_tick',
         replace_existing=True,
-        next_run_time=datetime.datetime.now()
+        next_run_time=datetime.datetime.now()  # also check immediately on startup
     )
     _monthly_backup_scheduler.start()
-    print("Monthly backup scheduler started (Brevo contacts + database).")
+    print("Monthly database backup scheduler started.")
 except Exception as e:
     print(f"Monthly backup scheduler failed to start: {e}")
 

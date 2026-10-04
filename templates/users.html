@@ -401,6 +401,16 @@
                         </form>
                         <div id="restore-status" style="margin-top: 10px; font-size: 13px;"></div>
                     </div>
+
+                    <div style="margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border-color);">
+                        <p style="font-size: 12.5px; color: #475569; margin: 0 0 10px;">
+                            Email a full backup (every table + uploaded files) as a download link, for offsite safekeeping. Sent to {{ db_backup_recipient }}. Runs automatically on the 21st too.
+                        </p>
+                        <button id="btnEmailBackup" type="button" class="btn btn-secondary" style="width: 100%; justify-content: center;">
+                            <i class="fa-solid fa-paper-plane"></i> Email Me a Full Backup
+                        </button>
+                        <div id="email-backup-status" style="margin-top: 10px; font-size: 13px; display: none;"></div>
+                    </div>
                 </div>
 
                 <!-- User List & Work Tracking Table -->
@@ -540,6 +550,63 @@
                         statusEl.style.color = '#b91c1c';
                         statusEl.textContent = err.message || 'Restore failed.';
                         submitBtn.disabled = false;
+                    });
+            });
+        }
+
+        const btnEmailBackup = document.getElementById('btnEmailBackup');
+        if (btnEmailBackup) {
+            const emailStatusEl = document.getElementById('email-backup-status');
+            let emailBackupPoll = null;
+
+            function setEmailStatus(color, text) {
+                emailStatusEl.style.display = 'block';
+                emailStatusEl.style.color = color;
+                emailStatusEl.textContent = text;
+            }
+
+            function finishEmailBackup() {
+                clearInterval(emailBackupPoll);
+                emailBackupPoll = null;
+                btnEmailBackup.disabled = false;
+                btnEmailBackup.innerHTML = '<i class="fa-solid fa-paper-plane"></i> Email Me a Full Backup';
+            }
+
+            btnEmailBackup.addEventListener('click', () => {
+                btnEmailBackup.disabled = true;
+                btnEmailBackup.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Starting...';
+                setEmailStatus('var(--text-muted)', 'Starting backup...');
+
+                fetch('/api/db-backup/push', { method: 'POST' })
+                    .then(res => res.json())
+                    .then(data => {
+                        if (!data.success || !data.token) {
+                            setEmailStatus('#b91c1c', data.error || 'Backup failed to start.');
+                            finishEmailBackup();
+                            return;
+                        }
+                        btnEmailBackup.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Generating...';
+                        emailBackupPoll = setInterval(() => {
+                            fetch(`/api/db-backup/status/${data.token}`)
+                                .then(res => res.json())
+                                .then(s => {
+                                    if (s.error) { setEmailStatus('#b91c1c', s.error); finishEmailBackup(); return; }
+                                    if (s.status === 'ready') {
+                                        setEmailStatus('#16a34a', 'Backup ready - check your email now.');
+                                        finishEmailBackup();
+                                    } else if (s.status === 'failed') {
+                                        setEmailStatus('#b91c1c', 'Backup generation failed. Please try again.');
+                                        finishEmailBackup();
+                                    } else {
+                                        setEmailStatus('var(--text-muted)', `Generating... ${s.percent}% (${s.tables_done}/${s.tables_total} tables)`);
+                                    }
+                                })
+                                .catch(() => {});
+                        }, 3000);
+                    })
+                    .catch(err => {
+                        setEmailStatus('#b91c1c', 'Request failed: ' + err);
+                        finishEmailBackup();
                     });
             });
         }
