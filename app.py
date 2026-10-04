@@ -8317,6 +8317,89 @@ def set_income_entry_manual_amount(entry_id):
         print(f"Error setting manual income amount for entry {entry_id}: {e}")
         return jsonify({"error": friendly_error_message(e)}), 500
 
+@app.route('/api/income-entries/manual-add', methods=['POST'])
+@login_required
+def add_income_entry_manual():
+    """Single manual income entry - for income that's booked annually/periodically
+    in the bank's books (e.g. locker rent, commission on guarantee under PL
+    3230/3320) but needs a GST figure for every month's GSTR-3B. Lets the CA
+    book one branch/GL code/month at a time without waiting for a voucher
+    upload for that period. Same upsert key (client+branch+FY+month+GL code)
+    as the bulk upload route - submitting again for a period already entered
+    here just corrects it, exactly like re-uploading a voucher would."""
+    user_id = session['user_id']
+    client_id = get_current_client_id()
+    data = request.json or {}
+
+    branch = (data.get('branch') or '').strip()
+    gl_code = (data.get('gl_code') or '').strip().upper()
+    fy = (data.get('financial_year') or '').strip()
+    month = (data.get('month') or '').strip()
+    try:
+        amount = float(data.get('amount'))
+    except (TypeError, ValueError):
+        return jsonify({"error": "Amount must be a number."}), 400
+
+    if not branch or branch not in INCOME_MASTER_BRANCHES:
+        return jsonify({"error": "Please select a valid branch."}), 400
+    if not gl_code or not fy or not month:
+        return jsonify({"error": "Financial Year, Month, and GL/PL Code are required."}), 400
+
+    meta = get_income_code_meta(gl_code)
+    if meta is None:
+        return jsonify({"error": f"GL/PL code {gl_code} is not in the income catalog - add it first via Manage GL/PL Codes."}), 400
+    if meta.get('ledger_role'):
+        return jsonify({"error": f"GL/PL code {gl_code} is a GST-payable/exempt-income ledger account, not an income code."}), 400
+
+    particulars = meta.get('particulars') or 'Bank Service Income'
+    is_taxable = meta.get('is_taxable', True)
+    rate = meta.get('gst_rate', 18.0)
+    tax_type = meta.get('tax_type', 'CGST_SGST')
+    amount = round(amount, 2)
+
+    # Same DEMAT/IGST carve-out as finalize_ledger_accounts, guarded on the
+    # branch name itself so an admin mis-tagging tax_type elsewhere can't
+    # silently shift tax jurisdiction.
+    if branch.strip().upper() == 'DEMAT' and tax_type == 'IGST' and is_taxable:
+        igst = round(amount * (rate / 100.0), 2)
+        cgst = sgst = 0.0
+    else:
+        cgst = round(amount * (rate / 200.0), 2) if is_taxable else 0.0
+        sgst = cgst
+        igst = 0.0
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute('''
+            INSERT INTO income_entries
+                (user_id, client_id, branch, state, financial_year, month, gl_code, particulars,
+                 is_taxable, income_amount, manual_income_amount, cgst, sgst, igst,
+                 needs_review, review_reason)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, FALSE, NULL)
+            ON CONFLICT (client_id, branch, financial_year, month, gl_code)
+            DO UPDATE SET
+                user_id = EXCLUDED.user_id,
+                particulars = EXCLUDED.particulars,
+                is_taxable = EXCLUDED.is_taxable,
+                income_amount = EXCLUDED.income_amount,
+                manual_income_amount = EXCLUDED.manual_income_amount,
+                cgst = EXCLUDED.cgst, sgst = EXCLUDED.sgst, igst = EXCLUDED.igst,
+                needs_review = FALSE, review_reason = NULL
+            RETURNING id
+        ''', (user_id, client_id, branch, get_branch_state(branch), fy, month, gl_code, particulars,
+              is_taxable, amount, amount, cgst, sgst, igst))
+        row = cur.fetchone()
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print(f"Error adding manual income entry: {e}")
+        return jsonify({"error": friendly_error_message(e)}), 500
+
+    log_activity(user_id, 'INCOME_MANUAL_ADD', f"Added manual income entry for {branch} / {gl_code} ({month} {fy}): Rs.{amount:,.2f}")
+    return jsonify({"success": True, "id": row['id'], "income_amount": amount, "cgst": cgst, "sgst": sgst, "igst": igst})
+
 # GST Payable Ledger (GL 1878/1879/1880-style) and Exempt Income Ledger (CA
 # step 7 codes) share an identical shape and the same manual-balance-entry
 # need, so one pair of GET/POST handlers serves both, parameterized by table.

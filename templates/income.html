@@ -456,6 +456,9 @@
                         <span style="font-size: 13px; color: #64748b;">Review structured revenue and GST liability per branch</span>
                     </div>
                     <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+                        <button type="button" id="btnAddManualIncome" title="Book one branch/GL code's income for a single month by hand - no voucher upload needed. Useful for annual/periodic income like locker rent or commission on guarantee that needs a monthly GST effect." style="padding: 7px 16px; border-radius: 8px; font-size: 13px; font-weight: 700; background: #7c3aed; color: #ffffff; border: none; cursor: pointer; display: flex; align-items: center; gap: 6px; box-shadow: 0 2px 8px rgba(124, 58, 237, 0.25);">
+                            <i class="fa-solid fa-pen-to-square"></i> Add Manual Entry
+                        </button>
                         {% if is_admin %}
                         <button type="button" id="btnManageCodes" style="padding: 7px 16px; border-radius: 8px; font-size: 13px; font-weight: 700; background: #ffffff; color: #334155; border: 1px solid var(--border-color); cursor: pointer; display: flex; align-items: center; gap: 6px;">
                             <i class="fa-solid fa-list-check"></i> Manage GL/PL Codes
@@ -667,6 +670,73 @@
         </div>
     </div>
     {% endif %}
+
+    <!-- Add Manual Income Entry Modal (all users - same permission level as the manual-amount pencil edit) -->
+    <div class="modal-overlay" id="manualIncomeModalOverlay" style="display: none; position: fixed; inset: 0; background: rgba(15, 23, 42, 0.6); backdrop-filter: blur(4px); z-index: 9999; align-items: center; justify-content: center;">
+        <div class="modal-card" style="max-width: 520px; width: 92vw; background: #ffffff; border-radius: 16px; box-shadow: 0 20px 40px rgba(0,0,0,0.2); overflow: hidden; display: flex; flex-direction: column;">
+            <div class="modal-header" style="background: #f8fafc; padding: 18px 24px; border-bottom: 1px solid #e2e8f0; display: flex; justify-content: space-between; align-items: center;">
+                <h3 style="font-size: 16px; font-weight: 700; color: #0f172a; margin: 0; display: flex; align-items: center; gap: 10px;">
+                    <i class="fa-solid fa-pen-to-square" style="color: #7c3aed;"></i> Add Manual Income Entry
+                </h3>
+                <button type="button" class="modal-close" id="manualIncomeModalClose" aria-label="Close" style="background: none; border: none; font-size: 18px; color: #64748b; cursor: pointer;">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+            <div class="modal-body" style="padding: 20px 24px;">
+                <p style="font-size: 12.5px; color: #64748b; margin: 0 0 16px; line-height: 1.5;">
+                    For income booked annually/periodically in the bank's own books (e.g. locker rent, commission on guarantee) - book one branch/GL code's income for a single month by hand, no voucher upload needed. Submitting again for a branch/code/month already entered here corrects it, the same as re-uploading a voucher would.
+                </p>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px;">
+                    <div style="grid-column: 1 / -1;">
+                        <label for="manualIncomeBranch" style="font-size:12px; font-weight:700; color:#475569; display:block; margin-bottom:5px;">Branch</label>
+                        <select id="manualIncomeBranch" style="width:100%; padding:9px 12px; border-radius:8px; border:1px solid #cbd5e1; font-size:13.5px;"></select>
+                    </div>
+                    <div style="grid-column: 1 / -1; position: relative;">
+                        <label for="manualIncomeGlCode" style="font-size:12px; font-weight:700; color:#475569; display:block; margin-bottom:5px;">GL / PL Code <span style="font-weight:500; color:#94a3b8;">(type to search)</span></label>
+                        <div class="autocomplete-wrapper">
+                            <input type="text" id="manualIncomeGlCode" autocomplete="off" placeholder="e.g. 3230" style="width:100%; padding:9px 12px; border-radius:8px; border:1px solid #cbd5e1; font-size:13.5px; font-family: monospace;">
+                            <ul class="autocomplete-dropdown" id="manualIncomeGlCodeDropdown" style="display:none;"></ul>
+                        </div>
+                        <div id="manualIncomeGlCodePreview" style="font-size:11.5px; color:#64748b; margin-top:6px; display:none;"></div>
+                    </div>
+                    <div>
+                        <label for="manualIncomeFY" style="font-size:12px; font-weight:700; color:#475569; display:block; margin-bottom:5px;">Financial Year</label>
+                        <select id="manualIncomeFY" style="width:100%; padding:9px 12px; border-radius:8px; border:1px solid #cbd5e1; font-size:13.5px;">
+                            <option value="2026-27">2026-27</option>
+                            <option value="2025-26">2025-26</option>
+                            <option value="2024-25">2024-25</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label for="manualIncomeMonth" style="font-size:12px; font-weight:700; color:#475569; display:block; margin-bottom:5px;">Month</label>
+                        <select id="manualIncomeMonth" style="width:100%; padding:9px 12px; border-radius:8px; border:1px solid #cbd5e1; font-size:13.5px;">
+                            <option value="April">April</option>
+                            <option value="May">May</option>
+                            <option value="June">June</option>
+                            <option value="July">July</option>
+                            <option value="August">August</option>
+                            <option value="September">September</option>
+                            <option value="October">October</option>
+                            <option value="November">November</option>
+                            <option value="December">December</option>
+                            <option value="January">January</option>
+                            <option value="February">February</option>
+                            <option value="March">March</option>
+                        </select>
+                    </div>
+                    <div style="grid-column: 1 / -1;">
+                        <label for="manualIncomeAmount" style="font-size:12px; font-weight:700; color:#475569; display:block; margin-bottom:5px;">Income Amount for this Month (₹)</label>
+                        <input type="number" id="manualIncomeAmount" min="0" step="0.01" placeholder="0.00" style="width:100%; padding:9px 12px; border-radius:8px; border:1px solid #cbd5e1; font-size:14px; font-weight:600;">
+                    </div>
+                </div>
+                <div id="manualIncomeMsg" style="display:none; font-size: 12.5px; padding: 8px 12px; border-radius: 8px; margin-top: 14px;"></div>
+            </div>
+            <div class="modal-footer" style="background: #f8fafc; padding: 16px 24px; border-top: 1px solid #e2e8f0; display: flex; justify-content: flex-end; gap: 12px;">
+                <button type="button" class="btn btn-secondary" id="manualIncomeModalCancel" style="padding: 10px 18px; border-radius: 8px; border: 1px solid #cbd5e1; background: #ffffff; color: #475569; font-weight: 600; cursor: pointer;">Cancel</button>
+                <button type="button" class="btn btn-primary" id="btnSaveManualIncome" style="padding: 10px 20px; border-radius: 8px; border: none; background: linear-gradient(135deg, #7c3aed 0%, #a855f7 100%); color: #ffffff; font-weight: 700; cursor: pointer;">Save Entry</button>
+            </div>
+        </div>
+    </div>
 
     <!-- Generate GSTR-1 JSON Modal -->
     <div class="modal-overlay" id="gstr1ModalOverlay" style="display: none; position: fixed; inset: 0; background: rgba(15, 23, 42, 0.6); backdrop-filter: blur(4px); z-index: 9999; align-items: center; justify-content: center;">

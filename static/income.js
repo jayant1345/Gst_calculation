@@ -1318,6 +1318,186 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // 12. Add Manual Income Entry (available to all users, not just admins -
+    // same permission level as the manual-amount pencil edit). For income
+    // booked annually/periodically in the bank's books (e.g. locker rent,
+    // commission on guarantee under manual-entry GL codes like 3230/3320)
+    // this lets the CA book one branch/GL code/month's GST effect by hand,
+    // without needing a voucher upload for that period. Purely additive -
+    // it does not touch the upload/parsing flow at all.
+    (function setupManualIncomeEntry() {
+        const btnAddManualIncome = document.getElementById('btnAddManualIncome');
+        if (!btnAddManualIncome) return;
+        const modalOverlay = document.getElementById('manualIncomeModalOverlay');
+        const modalClose = document.getElementById('manualIncomeModalClose');
+        const modalCancel = document.getElementById('manualIncomeModalCancel');
+        const branchSelect = document.getElementById('manualIncomeBranch');
+        const glCodeInput = document.getElementById('manualIncomeGlCode');
+        const glCodeDropdown = document.getElementById('manualIncomeGlCodeDropdown');
+        const glCodePreview = document.getElementById('manualIncomeGlCodePreview');
+        const fySelect = document.getElementById('manualIncomeFY');
+        const monthSelect = document.getElementById('manualIncomeMonth');
+        const amountInput = document.getElementById('manualIncomeAmount');
+        const msgBox = document.getElementById('manualIncomeMsg');
+        const btnSave = document.getElementById('btnSaveManualIncome');
+
+        let manualCatalogCodes = [];
+
+        function showMsg(text, isError) {
+            msgBox.textContent = text;
+            msgBox.style.display = 'block';
+            msgBox.style.background = isError ? '#fef2f2' : '#f0fdf4';
+            msgBox.style.color = isError ? '#991b1b' : '#166534';
+            msgBox.style.border = `1px solid ${isError ? '#fca5a5' : '#bbf7d0'}`;
+        }
+
+        function populateBranches() {
+            const prev = branchSelect.value;
+            branchSelect.innerHTML = '';
+            (masterBranches || []).forEach(b => {
+                const opt = document.createElement('option');
+                opt.value = b;
+                opt.textContent = b;
+                branchSelect.appendChild(opt);
+            });
+            if (prev && masterBranches.includes(prev)) {
+                branchSelect.value = prev;
+            } else if (currentBranch !== 'ALL' && masterBranches.includes(currentBranch)) {
+                branchSelect.value = currentBranch;
+            }
+        }
+
+        function applyMeta(c) {
+            if (!c) {
+                glCodePreview.style.display = 'none';
+                return;
+            }
+            glCodePreview.style.display = 'block';
+            glCodePreview.innerHTML = `${c.particulars || ''} &middot; ${c.is_taxable ? (c.gst_rate + '% GST') : 'Exempt'}` +
+                (c.manual_entry ? ' &middot; <span style="color:#7c3aed; font-weight:700;">Manual-entry code</span>' : '');
+        }
+
+        function renderGlDropdown(query) {
+            const q = (query || '').trim().toLowerCase();
+            if (!q) {
+                glCodeDropdown.style.display = 'none';
+                return;
+            }
+            const items = manualCatalogCodes
+                .filter(c => String(c.code).toLowerCase().includes(q) || String(c.particulars || '').toLowerCase().includes(q))
+                .slice(0, 12);
+            if (items.length === 0) {
+                glCodeDropdown.style.display = 'none';
+                return;
+            }
+            glCodeDropdown.innerHTML = items.map((c, idx) => `
+                <li class="autocomplete-item" data-idx="${idx}">
+                    <div>
+                        <div class="autocomplete-main">${c.code}</div>
+                        <div class="autocomplete-sub">${c.particulars || ''}</div>
+                    </div>
+                    <span class="autocomplete-badge">${c.is_taxable ? c.gst_rate + '%' : 'Exempt'}</span>
+                </li>
+            `).join('');
+            glCodeDropdown.style.display = 'block';
+            glCodeDropdown.querySelectorAll('.autocomplete-item').forEach(li => {
+                li.addEventListener('mousedown', () => {
+                    const c = items[parseInt(li.dataset.idx, 10)];
+                    glCodeInput.value = c.code;
+                    applyMeta(c);
+                    glCodeDropdown.style.display = 'none';
+                });
+            });
+        }
+
+        glCodeInput.addEventListener('input', () => {
+            const match = manualCatalogCodes.find(x => String(x.code).toLowerCase() === glCodeInput.value.trim().toLowerCase());
+            applyMeta(match);
+            renderGlDropdown(glCodeInput.value);
+        });
+        glCodeInput.addEventListener('focus', () => renderGlDropdown(glCodeInput.value));
+        document.addEventListener('click', (e) => {
+            if (!glCodeInput.contains(e.target) && !glCodeDropdown.contains(e.target)) {
+                glCodeDropdown.style.display = 'none';
+            }
+        });
+
+        async function loadCatalogCodes() {
+            try {
+                const res = await fetch('/api/income-codes-master');
+                const data = await res.json();
+                manualCatalogCodes = data.codes || [];
+            } catch (e) {
+                manualCatalogCodes = [];
+            }
+        }
+
+        function openModal() {
+            populateBranches();
+            fySelect.value = currentFinancialYear;
+            monthSelect.value = currentMonth;
+            glCodeInput.value = '';
+            amountInput.value = '';
+            applyMeta(null);
+            msgBox.style.display = 'none';
+            modalOverlay.style.display = 'flex';
+            if (manualCatalogCodes.length === 0) loadCatalogCodes();
+            glCodeInput.focus();
+        }
+
+        function closeModal() {
+            modalOverlay.style.display = 'none';
+        }
+
+        btnAddManualIncome.addEventListener('click', openModal);
+        modalClose.addEventListener('click', closeModal);
+        modalCancel.addEventListener('click', closeModal);
+        modalOverlay.addEventListener('click', (e) => {
+            if (e.target === modalOverlay) closeModal();
+        });
+
+        btnSave.addEventListener('click', async () => {
+            const branch = branchSelect.value;
+            const glCode = glCodeInput.value.trim().toUpperCase();
+            const fy = fySelect.value;
+            const month = monthSelect.value;
+            const amount = parseFloat(amountInput.value);
+
+            if (!branch) { showMsg('Please select a branch.', true); return; }
+            if (!glCode) { showMsg('Please enter a GL/PL code.', true); return; }
+            if (isNaN(amount) || amount < 0) { showMsg('Please enter a valid amount.', true); return; }
+
+            btnSave.disabled = true;
+            btnSave.textContent = 'Saving...';
+            try {
+                const res = await fetch('/api/income-entries/manual-add', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ branch, gl_code: glCode, financial_year: fy, month, amount })
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Save failed');
+                showMsg(`Saved: ${branch} / ${glCode} for ${month} ${fy} = ${formatINR(data.income_amount)}`, false);
+                if (fy !== currentFinancialYear || month !== currentMonth) {
+                    currentFinancialYear = fy;
+                    currentMonth = month;
+                    sessionStorage.setItem('income_fy', fy);
+                    sessionStorage.setItem('income_month', month);
+                    if (selectIncomeFY) selectIncomeFY.value = fy;
+                    if (selectIncomeMonth) selectIncomeMonth.value = month;
+                }
+                amountInput.value = '';
+                await loadIncomeData();
+                loadB2BSummary();
+            } catch (err) {
+                showMsg(err.message, true);
+            } finally {
+                btnSave.disabled = false;
+                btnSave.textContent = 'Save Entry';
+            }
+        });
+    })();
+
     // Initialize
     updateClientTabUI();
     loadIncomeData();
