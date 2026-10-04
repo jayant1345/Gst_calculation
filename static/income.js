@@ -1338,6 +1338,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const fySelect = document.getElementById('manualIncomeFY');
         const monthSelect = document.getElementById('manualIncomeMonth');
         const amountInput = document.getElementById('manualIncomeAmount');
+        const refundWithoutGstInput = document.getElementById('manualIncomeRefundWithoutGst');
+        const refundWithGstInput = document.getElementById('manualIncomeRefundWithGst');
         const msgBox = document.getElementById('manualIncomeMsg');
         const btnSave = document.getElementById('btnSaveManualIncome');
 
@@ -1438,6 +1440,8 @@ document.addEventListener('DOMContentLoaded', () => {
             monthSelect.value = currentMonth;
             glCodeInput.value = '';
             amountInput.value = '';
+            refundWithoutGstInput.value = '';
+            refundWithGstInput.value = '';
             applyMeta(null);
             msgBox.style.display = 'none';
             modalOverlay.style.display = 'flex';
@@ -1462,10 +1466,15 @@ document.addEventListener('DOMContentLoaded', () => {
             const fy = fySelect.value;
             const month = monthSelect.value;
             const amount = parseFloat(amountInput.value);
+            const refundWithoutGst = refundWithoutGstInput.value.trim() === '' ? 0 : parseFloat(refundWithoutGstInput.value);
+            const refundWithGst = refundWithGstInput.value.trim() === '' ? 0 : parseFloat(refundWithGstInput.value);
 
             if (!branch) { showMsg('Please select a branch.', true); return; }
             if (!glCode) { showMsg('Please enter a GL/PL code.', true); return; }
             if (isNaN(amount) || amount < 0) { showMsg('Please enter a valid amount.', true); return; }
+            if (isNaN(refundWithoutGst) || refundWithoutGst < 0 || isNaN(refundWithGst) || refundWithGst < 0) {
+                showMsg('Please enter valid refund amounts.', true); return;
+            }
 
             btnSave.disabled = true;
             btnSave.textContent = 'Saving...';
@@ -1473,7 +1482,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 const res = await fetch('/api/income-entries/manual-add', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ branch, gl_code: glCode, financial_year: fy, month, amount })
+                    body: JSON.stringify({
+                        branch, gl_code: glCode, financial_year: fy, month, amount,
+                        refund_without_gst: refundWithoutGst, refund_with_gst: refundWithGst
+                    })
                 });
                 const data = await res.json();
                 if (!res.ok) throw new Error(data.error || 'Save failed');
@@ -1487,6 +1499,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (selectIncomeMonth) selectIncomeMonth.value = month;
                 }
                 amountInput.value = '';
+                refundWithoutGstInput.value = '';
+                refundWithGstInput.value = '';
                 await loadIncomeData();
                 loadB2BSummary();
             } catch (err) {

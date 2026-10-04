@@ -8339,6 +8339,11 @@ def add_income_entry_manual():
         amount = float(data.get('amount'))
     except (TypeError, ValueError):
         return jsonify({"error": "Amount must be a number."}), 400
+    try:
+        refund_without_gst = round(float(data.get('refund_without_gst') or 0.0), 2)
+        refund_with_gst = round(float(data.get('refund_with_gst') or 0.0), 2)
+    except (TypeError, ValueError):
+        return jsonify({"error": "Refund amounts must be numbers."}), 400
 
     if not branch or branch not in INCOME_MASTER_BRANCHES:
         return jsonify({"error": "Please select a valid branch."}), 400
@@ -8375,8 +8380,8 @@ def add_income_entry_manual():
             INSERT INTO income_entries
                 (user_id, client_id, branch, state, financial_year, month, gl_code, particulars,
                  is_taxable, income_amount, manual_income_amount, cgst, sgst, igst,
-                 needs_review, review_reason)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, FALSE, NULL)
+                 refund_without_gst, refund_with_gst, needs_review, review_reason)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, FALSE, NULL)
             ON CONFLICT (client_id, branch, financial_year, month, gl_code)
             DO UPDATE SET
                 user_id = EXCLUDED.user_id,
@@ -8385,10 +8390,12 @@ def add_income_entry_manual():
                 income_amount = EXCLUDED.income_amount,
                 manual_income_amount = EXCLUDED.manual_income_amount,
                 cgst = EXCLUDED.cgst, sgst = EXCLUDED.sgst, igst = EXCLUDED.igst,
+                refund_without_gst = EXCLUDED.refund_without_gst,
+                refund_with_gst = EXCLUDED.refund_with_gst,
                 needs_review = FALSE, review_reason = NULL
             RETURNING id
         ''', (user_id, client_id, branch, get_branch_state(branch), fy, month, gl_code, particulars,
-              is_taxable, amount, amount, cgst, sgst, igst))
+              is_taxable, amount, amount, cgst, sgst, igst, refund_without_gst, refund_with_gst))
         row = cur.fetchone()
         conn.commit()
         cur.close()
@@ -8398,7 +8405,8 @@ def add_income_entry_manual():
         return jsonify({"error": friendly_error_message(e)}), 500
 
     log_activity(user_id, 'INCOME_MANUAL_ADD', f"Added manual income entry for {branch} / {gl_code} ({month} {fy}): Rs.{amount:,.2f}")
-    return jsonify({"success": True, "id": row['id'], "income_amount": amount, "cgst": cgst, "sgst": sgst, "igst": igst})
+    return jsonify({"success": True, "id": row['id'], "income_amount": amount, "cgst": cgst, "sgst": sgst, "igst": igst,
+                     "refund_without_gst": refund_without_gst, "refund_with_gst": refund_with_gst})
 
 # GST Payable Ledger (GL 1878/1879/1880-style) and Exempt Income Ledger (CA
 # step 7 codes) share an identical shape and the same manual-balance-entry
