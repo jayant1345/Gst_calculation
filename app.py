@@ -1026,23 +1026,25 @@ def run_brevo_contacts_backup():
     if not download_url:
         return False, f"Brevo export did not complete within the expected time (60s, last status: {last_status}) - try again shortly."
 
-    dl_req = urllib.request.Request(download_url, headers=headers, method="GET")
-    try:
-        with urllib.request.urlopen(dl_req, context=ctx, timeout=60) as res:
-            file_bytes = res.read()
-    except Exception as e:
-        return False, f"Failed to download Brevo export file: {_http_error_detail(e)}"
-
+    # Email the download link itself rather than attaching the exported file -
+    # confirmed via a live test + Brevo's own delivery logs that Gmail's
+    # security scanner hard-blocks the .zip attachment outright ("552-5.7.0
+    # ... potential security issue"), a known Gmail restriction unrelated to
+    # the file's actual contents. A link sidesteps that entirely, and is the
+    # same pattern Brevo's own "export complete" notification already uses
+    # successfully. The link is Brevo-hosted and may expire after a period -
+    # download and store it promptly rather than relying on it indefinitely.
     today_str = datetime.datetime.now().strftime("%Y-%m-%d")
     email_body = {
         "sender": {"email": BREVO_BACKUP_SENDER},
         "to": [{"email": BREVO_BACKUP_RECIPIENT}],
         "subject": f"Brevo Contacts Backup - {today_str}",
-        "htmlContent": f"<p>Automated Brevo contacts backup for {today_str} is attached.</p>",
-        "attachment": [{
-            "content": base64.b64encode(file_bytes).decode("utf-8"),
-            "name": f"brevo_contacts_backup_{today_str}.zip"
-        }]
+        "htmlContent": (
+            f"<p>Automated Brevo contacts backup for {today_str}.</p>"
+            f"<p><a href=\"{download_url}\">Download the exported contacts file here</a></p>"
+            f"<p>This link is hosted by Brevo and may expire after some time - "
+            f"please download and store it promptly.</p>"
+        )
     }
     send_req = urllib.request.Request(
         "https://api.brevo.com/v3/smtp/email",
