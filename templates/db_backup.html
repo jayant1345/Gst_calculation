@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Brevo Contacts Backup - Naimish N. Shah & Co.</title>
+    <title>Database Backup - Naimish N. Shah & Co.</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -52,11 +52,11 @@
                         <i class="fa-solid fa-map-signs"></i>
                         <span>Workflow Guide</span>
                     </a>
-                    <a href="/brevo-backup" class="nav-item active">
+                    <a href="/brevo-backup" class="nav-item">
                         <i class="fa-solid fa-envelope-circle-check"></i>
                         <span>Brevo Contacts Backup</span>
                     </a>
-                    <a href="/db-backup" class="nav-item">
+                    <a href="/db-backup" class="nav-item active">
                         <i class="fa-solid fa-database"></i>
                         <span>Database Backup</span>
                     </a>
@@ -71,17 +71,23 @@
         <main class="main-content">
             <header class="top-header">
                 <div class="header-left">
-                    <h1>Brevo Contacts Backup</h1>
-                    <p class="subtitle">Exports your Brevo contact list and emails it as a backup attachment. Read-only against Brevo - never changes any contact or account setting.</p>
+                    <h1>Database Backup</h1>
+                    <p class="subtitle">Exports a full, restorable snapshot of this app's own production data (every table, including uploaded statement files) and emails a secure download link. Read-only - never changes any existing data.</p>
                 </div>
             </header>
 
-            <div style="padding: 24px; max-width: 640px;">
+            <div style="padding: 24px; max-width: 680px;">
                 <div style="background: #ffffff; border: 1px solid var(--border-color, #e2e8f0); border-radius: 14px; padding: 28px;">
                     <div style="display: flex; flex-direction: column; gap: 6px; margin-bottom: 22px; font-size: 14px; color: #475569;">
-                        <div><strong>From (verified sender):</strong> {{ sender }}</div>
+                        <div><strong>Sent via:</strong> {{ sender }}</div>
                         <div><strong>To:</strong> {{ recipient }}</div>
                         <div><strong>Automatic schedule:</strong> 21st of every month</div>
+                        <div><strong>Download link validity:</strong> 7 days</div>
+                    </div>
+
+                    <div style="background: #fffbeb; border: 1px solid #fde68a; border-radius: 10px; padding: 14px 16px; margin-bottom: 20px; font-size: 13px; color: #92400e;">
+                        <i class="fa-solid fa-triangle-exclamation"></i>
+                        This backup includes login credentials and every originally uploaded statement file, for full disaster-recovery restorability. The download link itself is protected by a long random token (not guessable), but treat the emailed link as sensitive.
                     </div>
 
                     <button id="btnPushBackup" type="button" style="padding: 12px 24px; border-radius: 10px; font-weight: 700; border: none; background: #2563eb; color: #ffffff; cursor: pointer; display: flex; align-items: center; gap: 10px; box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25); font-size: 14.5px;">
@@ -101,11 +107,11 @@
         btn.addEventListener('click', async () => {
             btn.disabled = true;
             const originalHtml = btn.innerHTML;
-            btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Exporting & sending (this can take up to a minute)...';
+            btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Creating backup link & sending...';
             statusEl.style.display = 'none';
 
             try {
-                const res = await fetch('/api/brevo-backup/push', { method: 'POST' });
+                const res = await fetch('/api/db-backup/push', { method: 'POST' });
                 const data = await res.json();
                 statusEl.style.display = 'block';
                 if (data.success) {

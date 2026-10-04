@@ -6,6 +6,7 @@ import base64
 import urllib.request
 import urllib.error
 import ssl
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask import Flask, request, jsonify, render_template, send_file, redirect, url_for, session, flash
 import pandas as pd
@@ -327,6 +328,25 @@ def init_db():
                 run_date DATE NOT NULL,
                 ran_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (job_name, run_date)
+            );
+        ''')
+
+        # Short-lived tokens authorizing a single database-backup download
+        # link (see run_db_backup_export) - the email recipient has no app
+        # login, so a long random token stands in for one, same tradeoff as
+        # a typical password-reset or invoice-payment link. Generation runs
+        # in a background thread (confirmed: can take several minutes for
+        # this app's real data volume - the uploaded statement/invoice
+        # files are the bulk of it - far longer than gunicorn's request
+        # timeout would allow inline), so the finished zip is stored here
+        # (backup_data) and status tracks progress until it's ready.
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS db_backup_tokens (
+                token VARCHAR(64) PRIMARY KEY,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP NOT NULL,
+                status VARCHAR(20) NOT NULL DEFAULT 'generating',
+                backup_data BYTEA
             );
         ''')
 
@@ -769,27 +789,6 @@ try:
 except Exception as e:
     print(f"Startup DB init error: {e}")
 
-# Monthly Brevo contacts backup - ticks hourly (not a single exact-time cron
-# fire) so a mid-day Railway restart can't cause the whole day to be missed;
-# _scheduled_brevo_backup_tick() itself only acts on the 21st and only once
-# per day even across gunicorn's multiple worker processes (see
-# _claim_scheduled_job_run). Each worker process starts its own ticker, which
-# is fine - the DB-level claim is what actually prevents duplicate runs.
-try:
-    from apscheduler.schedulers.background import BackgroundScheduler
-    from apscheduler.triggers.interval import IntervalTrigger
-    _brevo_backup_scheduler = BackgroundScheduler(daemon=True)
-    _brevo_backup_scheduler.add_job(
-        _scheduled_brevo_backup_tick,
-        IntervalTrigger(hours=1),
-        id='brevo_monthly_backup_tick',
-        replace_existing=True,
-        next_run_time=datetime.datetime.now()  # also check immediately on startup
-    )
-    _brevo_backup_scheduler.start()
-except Exception as e:
-    print(f"Brevo backup scheduler failed to start: {e}")
-
 # Decorator to secure endpoints
 def login_required(f):
     @wraps(f)
@@ -949,6 +948,18 @@ BREVO_BACKUP_SENDER = os.getenv("BREVO_BACKUP_SENDER")
 BREVO_BACKUP_RECIPIENT = os.getenv("BREVO_BACKUP_RECIPIENT")
 
 
+def _http_error_detail(e):
+    """Brevo (and other JSON APIs we call) return a body explaining exactly
+    what's wrong with a 4xx/5xx response - surface that instead of just the
+    generic status text, so a bad request is immediately actionable."""
+    if isinstance(e, urllib.error.HTTPError):
+        try:
+            return f"{e}: {e.read().decode('utf-8')}"
+        except Exception:
+            return str(e)
+    return str(e)
+
+
 def run_brevo_contacts_backup():
     """Exports all Brevo contacts (Brevo's own async export job - read-only,
     never modifies any contact or account setting) and emails the resulting
@@ -962,17 +973,6 @@ def run_brevo_contacts_backup():
         return False, "BREVO_BACKUP_SENDER / BREVO_BACKUP_RECIPIENT is not configured."
 
     headers = {"api-key": BREVO_API_KEY, "Content-Type": "application/json", "Accept": "application/json"}
-
-    def _http_error_detail(e):
-        """Brevo returns a JSON body explaining exactly what's wrong with a
-        4xx/5xx response - surface that instead of just the generic status
-        text, so a bad request is immediately actionable."""
-        if isinstance(e, urllib.error.HTTPError):
-            try:
-                return f"{e}: {e.read().decode('utf-8')}"
-            except Exception:
-                return str(e)
-        return str(e)
 
     export_req = urllib.request.Request(
         "https://api.brevo.com/v3/contacts/export",
@@ -1094,6 +1094,209 @@ def _scheduled_brevo_backup_tick():
         return  # another worker already claimed today's run
     success, message = run_brevo_contacts_backup()
     print(f"[Scheduled Brevo Backup] success={success} message={message}")
+
+
+# Database backup - a genuinely RESTORABLE snapshot of this app's own
+# production data, not just a human-readable export. The schema itself is
+# reproducible from GitHub (this app's own init_db() recreates every table),
+# so the backup only needs to carry the DATA - every table, every column
+# including the binary uploaded-statement files, in PostgreSQL's native
+# COPY format (readable/writable directly via psycopg2, no pg_dump binary
+# needed - confirmed not available in this environment, and installing one
+# would mean changing the live app's build config, an unnecessary risk).
+# Strictly read-only against every existing table - only ever executes
+# SELECT/COPY TO, never INSERT/UPDATE/DELETE on any of the app's real data.
+APP_BASE_URL = os.getenv('APP_BASE_URL', 'https://gstcalculation-production.up.railway.app')
+
+# Tables holding real application data, in an order that respects foreign
+# keys (users before invoices before duplicate_rejections, everything else
+# depends on at most users) - confirmed against this database's actual FK
+# constraints, not assumed. Excludes scheduled_job_runs/db_backup_tokens:
+# purely internal bookkeeping for this app's own scheduler/download-link
+# mechanics, not application data, and restoring a stale claimed-run date
+# could wrongly block next month's scheduled job from firing.
+DB_BACKUP_TABLES_IN_ORDER = [
+    'users', 'invoices', 'duplicate_rejections',
+    'activity_log', 'b2b_outward_invoices', 'cash_ledger_balances',
+    'exempt_income_ledger', 'expense_code_catalog', 'gst_payable_ledger',
+    'gstr2b_entries', 'income_code_catalog', 'income_entries',
+    'provisional_itc_items', 'purchase_gl_vouchers', 'remark_master',
+    'vendor_master',
+]
+
+
+def _build_db_backup_zip():
+    """Exports every table in DB_BACKUP_TABLES_IN_ORDER via PostgreSQL's
+    native COPY format (full fidelity - every column, including binary
+    file_data blobs), plus a restore.sql driver script and a README
+    explaining the restore procedure, bundled into an in-memory zip.
+    Read-only: only ever executes COPY ... TO (a read operation) against
+    the existing tables, nothing is modified. Returns zip bytes."""
+    import zipfile
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+
+    zip_buf = io.BytesIO()
+    with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+        restore_lines = [
+            "-- Restore procedure:",
+            "-- 1. Deploy this app fresh from the SAME GitHub commit the backup",
+            "--    was taken from (its init_db() recreates every table, empty).",
+            "-- 2. From inside this unzipped folder, run:",
+            "--      psql \"<your DATABASE_URL>\" -f restore.sql",
+            "-- Tables are restored in dependency order (users before invoices",
+            "-- before duplicate_rejections) so foreign keys are satisfied.",
+            "",
+        ]
+        for table in DB_BACKUP_TABLES_IN_ORDER:
+            copy_buf = io.BytesIO()
+            try:
+                cur.copy_expert(f'COPY "{table}" TO STDOUT', copy_buf)
+            except Exception as e:
+                # A table that doesn't exist yet (e.g. older backup code ran
+                # against a newer/older schema) shouldn't abort the whole
+                # backup - note it and continue with everything else.
+                restore_lines.append(f"-- SKIPPED {table}: {e}")
+                conn.rollback()
+                continue
+            zf.writestr(f"{table}.copy", copy_buf.getvalue())
+            restore_lines.append(f"\\copy \"{table}\" FROM '{table}.copy'")
+
+        zf.writestr("restore.sql", "\n".join(restore_lines) + "\n")
+        zf.writestr("README.txt", (
+            "GST App Database Backup\n"
+            "========================\n\n"
+            "This is a full, restorable snapshot of this application's own\n"
+            "production data (not Brevo contacts - see the separate Brevo\n"
+            "backup for that). It does NOT include the schema - the schema\n"
+            "comes from this app's own code (init_db() in app.py), deployed\n"
+            "fresh from GitHub.\n\n"
+            "To restore:\n"
+            "1. Deploy this app from the same GitHub commit the backup was\n"
+            "   taken from, pointed at a fresh/empty database. Its own\n"
+            "   startup (init_db()) creates every table.\n"
+            "2. From inside this unzipped folder, run:\n"
+            "     psql \"<your DATABASE_URL>\" -f restore.sql\n\n"
+            "Each <table>.copy file is PostgreSQL's native COPY format -\n"
+            "restore.sql just runs \\copy for each one, in the correct\n"
+            "foreign-key order.\n"
+        ))
+
+    cur.close()
+    conn.close()
+    zip_buf.seek(0)
+    return zip_buf.read()
+
+
+def _send_db_backup_ready_email(token):
+    """Emails the download link via Brevo once a backup has actually
+    finished generating (see run_db_backup_export) - mirrors
+    run_brevo_contacts_backup's link-based delivery (Gmail blocks zip
+    attachments outright, confirmed live). Returns (success, message)."""
+    download_url = f"{APP_BASE_URL}/api/db-backup/download/{token}"
+    today_str = datetime.datetime.now().strftime("%Y-%m-%d")
+    headers = {"api-key": BREVO_API_KEY, "Content-Type": "application/json", "Accept": "application/json"}
+    email_body = {
+        "sender": {"email": BREVO_BACKUP_SENDER},
+        "to": [{"email": BREVO_BACKUP_RECIPIENT}],
+        "subject": f"GST App Database Backup - {today_str}",
+        "htmlContent": (
+            f"<p>Automated database backup for {today_str} is ready.</p>"
+            f"<p><a href=\"{download_url}\">Download the backup</a></p>"
+            f"<p>This link expires in 7 days - please download and store it promptly.</p>"
+        )
+    }
+    send_req = urllib.request.Request(
+        "https://api.brevo.com/v3/smtp/email",
+        data=json.dumps(email_body).encode("utf-8"),
+        headers=headers,
+        method="POST"
+    )
+    try:
+        with urllib.request.urlopen(send_req, context=ctx, timeout=30) as res:
+            send_resp = json.loads(res.read().decode("utf-8"))
+    except Exception as e:
+        return False, f"Backup finished but the email failed to send: {_http_error_detail(e)}"
+    return True, f"Backup link emailed to {BREVO_BACKUP_RECIPIENT} (messageId: {send_resp.get('messageId', 'n/a')})"
+
+
+def run_db_backup_export():
+    """Creates a short-lived (7-day) download token immediately and kicks
+    off the actual export in a background thread - confirmed via a live
+    test that generating it (the original uploaded invoice/statement files
+    are the bulk of the data) can take several minutes, far longer than
+    gunicorn's request timeout would tolerate running inline. The email
+    with the download link is only sent once generation genuinely finishes
+    (see _generate_and_notify below); visiting the link before then shows
+    a clear "still generating" message rather than failing. Returns
+    (success, message) describing whether the background job started, not
+    whether the backup itself succeeded yet."""
+    if not BREVO_API_KEY:
+        return False, "BREVO_API_KEY is not configured."
+    if not BREVO_BACKUP_SENDER or not BREVO_BACKUP_RECIPIENT:
+        return False, "BREVO_BACKUP_SENDER / BREVO_BACKUP_RECIPIENT is not configured."
+
+    import secrets
+    token = secrets.token_urlsafe(32)
+    expires_at = datetime.datetime.now() + datetime.timedelta(days=7)
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        # Each backup can be ~hundreds of MB (the uploaded statement/invoice
+        # files dominate) - clear out expired ones first so this table
+        # doesn't grow unbounded with every month's backup piling up.
+        cur.execute("DELETE FROM db_backup_tokens WHERE expires_at < CURRENT_TIMESTAMP")
+        cur.execute(
+            "INSERT INTO db_backup_tokens (token, expires_at, status) VALUES (%s, %s, 'generating')",
+            (token, expires_at)
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        return False, f"Failed to create backup download token: {e}"
+
+    def _generate_and_notify():
+        try:
+            zip_bytes = _build_db_backup_zip()
+            conn2 = get_db_connection()
+            cur2 = conn2.cursor()
+            cur2.execute(
+                "UPDATE db_backup_tokens SET backup_data = %s, status = 'ready' WHERE token = %s",
+                (psycopg2.Binary(zip_bytes), token)
+            )
+            conn2.commit()
+            cur2.close()
+            conn2.close()
+            ok, msg = _send_db_backup_ready_email(token)
+            print(f"[DB Backup] generation complete, email sent={ok}: {msg}")
+        except Exception as e:
+            print(f"[DB Backup] generation failed: {e}")
+            try:
+                conn3 = get_db_connection()
+                cur3 = conn3.cursor()
+                cur3.execute("UPDATE db_backup_tokens SET status = 'failed' WHERE token = %s", (token,))
+                conn3.commit()
+                cur3.close()
+                conn3.close()
+            except Exception as e2:
+                print(f"[DB Backup] failed to even record the failure: {e2}")
+
+    threading.Thread(target=_generate_and_notify, daemon=True).start()
+    return True, "Backup generation started - you'll receive an email with the download link once it's ready (this can take several minutes)."
+
+
+def _scheduled_db_backup_tick():
+    """Runs once a day (see scheduler setup below); only actually performs
+    the backup on the 21st, and only once even across multiple gunicorn
+    worker processes."""
+    if datetime.datetime.now().day != 21:
+        return
+    if not _claim_scheduled_job_run('db_backup_export'):
+        return  # another worker already claimed today's run
+    success, message = run_db_backup_export()
+    print(f"[Scheduled DB Backup] success={success} message={message}")
 
 
 def call_vision_model(system_prompt, user_prompt, base64_data, mime_type):
@@ -7396,6 +7599,65 @@ def push_brevo_backup():
     except Exception as e:
         return jsonify({"success": False, "error": friendly_error_message(e)}), 500
 
+@app.route('/db-backup')
+@login_required
+def db_backup_page():
+    return render_template(
+        'db_backup.html',
+        recipient=BREVO_BACKUP_RECIPIENT or '(not configured)',
+        sender=BREVO_BACKUP_SENDER or '(not configured)'
+    )
+
+@app.route('/api/db-backup/push', methods=['POST'])
+@login_required
+def push_db_backup():
+    try:
+        success, message = run_db_backup_export()
+        if success:
+            log_activity(session['user_id'], 'db_backup_pushed', message)
+            return jsonify({"success": True, "message": message})
+        return jsonify({"success": False, "error": message}), 500
+    except Exception as e:
+        return jsonify({"success": False, "error": friendly_error_message(e)}), 500
+
+@app.route('/api/db-backup/download/<token>')
+def download_db_backup(token):
+    """No @login_required - the email recipient has no app login, a long
+    random token (see run_db_backup_export) stands in for one instead, same
+    tradeoff as a typical password-reset or invoice-payment link. Read-only
+    against the app's real tables - this route only ever reads the
+    already-generated backup_data for this token (written once, by the
+    background thread in run_db_backup_export), never regenerates it
+    inline and never writes to any existing table."""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT expires_at, status, backup_data FROM db_backup_tokens WHERE token = %s", (token,))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        return jsonify({"error": friendly_error_message(e)}), 500
+
+    if not row:
+        return jsonify({"error": "This backup link is invalid."}), 404
+    if row['expires_at'] < datetime.datetime.now():
+        return jsonify({"error": "This backup link has expired (links are valid for 7 days). Push a new backup to get a fresh link."}), 410
+    if row['status'] == 'generating':
+        return jsonify({"error": "This backup is still being generated - please check back in a few minutes."}), 202
+    if row['status'] == 'failed':
+        return jsonify({"error": "Backup generation failed. Please push a new backup to try again."}), 500
+    if not row['backup_data']:
+        return jsonify({"error": "Backup data not found - please push a new backup."}), 500
+
+    today_str = datetime.datetime.now().strftime("%Y-%m-%d")
+    return send_file(
+        io.BytesIO(bytes(row['backup_data'])),
+        mimetype="application/zip",
+        as_attachment=True,
+        download_name=f"gst_app_db_backup_{today_str}.zip"
+    )
+
 @app.route('/api/income-codes-master', methods=['GET'])
 @login_required
 def get_income_codes_master():
@@ -10873,6 +11135,42 @@ def export_gstr1_json():
         print(f"Error generating GSTR-1 JSON: {e}")
         return jsonify({"error": friendly_error_message(e)}), 500
 
+
+# Monthly backup scheduler (Brevo contacts + this app's own database) -
+# registered here, at the end of the file, so every function it references
+# is already defined (an earlier version of this block ran right after
+# init_db(), far above both _scheduled_*_tick functions' definitions -
+# NameError on every startup, silently swallowed by the try/except below,
+# meaning the automatic monthly run was never actually registered even
+# though the manual "Push Backup Now" buttons worked fine, since route
+# handlers only run later, at request time). Ticks hourly rather than a
+# single exact-time cron fire, so a mid-day Railway restart can't cause the
+# whole day to be missed; each tick function itself only acts on the 21st
+# and only once per day even across gunicorn's multiple worker processes
+# (see _claim_scheduled_job_run) - every worker starts its own ticker,
+# which is fine, the DB-level claim is what actually prevents duplicates.
+try:
+    from apscheduler.schedulers.background import BackgroundScheduler
+    from apscheduler.triggers.interval import IntervalTrigger
+    _monthly_backup_scheduler = BackgroundScheduler(daemon=True)
+    _monthly_backup_scheduler.add_job(
+        _scheduled_brevo_backup_tick,
+        IntervalTrigger(hours=1),
+        id='brevo_monthly_backup_tick',
+        replace_existing=True,
+        next_run_time=datetime.datetime.now()  # also check immediately on startup
+    )
+    _monthly_backup_scheduler.add_job(
+        _scheduled_db_backup_tick,
+        IntervalTrigger(hours=1),
+        id='db_monthly_backup_tick',
+        replace_existing=True,
+        next_run_time=datetime.datetime.now()
+    )
+    _monthly_backup_scheduler.start()
+    print("Monthly backup scheduler started (Brevo contacts + database).")
+except Exception as e:
+    print(f"Monthly backup scheduler failed to start: {e}")
 
 if __name__ == '__main__':
     # Ensure static and template folders exist
