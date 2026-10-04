@@ -976,7 +976,16 @@ def run_brevo_contacts_backup():
 
     export_req = urllib.request.Request(
         "https://api.brevo.com/v3/contacts/export",
-        data=json.dumps({"customContactFilter": {"actionForContacts": "allContacts"}}).encode("utf-8"),
+        # Brevo additionally requires one of modifiedSince/createdSince/
+        # segmentId/listId even with actionForContacts="allContacts"
+        # (confirmed live: "Please provide at least one of the following:
+        # modifiedSince, createdSince, segmentId or listId") - createdSince
+        # far in the past captures every contact ever created, i.e. all of
+        # them, without narrowing to a specific list/segment.
+        data=json.dumps({"customContactFilter": {
+            "actionForContacts": "allContacts",
+            "createdSince": "2000-01-01T00:00:00.000Z"
+        }}).encode("utf-8"),
         headers=headers,
         method="POST"
     )
