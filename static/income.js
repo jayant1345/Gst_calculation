@@ -276,7 +276,7 @@ document.addEventListener('DOMContentLoaded', () => {
         return `<span style="display:inline-block; padding:3px 9px; border-radius:10px; font-size:10.5px; font-weight:700; background:#dcfce7; color:#15803d;">${row.balance_source === 'manual' ? 'Manual' : 'OK'}</span>`;
     }
 
-    async function editLedgerBalance(tableKey, id, currentValue) {
+    async function editLedgerBalance(tableKey, id, currentValue, branch, glCode) {
         const typed = prompt('Enter the correct closing balance:', currentValue != null ? currentValue : '');
         if (typed === null) return;
         const amount = parseFloat(typed);
@@ -285,10 +285,20 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
         try {
-            const res = await fetch(`/api/ledger-entries/${tableKey}/${id}/manual-balance`, {
+            // A virtual row (id null - no voucher has ever created this
+            // branch/code/month combination) has nothing to PATCH by id, so
+            // it's created directly via the same upsert-by-key endpoint the
+            // "Add Manual Entry" income modal uses.
+            const url = id
+                ? `/api/ledger-entries/${tableKey}/${id}/manual-balance`
+                : `/api/ledger-entries/${tableKey}/manual-add`;
+            const body = id
+                ? { closing_balance: amount }
+                : { branch, gl_code: glCode, financial_year: currentFinancialYear, month: currentMonth, closing_balance: amount };
+            const res = await fetch(url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ closing_balance: amount })
+                body: JSON.stringify(body)
             });
             const data = await res.json();
             if (!res.ok) throw new Error(data.error || 'Save failed');
@@ -308,6 +318,11 @@ document.addEventListener('DOMContentLoaded', () => {
             const gstData = await gstRes.json();
             const exemptData = await exemptRes.json();
 
+            function ledgerArgs(r) {
+                const esc = (s) => String(s == null ? '' : s).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+                return `${r.id != null ? r.id : 'null'}, ${r.closing_balance != null ? r.closing_balance : 'null'}, '${esc(r.branch)}', '${esc(r.gl_code)}'`;
+            }
+
             const gstBody = document.getElementById('gstPayableLedgerBody');
             const gstRows = gstData.entries || [];
             if (gstRows.length === 0) {
@@ -321,7 +336,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         <td style="padding: 10px 14px;">${(r.ledger_role || '').replace('_PAYABLE', '')}</td>
                         <td style="padding: 10px 14px; text-align: right; font-weight: 700;">
                             ${r.closing_balance != null ? formatINR(r.closing_balance) : '—'}
-                            <button type="button" onclick="editLedgerBalance('gst-payable', ${r.id}, ${r.closing_balance != null ? r.closing_balance : 'null'})" style="background:none; border:none; color:#7c3aed; cursor:pointer; margin-left:6px;" title="Enter/correct closing balance"><i class="fa-solid fa-pen"></i></button>
+                            <button type="button" onclick="editLedgerBalance('gst-payable', ${ledgerArgs(r)})" style="background:none; border:none; color:#7c3aed; cursor:pointer; margin-left:6px;" title="Enter/correct closing balance"><i class="fa-solid fa-pen"></i></button>
                         </td>
                         <td style="padding: 10px 14px; text-align: center;">${ledgerStatusBadge(r)}</td>
                     </tr>
@@ -340,7 +355,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         <td style="padding: 10px 14px; color: #64748b;">${r.particulars || '(unclassified)'}</td>
                         <td style="padding: 10px 14px; text-align: right; font-weight: 700;">
                             ${r.closing_balance != null ? formatINR(r.closing_balance) : '—'}
-                            <button type="button" onclick="editLedgerBalance('exempt-income', ${r.id}, ${r.closing_balance != null ? r.closing_balance : 'null'})" style="background:none; border:none; color:#7c3aed; cursor:pointer; margin-left:6px;" title="Enter/correct closing balance"><i class="fa-solid fa-pen"></i></button>
+                            <button type="button" onclick="editLedgerBalance('exempt-income', ${ledgerArgs(r)})" style="background:none; border:none; color:#7c3aed; cursor:pointer; margin-left:6px;" title="Enter/correct closing balance"><i class="fa-solid fa-pen"></i></button>
                         </td>
                         <td style="padding: 10px 14px; text-align: center;">${ledgerStatusBadge(r)}</td>
                     </tr>

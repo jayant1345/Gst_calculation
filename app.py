@@ -8450,6 +8450,42 @@ def get_ledger_entries(table_key):
         for r in rows:
             meta = get_income_code_meta(r['gl_code'])
             r['particulars'] = meta.get('particulars') if meta else None
+
+        # The exempt-income codes (CA step 7) are named catalog entries that
+        # may never appear in any uploaded voucher at all - dividend, income
+        # tax refund, provisions written back etc. are rarely, if ever, part
+        # of a branch's routine CBS statement export. Unlike
+        # gst_payable_ledger (whose rows all come from real GL 1878/1879
+        # lines present in every branch's statement), waiting for an upload
+        # to create a row here would leave the table permanently empty.
+        # Scaffold one virtual row (id=None) per branch/code combination
+        # that has no real row yet for this period, so the CA sees the full
+        # checklist and can fill any of them in by hand via the same
+        # pencil-edit UI (routed to the manual-add endpoint instead of
+        # manual-balance when id is None).
+        if table == 'exempt_income_ledger' and fy and fy != 'ALL' and month and month != 'ALL':
+            have = {(r['branch'], r['gl_code']) for r in rows}
+            exempt_codes = [m for m in INCOME_MASTER_CODES if m.get('ledger_role') == 'EXEMPT_INCOME']
+            for branch in INCOME_MASTER_BRANCHES:
+                for m in exempt_codes:
+                    key = (branch, m['code'])
+                    if key in have:
+                        continue
+                    rows.append({
+                        "id": None,
+                        "branch": branch,
+                        "financial_year": fy,
+                        "month": month,
+                        "gl_code": m['code'],
+                        "closing_balance": None,
+                        "balance_source": "missing",
+                        "needs_review": True,
+                        "review_reason": "No voucher uploaded for this code this month - enter manually if applicable to this branch",
+                        "has_file": False,
+                        "particulars": m.get('particulars'),
+                    })
+            rows.sort(key=lambda r: (r['branch'], r['gl_code']))
+
         return jsonify({"entries": rows})
     except Exception as e:
         print(f"Error fetching {table}: {e}")
@@ -8493,6 +8529,79 @@ def set_ledger_entry_manual_balance(table_key, entry_id):
     except Exception as e:
         print(f"Error setting manual balance for {table} entry {entry_id}: {e}")
         return jsonify({"error": friendly_error_message(e)}), 500
+
+@app.route('/api/ledger-entries/<table_key>/manual-add', methods=['POST'])
+@login_required
+def add_ledger_entry_manual(table_key):
+    """Creates (or corrects) one branch/GL-code/month closing-balance row
+    directly - for GL/PL codes (like the exempt-income step-7 items) that
+    may never appear in an uploaded voucher at all, so the id-based
+    manual-balance endpoint above has no existing row to edit. Same upsert
+    key (client+branch+FY+month+GL code) as an upload would use, so
+    submitting again for a branch/code/month already entered here just
+    corrects it."""
+    table = _LEDGER_TABLES.get(table_key)
+    if not table:
+        return jsonify({"error": "Unknown ledger table."}), 404
+    client_id = get_current_client_id()
+    data = request.json or {}
+
+    branch = (data.get('branch') or '').strip()
+    gl_code = (data.get('gl_code') or '').strip().upper()
+    fy = (data.get('financial_year') or '').strip()
+    month = (data.get('month') or '').strip()
+    try:
+        amount = round(float(data.get('closing_balance')), 2)
+    except (TypeError, ValueError):
+        return jsonify({"error": "closing_balance must be a number."}), 400
+
+    if not branch or branch not in INCOME_MASTER_BRANCHES:
+        return jsonify({"error": "Please select a valid branch."}), 400
+    if not gl_code or not fy or not month:
+        return jsonify({"error": "Financial Year, Month, and GL/PL Code are required."}), 400
+
+    meta = get_income_code_meta(gl_code)
+    expected_roles = {'EXEMPT_INCOME'} if table_key == 'exempt-income' else {'CGST_PAYABLE', 'SGST_PAYABLE', 'IGST_PAYABLE'}
+    if meta is None or meta.get('ledger_role') not in expected_roles:
+        return jsonify({"error": f"GL/PL code {gl_code} is not classified for this ledger - check Manage GL/PL Codes."}), 400
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        if table == 'gst_payable_ledger':
+            cur.execute('''
+                INSERT INTO gst_payable_ledger
+                    (client_id, branch, financial_year, month, gl_code, ledger_role,
+                     closing_balance, balance_source, needs_review, review_reason)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, 'manual', FALSE, NULL)
+                ON CONFLICT (client_id, branch, financial_year, month, gl_code)
+                DO UPDATE SET closing_balance = EXCLUDED.closing_balance, ledger_role = EXCLUDED.ledger_role,
+                    balance_source = 'manual', needs_review = FALSE, review_reason = NULL,
+                    updated_at = CURRENT_TIMESTAMP
+                RETURNING id
+            ''', (client_id, branch, fy, month, gl_code, meta.get('ledger_role'), amount))
+        else:
+            cur.execute('''
+                INSERT INTO exempt_income_ledger
+                    (client_id, branch, financial_year, month, gl_code,
+                     closing_balance, balance_source, needs_review, review_reason)
+                VALUES (%s, %s, %s, %s, %s, %s, 'manual', FALSE, NULL)
+                ON CONFLICT (client_id, branch, financial_year, month, gl_code)
+                DO UPDATE SET closing_balance = EXCLUDED.closing_balance,
+                    balance_source = 'manual', needs_review = FALSE, review_reason = NULL,
+                    updated_at = CURRENT_TIMESTAMP
+                RETURNING id
+            ''', (client_id, branch, fy, month, gl_code, amount))
+        row = cur.fetchone()
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print(f"Error adding manual {table} entry: {e}")
+        return jsonify({"error": friendly_error_message(e)}), 500
+
+    log_activity(session['user_id'], 'LEDGER_MANUAL_ADD', f"Added manual {table_key} entry for {branch} / {gl_code} ({month} {fy}): Rs.{amount:,.2f}")
+    return jsonify({"success": True, "id": row['id'], "closing_balance": amount})
 
 @app.route('/api/upload-income', methods=['POST'])
 @login_required
