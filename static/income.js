@@ -311,12 +311,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function loadLedgerTables() {
         try {
-            const [gstRes, exemptRes] = await Promise.all([
+            const [gstRes, exemptRes, receivableRes] = await Promise.all([
                 fetch(`/api/ledger-entries/gst-payable?client_id=${currentClientId}&financial_year=${encodeURIComponent(currentFinancialYear)}&month=${encodeURIComponent(currentMonth)}`),
-                fetch(`/api/ledger-entries/exempt-income?client_id=${currentClientId}&financial_year=${encodeURIComponent(currentFinancialYear)}&month=${encodeURIComponent(currentMonth)}`)
+                fetch(`/api/ledger-entries/exempt-income?client_id=${currentClientId}&financial_year=${encodeURIComponent(currentFinancialYear)}&month=${encodeURIComponent(currentMonth)}`),
+                fetch(`/api/ledger-entries/gst-receivable?client_id=${currentClientId}&financial_year=${encodeURIComponent(currentFinancialYear)}&month=${encodeURIComponent(currentMonth)}`)
             ]);
             const gstData = await gstRes.json();
             const exemptData = await exemptRes.json();
+            const receivableData = await receivableRes.json();
 
             function ledgerArgs(r) {
                 const esc = (s) => String(s == null ? '' : s).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
@@ -356,6 +358,26 @@ document.addEventListener('DOMContentLoaded', () => {
                         <td style="padding: 10px 14px; text-align: right; font-weight: 700;">
                             ${r.closing_balance != null ? formatINR(r.closing_balance) : '—'}
                             <button type="button" onclick="editLedgerBalance('exempt-income', ${ledgerArgs(r)})" style="background:none; border:none; color:#7c3aed; cursor:pointer; margin-left:6px;" title="Enter/correct closing balance"><i class="fa-solid fa-pen"></i></button>
+                        </td>
+                        <td style="padding: 10px 14px; text-align: center;">${ledgerStatusBadge(r)}</td>
+                    </tr>
+                `).join('');
+            }
+
+            const receivableBody = document.getElementById('gstReceivableLedgerBody');
+            const receivableRows = receivableData.entries || [];
+            if (receivableRows.length === 0) {
+                receivableBody.innerHTML = `<tr><td colspan="6" style="text-align: center; padding: 24px; color: #94a3b8;">No GST receivable ledger entries for this period yet.</td></tr>`;
+            } else {
+                receivableBody.innerHTML = receivableRows.map(r => `
+                    <tr style="border-bottom: 1px solid var(--border-color); font-size: 13px;">
+                        <td style="padding: 10px 14px; font-weight: 600;">${r.branch}</td>
+                        <td style="padding: 10px 14px; font-family: monospace;">${r.gl_code}</td>
+                        <td style="padding: 10px 14px; color: #64748b;">${r.particulars || '(unclassified)'}</td>
+                        <td style="padding: 10px 14px;">${(r.ledger_role || '').replace('_RECEIVABLE', '')}</td>
+                        <td style="padding: 10px 14px; text-align: right; font-weight: 700;">
+                            ${r.closing_balance != null ? formatINR(r.closing_balance) : '—'}
+                            <button type="button" onclick="editLedgerBalance('gst-receivable', ${ledgerArgs(r)})" style="background:none; border:none; color:#7c3aed; cursor:pointer; margin-left:6px;" title="Enter/correct closing balance"><i class="fa-solid fa-pen"></i></button>
                         </td>
                         <td style="padding: 10px 14px; text-align: center;">${ledgerStatusBadge(r)}</td>
                     </tr>
