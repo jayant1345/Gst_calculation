@@ -7973,6 +7973,13 @@ def upload_gl_voucher():
     tally - either a digital ledger export (reusing the same text-parsing
     engine as Income & Output GST) or a photographed/handwritten voucher
     slip (AI vision OCR). mode='ledger' or mode='scan'."""
+    # See the matching comment in upload_income_api - reload both catalogs
+    # from the DB so this request can't act on a stale in-memory copy from
+    # a gunicorn worker that wasn't the one handling a recent GL/PL code
+    # classification change.
+    load_income_code_overrides()
+    load_expense_code_overrides()
+
     user_id = session['user_id']
     client_id = get_current_client_id()
     mode = request.form.get('mode', 'ledger')
@@ -8680,6 +8687,19 @@ def add_ledger_entry_manual(table_key):
 @app.route('/api/upload-income', methods=['POST'])
 @login_required
 def upload_income_api():
+    # Gunicorn runs several worker processes, each with its OWN copy of
+    # INCOME_MASTER_CODES in memory. Manage GL/PL Codes updates the DB and
+    # only the one worker that handled that request's in-memory copy -
+    # every other worker keeps serving stale classifications until it
+    # happens to restart. Confirmed bug (Oct 2026): a GL code reclassified
+    # as a ledger/receivable account kept getting taxed as income again on
+    # a later upload because it landed on a different, stale worker.
+    # Reloading here (cheap - one query, runs once per upload request, not
+    # per GL code) guarantees this request always sees the latest catalog
+    # regardless of which worker picked it up.
+    load_income_code_overrides()
+    load_expense_code_overrides()
+
     user_id = session['user_id']
     client_id = request.form.get('client_id') or get_current_client_id()
     upload_fy = request.form.get('financial_year') or '2026-27'
