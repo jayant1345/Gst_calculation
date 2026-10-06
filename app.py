@@ -6657,6 +6657,80 @@ def _capture_r009007_closing_balance_pdf(lines, max_lookahead=12):
     return None
 
 
+def _ai_extract_closing_balance(text_excerpt, gl_code, particulars):
+    """Last-resort fallback when every deterministic closing-balance parser
+    (anchor-based _capture_closing_balance_value, the R009007 cell/text
+    variants above) has already come up empty for this one GL account.
+    Text-only (not vision/OCR) - these are digitally-generated statements,
+    already extracted to perfect text by pymupdf/openpyxl, so the failure
+    mode is "parser doesn't recognise this layout", not "characters are
+    unclear"; a vision/image round-trip would only add a new source of
+    misreads for no benefit. Deliberately NOT used as a first resort: an
+    LLM can misread a number but still answer confidently, which is a
+    worse failure than today's "blank + Needs Review" - callers must
+    always keep whatever review flag they'd have set for a None result,
+    even when this returns a number, so a human still confirms it against
+    the source document. Returns None (never a guess) if OpenRouter isn't
+    configured, the excerpt looks unusable, or anything goes wrong - the
+    caller's existing "blank + Needs Review" behavior stands unchanged."""
+    if not OPENROUTER_API_KEY or not text_excerpt or not text_excerpt.strip():
+        return None
+    system_prompt = (
+        "You read an excerpt from a bank's GL (General Ledger) account statement "
+        "and extract that one account's closing balance - the final running-balance "
+        "figure, usually on a 'Total' or 'Closing Balance' line, often followed by "
+        "DR or CR. Respond with ONLY a JSON object, no other text: "
+        '{"closing_balance": <number or null>}. '
+        "The number must be the plain magnitude with no currency symbol, no DR/CR "
+        "suffix, and no thousands separators (e.g. 3659.22, not \"3,659.22 DR\"). "
+        "Return null if the excerpt genuinely doesn't contain a closing balance for "
+        "this account - never guess."
+    )
+    user_prompt = f"GL Code: {gl_code}\nAccount: {particulars or '(unlabelled)'}\n\n{text_excerpt}"
+    try:
+        payload = {
+            "model": AI_VISION_MODEL_NAME,
+            "max_tokens": 200,
+            "reasoning": {"effort": "none"},
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+        }
+        raw = call_openrouter_api(payload)
+        cleaned = re.sub(r'^```(?:json)?|```$', '', raw.strip(), flags=re.MULTILINE).strip()
+        parsed = json.loads(cleaned)
+        value = parsed.get('closing_balance')
+        if value is None:
+            return None
+        return round(float(value), 2)
+    except Exception as e:
+        print(f"AI closing-balance fallback failed for GL {gl_code}: {e}")
+        return None
+
+
+def _apply_ai_closing_balance_fallback(a, lines):
+    """Shared last-resort step for all extract_raw_ledger_accounts_*
+    functions: if closing_balance is still None after every deterministic
+    attempt (anchor-based, R009007 cell/text variants), ask the AI model
+    using just this account's own line range (see _scan_ledger_lines'
+    line_start/line_end - not the whole file, which could span several
+    unrelated accounts). Tags the result 'ai_extracted' rather than
+    'parsed' so it stays visibly distinct everywhere balance_source is
+    shown or checked; leaves closing_balance as None (unchanged,
+    "Needs Review" as before) if the AI call also can't find one."""
+    if a.get('closing_balance') is not None:
+        return
+    start, end = a.get('line_start'), a.get('line_end')
+    if start is None or end is None:
+        return
+    excerpt = '\n'.join(str(x) for x in lines[start:end] if x)
+    value = _ai_extract_closing_balance(excerpt, a.get('gl_code'), a.get('name'))
+    if value is not None:
+        a['closing_balance'] = value
+        a['balance_source'] = 'ai_extracted'
+
+
 def _extract_ledger_code(cand):
     cand = cand.strip()
     cand_clean = re.sub(r'^(?:PL|GL|P/L|G/L)[\s\-_.:]*', '', cand, flags=re.IGNORECASE).strip()
@@ -6781,6 +6855,12 @@ def _scan_ledger_lines(lines, account_labels, total_labels):
                     'gl_code': code, 'name': name, 'dr': total_dr, 'cr': total_cr,
                     'net': round(total_cr - total_dr, 2),
                     'closing_balance': closing_balance,
+                    # Text window this account's own lines span, so a caller
+                    # that still has no closing_balance after every
+                    # deterministic attempt can hand just this account's
+                    # excerpt (not the whole multi-account file) to the AI
+                    # fallback - see _ai_extract_closing_balance.
+                    'line_start': look, 'line_end': k,
                 })
             i = k
         else:
@@ -7103,6 +7183,7 @@ def extract_raw_ledger_accounts_pdf(file_bytes, filename):
             a['financial_year'] = det_fy
         if is_r009007 and a.get('closing_balance') is None:
             a['closing_balance'] = _capture_r009007_closing_balance_pdf(lines)
+        _apply_ai_closing_balance_fallback(a, lines)
     return accounts
 
 
@@ -7136,6 +7217,7 @@ def extract_raw_ledger_accounts_xlsx(file_bytes, filename):
                 a['financial_year'] = det_fy
             if is_r009007 and a.get('closing_balance') is None:
                 a['closing_balance'] = _capture_r009007_closing_balance(rows)
+            _apply_ai_closing_balance_fallback(a, lines)
         all_accounts.extend(accounts)
     return all_accounts
 
@@ -7188,6 +7270,7 @@ def extract_raw_ledger_accounts_xls(file_bytes, filename):
                 a['financial_year'] = det_fy
             if is_r009007 and a.get('closing_balance') is None:
                 a['closing_balance'] = _capture_r009007_closing_balance(rows)
+            _apply_ai_closing_balance_fallback(a, lines)
         all_accounts.extend(accounts)
     return all_accounts
 
@@ -7301,6 +7384,7 @@ def finalize_ledger_accounts(raw_accounts, financial_year='2026-27', month='July
             ledger_role = meta.get('ledger_role') if meta else None
             if ledger_role:
                 closing_balance = a.get('closing_balance')
+                is_ai_sourced = a.get('balance_source') == 'ai_extracted'
                 if ledger_role == 'EXEMPT_INCOME':
                     bucket = exempt_entries
                 elif ledger_role in RECEIVABLE_ROLES:
@@ -7314,9 +7398,11 @@ def finalize_ledger_accounts(raw_accounts, financial_year='2026-27', month='July
                     "gl_code": code,
                     "ledger_role": ledger_role,
                     "closing_balance": closing_balance,
-                    "balance_source": "parsed",
+                    "balance_source": "ai_extracted" if is_ai_sourced else "parsed",
                     "needs_review": True,  # always - see _capture_closing_balance_value's caveat
                     "review_reason": (
+                        "Closing balance extracted by AI (the document layout wasn't one the parser recognised) - please verify against the original ledger before relying on it"
+                        if is_ai_sourced else
                         "Closing balance parsed from statement - please verify against the original ledger before relying on it"
                         if closing_balance is not None else
                         "Closing balance could not be located in this document layout - please verify/enter manually"
