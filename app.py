@@ -6621,6 +6621,42 @@ def _capture_r009007_closing_balance(rows):
     return None
 
 
+def _capture_r009007_closing_balance_pdf(lines, max_lookahead=12):
+    """Text-line equivalent of _capture_r009007_closing_balance, for PDFs
+    extracted via pymupdf. Confirmed bug (Oct 2026): the R009007 format is
+    used for PDF statements too (not just the XLS/XLSX ones the cell-based
+    version was built against - see GL 8546/8547 GGST/CGST RECEIVABLE,
+    Shanti Comm Sept 2026), but nothing ever called a PDF-side equivalent,
+    so closing_balance silently stayed None for every R009007 PDF
+    regardless of file quality. Unlike the Excel version, pymupdf's "text"
+    extraction puts each table cell on its OWN line (confirmed against the
+    real file: "Total" is a standalone line, followed by "5", "3,659.22",
+    "2,511.72", "3,659.22 DR" each on their own line) rather than one
+    space-joined row - so this scans forward from a standalone "Total"
+    line, collecting each subsequent line's leading numeric token until
+    the next dashed separator, and returns the last one found (same "last
+    numeric wins" rule, no DR/CR sign flip, as the cell-based version)."""
+    n = len(lines)
+    for i, line in enumerate(lines):
+        if line.strip().lower() != 'total':
+            continue
+        nums = []
+        for j in range(i + 1, min(n, i + 1 + max_lookahead)):
+            tok = lines[j].strip().split()
+            if not tok:
+                continue
+            if tok[0].startswith('---'):
+                break
+            if _LEDGER_NUM_RE.match(tok[0]):
+                v = _ledger_num(tok[0])
+                if v is not None:
+                    nums.append(v)
+        if nums:
+            return round(nums[-1], 2)
+        return None
+    return None
+
+
 def _extract_ledger_code(cand):
     cand = cand.strip()
     cand_clean = re.sub(r'^(?:PL|GL|P/L|G/L)[\s\-_.:]*', '', cand, flags=re.IGNORECASE).strip()
@@ -7056,6 +7092,7 @@ def extract_raw_ledger_accounts_pdf(file_bytes, filename):
     branch = _extract_branch_from_folder_path(filename) or _detect_ledger_branch(text, filename)
     branch_code = _extract_branch_code(text)
     det_month, det_fy = detect_statement_period(text, filename)
+    is_r009007 = bool(re.search(r'R009007|Statement\s+of\s+GL\s+Account', text, re.IGNORECASE))
     for a in accounts:
         a['branch'] = branch
         a['branch_code'] = branch_code
@@ -7064,6 +7101,8 @@ def extract_raw_ledger_accounts_pdf(file_bytes, filename):
             a['month'] = det_month
         if det_fy:
             a['financial_year'] = det_fy
+        if is_r009007 and a.get('closing_balance') is None:
+            a['closing_balance'] = _capture_r009007_closing_balance_pdf(lines)
     return accounts
 
 
