@@ -621,12 +621,15 @@
                         </select>
                     </div>
                     <div class="form-field" style="grid-column: 1 / -1;">
-                        <label for="codeInputLedgerRole">Ledger Role <span class="field-hint">(only for GL 1878/1879/1880-type accounts, or the exempt-income items from CA step 7)</span></label>
+                        <label for="codeInputLedgerRole">Ledger Role <span class="field-hint">(only for GL 1878/1879/1880 or 8546/8547/8548-type accounts, or the exempt-income items from CA step 7)</span></label>
                         <select id="codeInputLedgerRole">
                             <option value="">— Not a ledger account (normal income code) —</option>
                             <option value="CGST_PAYABLE">GST Payable: CGST</option>
                             <option value="SGST_PAYABLE">GST Payable: SGST</option>
                             <option value="IGST_PAYABLE">GST Payable: IGST</option>
+                            <option value="GGST_RECEIVABLE">GST Receivable (ITC): GGST</option>
+                            <option value="CGST_RECEIVABLE">GST Receivable (ITC): CGST</option>
+                            <option value="IGST_RECEIVABLE">GST Receivable (ITC): IGST</option>
                             <option value="EXEMPT_INCOME">Exempt Income Item (CA step 7 sheet)</option>
                         </select>
                     </div>

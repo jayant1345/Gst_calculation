@@ -1045,7 +1045,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (c.manual_entry) chips.push('<span style="display:inline-block; padding:2px 7px; border-radius:8px; font-size:10px; font-weight:700; background:#ede9fe; color:#5b21b6; margin-right:4px;">Manual</span>');
             if (c.tax_type === 'IGST') chips.push('<span style="display:inline-block; padding:2px 7px; border-radius:8px; font-size:10px; font-weight:700; background:#dbeafe; color:#1e40af; margin-right:4px;">IGST</span>');
             if (c.ledger_role) {
-                const roleLabel = c.ledger_role === 'EXEMPT_INCOME' ? 'Exempt Income' : c.ledger_role.replace('_PAYABLE', ' Payable');
+                const roleLabel = c.ledger_role === 'EXEMPT_INCOME' ? 'Exempt Income' : c.ledger_role.replace('_PAYABLE', ' Payable').replace('_RECEIVABLE', ' Receivable (ITC)');
                 chips.push(`<span style="display:inline-block; padding:2px 7px; border-radius:8px; font-size:10px; font-weight:700; background:#fef3c7; color:#92400e;">${escapeHtml(roleLabel)}</span>`);
             }
             return chips.join('') || '<span style="color:#cbd5e1;">—</span>';

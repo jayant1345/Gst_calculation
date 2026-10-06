@@ -638,6 +638,38 @@ def init_db():
         cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_exempt_income_ledger_branch_code_month ON exempt_income_ledger(client_id, branch, financial_year, month, gl_code);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_exempt_income_ledger_client_fy ON exempt_income_ledger(client_id, financial_year, month);")
 
+        # GST Receivable control accounts (GL 8546/8547/8548-style - GGST/
+        # CGST/IGST recoverable, the input-tax-credit mirror of GL 1878/1879/
+        # 1880 GST Payable) - same shape as gst_payable_ledger, kept as its
+        # own table for the same reason exempt_income_ledger is: a different
+        # concept (ITC reconciliation, not an income or a GST liability),
+        # even though the storage shape is identical. Confirmed with the CA
+        # office (Oct 2026): these were previously unclassified and falling
+        # through as both taxable "income" and a purchase/ITC voucher for
+        # the same account - see add_income_code_master's ledger_role branch
+        # and finalize_expense_ledger_accounts for the fix.
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS gst_receivable_ledger (
+                id SERIAL PRIMARY KEY,
+                client_id VARCHAR(50) NOT NULL DEFAULT 'nutan_nagrik',
+                branch VARCHAR(100) NOT NULL,
+                financial_year VARCHAR(10) NOT NULL,
+                month VARCHAR(20) NOT NULL,
+                gl_code VARCHAR(50) NOT NULL,
+                ledger_role VARCHAR(20),
+                closing_balance NUMERIC(15,2),
+                balance_source VARCHAR(20) DEFAULT 'parsed',
+                file_name VARCHAR(255),
+                file_data BYTEA,
+                needs_review BOOLEAN DEFAULT FALSE,
+                review_reason VARCHAR(255),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        ''')
+        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_gst_receivable_ledger_branch_code_month ON gst_receivable_ledger(client_id, branch, financial_year, month, gl_code);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_gst_receivable_ledger_client_fy ON gst_receivable_ledger(client_id, financial_year, month);")
+
         # Table 4 B2B Outward Invoices (Registered Customer Tax Invoices from Bank CBS)
         cur.execute('''
             CREATE TABLE IF NOT EXISTS b2b_outward_invoices (
@@ -1013,6 +1045,7 @@ DB_BACKUP_TABLES_IN_ORDER = [
     'users', 'invoices', 'duplicate_rejections',
     'activity_log', 'b2b_outward_invoices', 'cash_ledger_balances',
     'exempt_income_ledger', 'expense_code_catalog', 'gst_payable_ledger',
+    'gst_receivable_ledger',
     'gstr2b_entries', 'income_code_catalog', 'income_entries',
     'provisional_itc_items', 'purchase_gl_vouchers', 'remark_master',
     'vendor_master',
@@ -3326,7 +3359,7 @@ def clear_invoices():
 BACKUP_TABLES = [
     'users', 'invoices', 'purchase_gl_vouchers', 'gstr2b_entries',
     'activity_log', 'income_entries', 'income_code_catalog',
-    'gst_payable_ledger', 'exempt_income_ledger', 'cash_ledger_balances',
+    'gst_payable_ledger', 'exempt_income_ledger', 'gst_receivable_ledger', 'cash_ledger_balances',
     'vendor_master', 'remark_master'
 ]
 
@@ -7140,7 +7173,7 @@ HO_ONLY_EXPENSE_CODES = {'3170'}
 def finalize_ledger_accounts(raw_accounts, financial_year='2026-27', month='July'):
     """Group raw {branch, gl_code, dr, cr, net} accounts by branch, apply the
     deferred/recognised-income reclassification rule (RECLASS_DEFERRED_TO_INCOME),
-    and return (entries, ledger_entries, exempt_entries, warnings).
+    and return (entries, ledger_entries, exempt_entries, receivable_entries, warnings).
 
     entries are ready to save to income_entries. ledger_entries are GL codes
     the catalog marks with a GST-payable ledger_role (GL 1878/1879/1880-style
@@ -7149,7 +7182,10 @@ def finalize_ledger_accounts(raw_accounts, financial_year='2026-27', month='July
     rather than a period net movement. exempt_entries are GL codes marked
     ledger_role='EXEMPT_INCOME' (the CA step-7 named exempt-income items,
     e.g. dividend, interest exempted) - same idea, routed to
-    exempt_income_ledger instead.
+    exempt_income_ledger instead. receivable_entries are GL codes marked
+    ledger_role in {GGST_RECEIVABLE, CGST_RECEIVABLE, IGST_RECEIVABLE} (GL
+    8546/8547/8548-style GST-recoverable control accounts, the ITC-side
+    mirror of GST Payable) - routed to gst_receivable_ledger instead.
 
     warnings is a list of dicts describing anything that could not be handled
     with full confidence - a duplicate GL code seen twice in one upload batch,
@@ -7179,6 +7215,8 @@ def finalize_ledger_accounts(raw_accounts, financial_year='2026-27', month='July
     entries = []
     ledger_entries = []
     exempt_entries = []
+    receivable_entries = []
+    RECEIVABLE_ROLES = {'GGST_RECEIVABLE', 'CGST_RECEIVABLE', 'IGST_RECEIVABLE'}
     for branch, code_map in by_branch.items():
         finals = {}
         for code, a in code_map.items():
@@ -7224,7 +7262,12 @@ def finalize_ledger_accounts(raw_accounts, financial_year='2026-27', month='July
             ledger_role = meta.get('ledger_role') if meta else None
             if ledger_role:
                 closing_balance = a.get('closing_balance')
-                bucket = exempt_entries if ledger_role == 'EXEMPT_INCOME' else ledger_entries
+                if ledger_role == 'EXEMPT_INCOME':
+                    bucket = exempt_entries
+                elif ledger_role in RECEIVABLE_ROLES:
+                    bucket = receivable_entries
+                else:
+                    bucket = ledger_entries
                 bucket.append({
                     "branch": branch,
                     "financial_year": a.get('financial_year') or financial_year,
@@ -7320,7 +7363,7 @@ def finalize_ledger_accounts(raw_accounts, financial_year='2026-27', month='July
                 "needs_review": needs_review,
                 "review_reason": review_reason,
             })
-    return entries, ledger_entries, exempt_entries, warnings
+    return entries, ledger_entries, exempt_entries, receivable_entries, warnings
 
 
 # ---------------------------------------------------------------------------
@@ -7400,6 +7443,16 @@ def finalize_expense_ledger_accounts(raw_accounts, financial_year, month):
         for code, a in code_map.items():
             amount = round(-(a.get('net') or 0.0), 2)
             meta = get_expense_code_meta(code) or get_income_code_meta(code)
+            # A GL code the income catalog marks as a ledger/control account
+            # (GST payable, GST receivable, or exempt-income) is a balance-
+            # sheet account, not a real purchase - never book it as an
+            # expense voucher here either. Confirmed bug (Oct 2026): GL
+            # 8546/8547 (GGST/CGST Receivable) were unclassified and were
+            # being double-counted - once as taxable "income" on the income
+            # side, and again as a purchase voucher here.
+            income_meta = get_income_code_meta(code)
+            if income_meta and income_meta.get('ledger_role'):
+                continue
             entries.append({
                 "branch": branch,
                 "financial_year": a.get('financial_year') or financial_year,
@@ -7741,8 +7794,10 @@ def add_income_code_master():
     ledger_role = data.get('ledger_role') or None
     if ledger_role is not None:
         ledger_role = str(ledger_role).strip().upper()
-        if ledger_role not in ('CGST_PAYABLE', 'SGST_PAYABLE', 'IGST_PAYABLE', 'EXEMPT_INCOME'):
-            return jsonify({"error": "ledger_role must be CGST_PAYABLE, SGST_PAYABLE, IGST_PAYABLE, EXEMPT_INCOME, or blank."}), 400
+        valid_ledger_roles = ('CGST_PAYABLE', 'SGST_PAYABLE', 'IGST_PAYABLE', 'EXEMPT_INCOME',
+                              'GGST_RECEIVABLE', 'CGST_RECEIVABLE', 'IGST_RECEIVABLE')
+        if ledger_role not in valid_ledger_roles:
+            return jsonify({"error": f"ledger_role must be one of {', '.join(valid_ledger_roles)}, or blank."}), 400
         # A payable-ledger account (GL 1878/1879/1880-style) or an exempt-
         # income item (CA step 7) is never itself taxable income - force
         # this server-side so it can't drift from a stale client-side value.
@@ -7795,15 +7850,23 @@ def add_income_code_master():
         ''', (code, particulars, gst_rate, is_taxable, category, manual_entry, tax_type, ledger_role))
 
         if ledger_role:
-            # This code is now a payable-ledger account, not income - any
+            # This code is now a ledger/control account (GST payable,
+            # exempt-income, or GST receivable), not income - any
             # income_entries rows already sitting under it (e.g. from before
             # this code existed in the catalog, when it fell through as
             # "unmapped" and got wrongly taxed as ordinary income) no longer
             # belong there. Remove them rather than leave stale, incorrectly
             # classified rows around; the CA re-uploads the source statement
-            # to populate gst_payable_ledger correctly instead.
+            # to populate the correct ledger table instead.
             cur.execute('DELETE FROM income_entries WHERE UPPER(gl_code) = %s', (code,))
             migrated_count = cur.rowcount
+            # Same control account can equally fall through the expense/ITC
+            # side's own unmapped-code handling and get wrongly booked as a
+            # purchase voucher (confirmed: GL 8546/8547 GST-receivable were
+            # double-counted this way before classification) - clean those
+            # up too.
+            cur.execute('DELETE FROM purchase_gl_vouchers WHERE UPPER(gl_code) = %s', (code,))
+            migrated_count += cur.rowcount
         else:
             cur.execute('''
                 SELECT id, income_amount::float, review_reason FROM income_entries
@@ -8408,10 +8471,16 @@ def add_income_entry_manual():
     return jsonify({"success": True, "id": row['id'], "income_amount": amount, "cgst": cgst, "sgst": sgst, "igst": igst,
                      "refund_without_gst": refund_without_gst, "refund_with_gst": refund_with_gst})
 
-# GST Payable Ledger (GL 1878/1879/1880-style) and Exempt Income Ledger (CA
-# step 7 codes) share an identical shape and the same manual-balance-entry
-# need, so one pair of GET/POST handlers serves both, parameterized by table.
-_LEDGER_TABLES = {'gst-payable': 'gst_payable_ledger', 'exempt-income': 'exempt_income_ledger'}
+# GST Payable Ledger (GL 1878/1879/1880-style), Exempt Income Ledger (CA
+# step 7 codes), and GST Receivable Ledger (GL 8546/8547/8548-style) all
+# share an identical shape and the same manual-balance-entry need, so one
+# set of GET/POST handlers serves all three, parameterized by table.
+_LEDGER_TABLES = {
+    'gst-payable': 'gst_payable_ledger',
+    'exempt-income': 'exempt_income_ledger',
+    'gst-receivable': 'gst_receivable_ledger',
+}
+_LEDGER_ROLE_TABLES = {'gst_payable_ledger', 'gst_receivable_ledger'}
 
 @app.route('/api/ledger-entries/<table_key>', methods=['GET'])
 @login_required
@@ -8425,7 +8494,7 @@ def get_ledger_entries(table_key):
 
     query = f'''
         SELECT id, branch, financial_year, month, gl_code,
-               {"ledger_role," if table == 'gst_payable_ledger' else ""}
+               {"ledger_role," if table in _LEDGER_ROLE_TABLES else ""}
                closing_balance::float, balance_source, needs_review, review_reason,
                CASE WHEN file_data IS NOT NULL THEN true ELSE false END as has_file
         FROM {table}
@@ -8561,16 +8630,21 @@ def add_ledger_entry_manual(table_key):
         return jsonify({"error": "Financial Year, Month, and GL/PL Code are required."}), 400
 
     meta = get_income_code_meta(gl_code)
-    expected_roles = {'EXEMPT_INCOME'} if table_key == 'exempt-income' else {'CGST_PAYABLE', 'SGST_PAYABLE', 'IGST_PAYABLE'}
+    if table_key == 'exempt-income':
+        expected_roles = {'EXEMPT_INCOME'}
+    elif table_key == 'gst-receivable':
+        expected_roles = {'GGST_RECEIVABLE', 'CGST_RECEIVABLE', 'IGST_RECEIVABLE'}
+    else:
+        expected_roles = {'CGST_PAYABLE', 'SGST_PAYABLE', 'IGST_PAYABLE'}
     if meta is None or meta.get('ledger_role') not in expected_roles:
         return jsonify({"error": f"GL/PL code {gl_code} is not classified for this ledger - check Manage GL/PL Codes."}), 400
 
     try:
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        if table == 'gst_payable_ledger':
-            cur.execute('''
-                INSERT INTO gst_payable_ledger
+        if table in _LEDGER_ROLE_TABLES:
+            cur.execute(f'''
+                INSERT INTO {table}
                     (client_id, branch, financial_year, month, gl_code, ledger_role,
                      closing_balance, balance_source, needs_review, review_reason)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, 'manual', FALSE, NULL)
@@ -8732,7 +8806,7 @@ def upload_income_api():
                 a['branch'] = resolved
                 unrecognized_branch_files.discard(a.get('filename'))
 
-    finalized_from_raw, ledger_entries, exempt_entries, ingest_warnings = finalize_ledger_accounts(
+    finalized_from_raw, ledger_entries, exempt_entries, receivable_entries, ingest_warnings = finalize_ledger_accounts(
         raw_accounts, financial_year=upload_fy, month=upload_month
     )
     file_data_by_key = {}
@@ -8744,6 +8818,8 @@ def upload_income_api():
         le['file_data'] = file_data_by_key.get((le['branch'], le['gl_code']))
     for ee in exempt_entries:
         ee['file_data'] = file_data_by_key.get((ee['branch'], ee['gl_code']))
+    for re_ in receivable_entries:
+        re_['file_data'] = file_data_by_key.get((re_['branch'], re_['gl_code']))
     parsed_entries.extend(finalized_from_raw)
 
     saved_count = 0
@@ -8886,11 +8962,47 @@ def upload_income_api():
             ))
             exempt_saved_count += 1
 
+        receivable_saved_count = 0
+        for re_ in receivable_entries:
+            cur.execute('''
+                INSERT INTO gst_receivable_ledger (client_id, branch, financial_year, month, gl_code, ledger_role, closing_balance, balance_source, file_name, file_data, needs_review, review_reason)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (client_id, branch, financial_year, month, gl_code)
+                DO UPDATE SET
+                    ledger_role = EXCLUDED.ledger_role,
+                    -- Same non-clobbering rule as gst_payable_ledger: a
+                    -- manually-entered balance survives a routine re-upload.
+                    closing_balance = CASE WHEN gst_receivable_ledger.balance_source = 'manual'
+                                           THEN gst_receivable_ledger.closing_balance ELSE EXCLUDED.closing_balance END,
+                    balance_source = CASE WHEN gst_receivable_ledger.balance_source = 'manual'
+                                          THEN 'manual' ELSE EXCLUDED.balance_source END,
+                    file_name = EXCLUDED.file_name,
+                    needs_review = CASE WHEN gst_receivable_ledger.balance_source = 'manual'
+                                        THEN FALSE ELSE EXCLUDED.needs_review END,
+                    review_reason = CASE WHEN gst_receivable_ledger.balance_source = 'manual'
+                                         THEN NULL ELSE EXCLUDED.review_reason END,
+                    updated_at = CURRENT_TIMESTAMP
+            ''', (
+                client_id,
+                re_.get('branch', 'Unassigned'),
+                re_.get('financial_year', upload_fy),
+                re_.get('month', upload_month),
+                re_.get('gl_code', 'N/A'),
+                re_.get('ledger_role'),
+                re_.get('closing_balance'),
+                re_.get('balance_source', 'parsed'),
+                re_.get('filename', 'upload'),
+                psycopg2.Binary(re_['file_data']) if re_.get('file_data') else None,
+                re_.get('needs_review', True),
+                re_.get('review_reason'),
+            ))
+            receivable_saved_count += 1
+
         conn.commit()
         cur.close()
         conn.close()
         log_activity(user_id, 'income_upload',
-                     f'Uploaded {saved_count} income entries, {ledger_saved_count} GST-payable rows, {exempt_saved_count} exempt-income rows ({review_count} flagged for review)',
+                     f'Uploaded {saved_count} income entries, {ledger_saved_count} GST-payable rows, {exempt_saved_count} exempt-income rows, {receivable_saved_count} GST-receivable rows ({review_count} flagged for review)',
                      record_count=saved_count)
         return jsonify({
             "success": True,
@@ -8900,6 +9012,7 @@ def upload_income_api():
             "unrecognized_branch_files": sorted(unrecognized_branch_files),
             "duplicate_warnings": [w for w in ingest_warnings if w['type'] == 'duplicate_code_in_batch'],
             "ledger_saved_count": ledger_saved_count,
+            "receivable_saved_count": receivable_saved_count,
             "exempt_saved_count": exempt_saved_count,
         })
     except Exception as e:
@@ -9291,6 +9404,13 @@ def export_income_working_sheet():
         ledger_rows = cur.fetchall()
 
         cur.execute('''
+            SELECT branch, gl_code, ledger_role, closing_balance::float, needs_review
+            FROM gst_receivable_ledger
+            WHERE client_id = %s AND financial_year = %s AND month = %s
+        ''', (client_id, fy, month))
+        receivable_rows = cur.fetchall()
+
+        cur.execute('''
             SELECT gl_code, closing_balance::float
             FROM exempt_income_ledger
             WHERE client_id = %s AND financial_year = %s AND month = %s
@@ -9332,6 +9452,14 @@ def export_income_working_sheet():
                 continue
             b_name = re.sub(r'[^A-Z0-9]', '', lr['branch'].upper().strip())
             ledger_by_branch[b_name][lr['ledger_role']] = lr['closing_balance']
+
+        # branch (normalized) -> {'GGST_RECEIVABLE'/'CGST_RECEIVABLE'/'IGST_RECEIVABLE': closing_balance or None}
+        receivable_by_branch = collections.defaultdict(dict)
+        for rr in receivable_rows:
+            if not rr.get('ledger_role'):
+                continue
+            b_name = re.sub(r'[^A-Z0-9]', '', rr['branch'].upper().strip())
+            receivable_by_branch[b_name][rr['ledger_role']] = rr['closing_balance']
 
         # Group entries by normalized branch and GL code
         branch_map = collections.defaultdict(dict)
@@ -9544,10 +9672,11 @@ def export_income_working_sheet():
                     }
 
                     ledger_vals = ledger_by_branch.get(b_norm, {})
+                    receivable_vals = receivable_by_branch.get(b_norm, {})
 
                     # Point 1: Auto-fetch and populate Payable Working section on this branch tab
                     b_rows = {}
-                    for r_chk in range(total_row + 1, min(ws_b.max_row + 1, total_row + 30)):
+                    for r_chk in range(total_row + 1, min(ws_b.max_row + 1, total_row + 40)):
                         chk_txt = str(ws_b.cell(r_chk, 1).value or ws_b.cell(r_chk, 2).value or '').upper().strip()
                         if 'INCOME AS PER LEDGER' in chk_txt:
                             b_rows['inc'] = r_chk
@@ -9555,9 +9684,11 @@ def export_income_working_sheet():
                             b_rows['ref'] = r_chk
                         elif 'PAYABLE AS PER LEDGER' in chk_txt:
                             b_rows['pay'] = r_chk
-                        elif 'DIFFERENCE' in chk_txt and 'inc' in b_rows:
+                        elif 'DIFFERENCE' in chk_txt and 'inc' in b_rows and 'itc' not in b_rows:
                             if 'diff' not in b_rows:
                                 b_rows['diff'] = r_chk
+                        elif 'CURRENT MONTH INPUT TAX CREDIT' in chk_txt:
+                            b_rows['itc'] = r_chk
 
                     if 'inc' in b_rows and 'ref' in b_rows and 'pay' in b_rows:
                         r_inc = b_rows['inc']
@@ -9735,6 +9866,27 @@ def export_income_working_sheet():
                             _set(ws_b, r_diff, 5, round(r_tot_e - r_pay_d_n, 2) if r_pay_d is not None else "—")
                             _set(ws_b, r_diff, 6, round(r_pay_f_n - r_inc_f, 2) if r_pay_f is not None else "—")
                             _set(ws_b, r_diff, 7, round((r_tot_d - r_pay_d_n) / 0.09, 2) if r_pay_d is not None else "—")
+
+                    # Point 2 (CA office request, Oct 2026): auto-fetch and populate the
+                    # "(2) INPUT TAX CREDIT" section's "Current Month Input Tax Credit
+                    # Available" row (GL 8546 GGST / GL 8547 CGST columns) from the
+                    # uploaded GST-receivable ledger, same idea as the Payable Working
+                    # section above. The CA was previously typing this figure into every
+                    # branch tab by hand each month. IGST (GL 8548) and the rows below it
+                    # (ineligible credit / eligible credit) are left untouched - those
+                    # need the CA's own vendor-level judgment, which this app does not
+                    # compute. Only writes a cell when fresh data actually exists for
+                    # this branch/code/month - otherwise leaves it completely alone, so
+                    # a CA-typed reference figure or a live template formula (the CGST
+                    # column is often "=+D<row>") is never silently blanked out.
+                    if 'itc' in b_rows:
+                        r_itc = b_rows['itc']
+                        recv_ggst = receivable_vals.get('GGST_RECEIVABLE')
+                        recv_cgst = receivable_vals.get('CGST_RECEIVABLE')
+                        if recv_ggst is not None:
+                            _set(ws_b, r_itc, 4, round(recv_ggst, 2))
+                        if recv_cgst is not None:
+                            _set(ws_b, r_itc, 5, round(recv_cgst, 2))
 
                     # Tab color: Green FF92D050 if statements were uploaded for this branch (completed branch)
                     ws_b.sheet_properties.tabColor = openpyxl.styles.colors.Color(rgb="FF92D050") if bool(matched_dict) else None
