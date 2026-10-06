@@ -10017,14 +10017,22 @@ def export_income_working_sheet():
                     # Available" row (GL 8546 GGST / GL 8547 CGST columns) from the
                     # uploaded GST-receivable ledger, same idea as the Payable Working
                     # section above. The CA was previously typing this figure into every
-                    # branch tab by hand each month. IGST (GL 8548) and the rows below it
-                    # (ineligible credit / eligible credit) are left untouched - those
-                    # need the CA's own vendor-level judgment, which this app does not
-                    # compute. Only writes a cell when fresh data actually exists for
-                    # this branch/code/month - otherwise leaves it completely alone, so
-                    # a CA-typed reference figure or a live template formula (the CGST
-                    # column is often "=+D<row>") is never silently blanked out.
+                    # branch tab by hand each month. Only writes a cell when fresh data
+                    # actually exists for this branch/code/month - otherwise leaves it
+                    # completely alone, so a CA-typed reference figure is never silently
+                    # blanked out.
                     if 'itc' in b_rows:
+                        def _itc_num(v):
+                            if v is None or isinstance(v, (int, float)):
+                                return float(v) if v is not None else None
+                            s = str(v).strip().replace(',', '')
+                            if not s or s.startswith('='):
+                                return None
+                            try:
+                                return float(s)
+                            except ValueError:
+                                return None
+
                         r_itc = b_rows['itc']
                         recv_ggst = receivable_vals.get('GGST_RECEIVABLE')
                         recv_cgst = receivable_vals.get('CGST_RECEIVABLE')
@@ -10032,6 +10040,56 @@ def export_income_working_sheet():
                             _set(ws_b, r_itc, 4, round(recv_ggst, 2))
                         if recv_cgst is not None:
                             _set(ws_b, r_itc, 5, round(recv_cgst, 2))
+
+                        # The "Eligible Credit" and "Less: Credit Cannot Be Utilised" rows
+                        # just below are template Excel FORMULAS (one of them,
+                        # "=+E81-E809" for CGST, even has a typo in the CA's own template -
+                        # references a cell far below the sheet that's always blank). Like
+                        # every other section of this export, openpyxl can never evaluate a
+                        # formula - it only shows a number once Excel itself recalculates,
+                        # which Protected View blocks and "Enable Editing" doesn't always
+                        # force either. Confirmed live: this left Eligible Credit
+                        # permanently blank no matter what the CA did on their end. Fixed
+                        # by computing it ourselves and writing a plain number, bypassing
+                        # the (broken) formula chain entirely - same philosophy as the rest
+                        # of this export.
+                        r_less, r_eligible = r_itc + 1, r_itc + 2
+                        avail_d = _itc_num(ws_b.cell(r_itc, 4).value)
+                        avail_e = _itc_num(ws_b.cell(r_itc, 5).value)
+
+                        # "Less: Credit Cannot Be Utilised" is driven by the CA's own
+                        # vendor-by-vendor "INELLIGBLE CREDIT" table a few rows below
+                        # (party name + GGST amount per row, ending at a "TOTAL" row) -
+                        # this app has no data on which specific vendor bills lack a
+                        # GSTIN, so it reads whatever the CA has already typed into that
+                        # table (plain numbers only - a formula cell there means no
+                        # override exists) and sums it, rather than guessing.
+                        ineligible = None
+                        existing_less_d = _itc_num(ws_b.cell(r_less, 4).value)
+                        if existing_less_d is not None:
+                            ineligible = existing_less_d
+                        else:
+                            for r_chk2 in range(r_itc + 1, min(ws_b.max_row + 1, r_itc + 20)):
+                                v_label = str(ws_b.cell(r_chk2, 2).value or '').strip().upper()
+                                if v_label == 'PARTY NAME':
+                                    ineligible = 0.0
+                                    for r_party in range(r_chk2 + 1, min(ws_b.max_row + 1, r_chk2 + 20)):
+                                        party_label = str(ws_b.cell(r_party, 2).value or '').strip().upper()
+                                        if party_label == 'TOTAL' or not party_label:
+                                            break
+                                        v_party = _itc_num(ws_b.cell(r_party, 3).value)
+                                        if v_party is not None:
+                                            ineligible += v_party
+                                    break
+
+                        if ineligible is not None:
+                            if existing_less_d is None:
+                                _set(ws_b, r_less, 4, round(ineligible, 2))
+                                _set(ws_b, r_less, 5, round(ineligible, 2))
+                            if avail_d is not None:
+                                _set(ws_b, r_eligible, 4, round(avail_d - ineligible, 2))
+                            if avail_e is not None:
+                                _set(ws_b, r_eligible, 5, round(avail_e - ineligible, 2))
 
                     # Tab color: Green FF92D050 if statements were uploaded for this branch (completed branch)
                     ws_b.sheet_properties.tabColor = openpyxl.styles.colors.Color(rgb="FF92D050") if bool(matched_dict) else None
