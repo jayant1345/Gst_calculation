@@ -9228,7 +9228,16 @@ def upload_income_api():
         return jsonify({
             "success": True,
             "saved_count": saved_count,
-            "entries_preview": parsed_entries[:10],
+            # Strip file_data (raw bytes) before this hits jsonify - every
+            # parsed_entries item carries its source file's raw bytes under
+            # this key (needed for the file_data INSERT above), which isn't
+            # JSON-serializable. Confirmed bug (Oct 2026): any upload batch
+            # containing even one still-unclassified GL code took this
+            # entry through the regular-income fallback path (which also
+            # tags on file_data) instead of the ledger/receivable paths -
+            # crashing the whole batch's response with a 500 even though
+            # every row had already committed to the DB successfully.
+            "entries_preview": [{k: v for k, v in e.items() if k != 'file_data'} for e in parsed_entries[:10]],
             "review_count": review_count,
             "unrecognized_branch_files": sorted(unrecognized_branch_files),
             "duplicate_warnings": [w for w in ingest_warnings if w['type'] == 'duplicate_code_in_batch'],
