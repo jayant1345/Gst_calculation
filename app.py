@@ -6910,6 +6910,46 @@ def _scan_acctno_colon_format(lines):
     return accounts
 
 
+def _capture_glwise_summary_closing_balance(sheet_rows_list, gl_code):
+    """The "Statement Of Account (GL)" layout (see NARAYANNAGAR GL 8546/8547
+    Sept 2026) prints a dedicated per-account "GL Wise Summary" table on its
+    own sheet, one row per account, with an explicit "Closing Bal" column
+    that's already correctly signed (no DR/CR text suffix to interpret) -
+    confirmed against the real file: Closing Bal -4,003.29 for GL 8546
+    matches "Closing Balance As On: ... 4,003.29 Dr" from the account detail
+    sheet, just without that sheet's Dr/Cr-suffix ambiguity. Scans every
+    sheet's rows (the summary table is usually on a different sheet than the
+    account detail that _scan_acctno_colon_format read) for a header row
+    containing both "Acct" and "Closing Bal" labels, then returns the
+    Closing Bal value from whichever row's Acct column matches gl_code.
+    Returns None if no such table is found (falls through to the AI
+    fallback, same as any other unrecognised layout)."""
+    for rows in sheet_rows_list:
+        close_col = acct_col = None
+        header_idx = None
+        for i, row in enumerate(rows):
+            cells = [str(c).strip().lower() if c is not None else '' for c in row]
+            if 'closing bal' in cells and 'acct' in cells:
+                close_col = cells.index('closing bal')
+                acct_col = cells.index('acct')
+                header_idx = i
+                break
+        if header_idx is None:
+            continue
+        for row in rows[header_idx + 1:]:
+            if acct_col >= len(row) or close_col >= len(row):
+                continue
+            acct_val = row[acct_col]
+            if acct_val is None:
+                continue
+            if str(acct_val).strip() == str(gl_code).strip():
+                cb = row[close_col]
+                if isinstance(cb, (int, float)):
+                    return round(float(cb), 2)
+                if isinstance(cb, str) and _LEDGER_NUM_RE.match(cb.strip()):
+                    return _ledger_num(cb)
+    return None
+
 
 def _flatten_ledger_rows(rows_iter):
     """Row-major cell flatten -> text lines, matching PDF-text conventions.
@@ -7099,15 +7139,18 @@ def detect_statement_period(text="", filename="", rows=None):
             if 1 <= mo <= 12:
                 return MONTH_NAME_BY_NUM[mo], _fy_from_year_month(yr, mo)
 
-        # Explicit Month Name + Year
-        m = re.search(r'\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4})\b', text, re.IGNORECASE)
-        if m:
-            mo_name = m.group(1).capitalize()
-            yr = int(m.group(2))
-            mo = MONTH_NUM_BY_NAME.get(mo_name.upper(), 8)
-            return mo_name, _fy_from_year_month(yr, mo)
-
-    # 2. Search rows for Excel serial numbers or datetime objects
+    # 2. Search rows for Excel serial numbers or datetime objects, anchored to
+    # the row containing the literal "From date"/"Entry Date" label - this
+    # must run BEFORE the unanchored "Explicit Month Name + Year" regex
+    # below. Confirmed bug (Oct 2026, NEW CLOTH GL 8547 Sept 2026): when the
+    # real header date is stored as a raw Excel serial (not formatted text),
+    # regexes 1-3 above all miss it, and the old ordering let the unanchored
+    # month-name regex grab an incidental month mention from deep inside a
+    # transaction narration instead (e.g. "...FOR THE MONTH OF AUGUST 2026"
+    # inside a telephone bill description) - wrongly filing the whole
+    # statement under August when the actual From/To date range was
+    # September. The anchored serial-number scan below finds the true
+    # header date correctly; it just has to be tried first.
     if rows:
         import xlrd
         for row in rows[:20]:
@@ -7136,6 +7179,19 @@ def detect_statement_period(text="", filename="", rows=None):
                             mo = int(m2.group(2))
                             if 1 <= mo <= 12:
                                 return MONTH_NAME_BY_NUM[mo], _fy_from_year_month(yr, mo)
+
+    if text:
+        # Explicit Month Name + Year - deliberately last resort: unanchored,
+        # so it can match an incidental month mention inside a transaction
+        # narration rather than the statement's real period. Only reached
+        # when nothing above (all anchored to "From date"/"Entry Date"
+        # context) found anything.
+        m = re.search(r'\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4})\b', text, re.IGNORECASE)
+        if m:
+            mo_name = m.group(1).capitalize()
+            yr = int(m.group(2))
+            mo = MONTH_NUM_BY_NAME.get(mo_name.upper(), 8)
+            return mo_name, _fy_from_year_month(yr, mo)
 
     # 3. Check filename
     if filename:
@@ -7190,10 +7246,12 @@ def extract_raw_ledger_accounts_pdf(file_bytes, filename):
 def extract_raw_ledger_accounts_xlsx(file_bytes, filename):
     wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
     all_accounts = []
+    sheet_rows_list = []
     for sname in wb.sheetnames:
         ws = wb[sname]
-        rows = [[ws.cell(r, c).value for c in range(1, ws.max_column + 1)]
-                for r in range(1, ws.max_row + 1)]
+        sheet_rows_list.append([[ws.cell(r, c).value for c in range(1, ws.max_column + 1)]
+                                 for r in range(1, ws.max_row + 1)])
+    for rows in sheet_rows_list:
         flat_text = " ".join(str(v) for row in rows for v in row if v)
         if re.search(r'A/c No', flat_text, re.IGNORECASE):
             lines = _flatten_ledger_rows(rows)
@@ -7201,6 +7259,15 @@ def extract_raw_ledger_accounts_xlsx(file_bytes, filename):
         elif re.search(r'Account\s*Id', flat_text, re.IGNORECASE):
             lines = _flatten_ledger_rows(rows)
             accounts = _scan_ledger_lines(lines, _LEDGER_PDF_ACCOUNT_LABELS, _LEDGER_PDF_TOTAL_LABELS)
+        elif re.search(r'Acct\s*No\s*:', flat_text, re.IGNORECASE):
+            # "Statement Of Account (GL)" layout (NARAYANNAGAR Sept 2026) -
+            # same "Acct No :" account header the PDF path already handles
+            # via _scan_acctno_colon_format, but this layout can also arrive
+            # as an .xlsx export. Its closing balance lives on a separate
+            # "GL Wise Summary" sheet, captured below via
+            # _capture_glwise_summary_closing_balance across all sheets.
+            lines = _flatten_ledger_rows(rows)
+            accounts = _scan_acctno_colon_format(lines)
         else:
             continue
         branch = _extract_branch_from_folder_path(filename) or _detect_ledger_branch(flat_text, filename)
@@ -7217,6 +7284,8 @@ def extract_raw_ledger_accounts_xlsx(file_bytes, filename):
                 a['financial_year'] = det_fy
             if is_r009007 and a.get('closing_balance') is None:
                 a['closing_balance'] = _capture_r009007_closing_balance(rows)
+            if a.get('closing_balance') is None:
+                a['closing_balance'] = _capture_glwise_summary_closing_balance(sheet_rows_list, a.get('gl_code'))
             _apply_ai_closing_balance_fallback(a, lines)
         all_accounts.extend(accounts)
     return all_accounts
@@ -7254,6 +7323,11 @@ def extract_raw_ledger_accounts_xls(file_bytes, filename):
         lines = _flatten_ledger_rows(rows)
         if re.search(r'A/c No', flat_text, re.IGNORECASE):
             accounts = _scan_ledger_lines(lines, _LEDGER_XLSX_ACCOUNT_LABELS, _LEDGER_XLSX_TOTAL_LABELS)
+        elif re.search(r'Acct\s*No\s*:', flat_text, re.IGNORECASE):
+            # "Statement Of Account (GL)" layout - see the matching .xlsx
+            # branch above; closing balance captured below from the
+            # "GL Wise Summary" sheet via _capture_glwise_summary_closing_balance.
+            accounts = _scan_acctno_colon_format(lines)
         else:
             accounts = _scan_ledger_lines(lines, _LEDGER_PDF_ACCOUNT_LABELS, _LEDGER_PDF_TOTAL_LABELS)
         branch = _extract_branch_from_folder_path(filename) or _detect_ledger_branch(flat_text, filename)
@@ -7270,6 +7344,8 @@ def extract_raw_ledger_accounts_xls(file_bytes, filename):
                 a['financial_year'] = det_fy
             if is_r009007 and a.get('closing_balance') is None:
                 a['closing_balance'] = _capture_r009007_closing_balance(rows)
+            if a.get('closing_balance') is None:
+                a['closing_balance'] = _capture_glwise_summary_closing_balance(sheets, a.get('gl_code'))
             _apply_ai_closing_balance_fallback(a, lines)
         all_accounts.extend(accounts)
     return all_accounts
