@@ -6592,6 +6592,50 @@ def _capture_closing_balance_value(lines, start_idx, max_lookahead=15):
     return None
 
 
+def _capture_acctno_statement_closing_balance(rows):
+    """"Statement Of Account" layout with multiple "A/c No" blocks stacked
+    in ONE sheet (confirmed: HO's combined GL 1878/1879/1880/1881/1882/1883/
+    8546/8547/8548/8549/8551/8552 Sept 2026 export, all 12 accounts one
+    after another on a single "StatementOfAc_GL_MULAC" sheet). Each block
+    has its own "Closing Balance" row with the single already-signed
+    running-balance figure as that row's last populated cell - found by
+    direct comparison against the file (GL 8547 -95,347.79, GL 8548
+    -639,133.83, GL 8551 -474,077.19), confirmed deterministically reliable
+    where the AI fallback (_ai_extract_closing_balance) was NOT: it flipped
+    the sign on exactly these 3 of the file's 12 accounts, magnitude
+    correct but sign wrong - a silent, serious error on 2 of the 3 GST
+    Receivable codes this upload exists for. Returns {gl_code: value} for
+    every "A/c No" block found whose own "Closing Balance" row appears
+    before the next "A/c No" row (so a later "Statement Summary" section's
+    own duplicate "Closing Balance" line, indented into a different column
+    with no code context, is never mistaken for a different account's
+    figure - it naturally falls after current_code has been cleared)."""
+    results = {}
+    current_code = None
+    for row in rows:
+        cells = [(idx, v) for idx, v in enumerate(row) if v not in (None, '')]
+        if not cells:
+            continue
+        first_idx, first_val = cells[0]
+        first_str = str(first_val).strip().lower()
+        if first_str == 'a/c no':
+            current_code = None
+            if len(cells) > 1:
+                c, _ = _extract_ledger_code(str(cells[1][1]).strip())
+                if c:
+                    current_code = c
+        elif first_str == 'closing balance' and current_code and current_code not in results:
+            last_val = cells[-1][1]
+            if isinstance(last_val, (int, float)):
+                results[current_code] = round(float(last_val), 2)
+            elif isinstance(last_val, str) and _LEDGER_NUM_RE.match(last_val.strip()):
+                parsed = _ledger_num(last_val)
+                if parsed is not None:
+                    results[current_code] = round(parsed, 2)
+            current_code = None
+    return results
+
+
 def _capture_r009007_closing_balance(rows):
     """The "R009007 - Statement of GL Account" format (used for GL 1878/1879/
     1880 payable-ledger statements) never prints a "Closing Balance" text
@@ -7111,8 +7155,15 @@ def detect_statement_period(text="", filename="", rows=None):
 
     # 1. Search text for "From date ... To Date ..." or "From Date ..."
     if text:
-        # DD/MM/YYYY or DD-MM-YYYY
-        m = re.search(r'From\s+date\s*[:\-]?\s*(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})', text, re.IGNORECASE)
+        # DD/MM/YYYY, DD-MM-YYYY or DD.MM.YYYY (confirmed bug, Oct 2026: HO's
+        # combined GL 1878.../8552 "Statement Of Account" export prints
+        # "From Date : 01.09.2026 To Date : 30.09.2026" with dot separators -
+        # the old [/-] class never matched it, and with no other anchored
+        # regex matching either, the file fell all the way through to the
+        # unanchored month-name regex below, which grabbed an incidental
+        # "...MONTH OF AUGUST 2026" from inside a transaction narration and
+        # wrongly filed the whole September statement under August)
+        m = re.search(r'From\s+date\s*[:\-]?\s*(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})', text, re.IGNORECASE)
         if m:
             mo = int(m.group(2))
             yr = int(m.group(3))
@@ -7130,7 +7181,7 @@ def detect_statement_period(text="", filename="", rows=None):
                 return MONTH_NAME_BY_NUM[mo], _fy_from_year_month(yr, mo)
 
         # "For:01/08/2026-..." in statement particulars
-        m = re.search(r'For\s*:\s*(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})', text, re.IGNORECASE)
+        m = re.search(r'For\s*:\s*(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})', text, re.IGNORECASE)
         if m:
             mo = int(m.group(2))
             yr = int(m.group(3))
@@ -7166,7 +7217,7 @@ def detect_statement_period(text="", filename="", rows=None):
                     elif isinstance(cell, datetime):
                         return MONTH_NAME_BY_NUM[cell.month], _fy_from_year_month(cell.year, cell.month)
                     elif isinstance(cell, str):
-                        m = re.search(r'(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})', cell)
+                        m = re.search(r'(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})', cell)
                         if m:
                             mo = int(m.group(2))
                             yr = int(m.group(3))
@@ -7274,6 +7325,7 @@ def extract_raw_ledger_accounts_xlsx(file_bytes, filename):
         branch_code = _extract_branch_code(flat_text)
         det_month, det_fy = detect_statement_period(flat_text, filename, rows)
         is_r009007 = bool(re.search(r'R009007|Statement\s+of\s+GL\s+Account', flat_text, re.IGNORECASE))
+        acctno_statement_balances = _capture_acctno_statement_closing_balance(rows)
         for a in accounts:
             a['branch'] = branch
             a['branch_code'] = branch_code
@@ -7284,6 +7336,8 @@ def extract_raw_ledger_accounts_xlsx(file_bytes, filename):
                 a['financial_year'] = det_fy
             if is_r009007 and a.get('closing_balance') is None:
                 a['closing_balance'] = _capture_r009007_closing_balance(rows)
+            if a.get('closing_balance') is None:
+                a['closing_balance'] = acctno_statement_balances.get(a.get('gl_code'))
             if a.get('closing_balance') is None:
                 a['closing_balance'] = _capture_glwise_summary_closing_balance(sheet_rows_list, a.get('gl_code'))
             _apply_ai_closing_balance_fallback(a, lines)
@@ -7344,6 +7398,8 @@ def extract_raw_ledger_accounts_xls(file_bytes, filename):
                 a['financial_year'] = det_fy
             if is_r009007 and a.get('closing_balance') is None:
                 a['closing_balance'] = _capture_r009007_closing_balance(rows)
+            if a.get('closing_balance') is None:
+                a['closing_balance'] = _capture_acctno_statement_closing_balance(rows).get(a.get('gl_code'))
             if a.get('closing_balance') is None:
                 a['closing_balance'] = _capture_glwise_summary_closing_balance(sheets, a.get('gl_code'))
             _apply_ai_closing_balance_fallback(a, lines)
