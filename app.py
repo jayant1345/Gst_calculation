@@ -7440,6 +7440,12 @@ def finalize_ledger_accounts(raw_accounts, financial_year='2026-27', month='July
     ledger_role in {GGST_RECEIVABLE, CGST_RECEIVABLE, IGST_RECEIVABLE} (GL
     8546/8547/8548-style GST-recoverable control accounts, the ITC-side
     mirror of GST Payable) - routed to gst_receivable_ledger instead.
+    ledger_role='IGNORE' (e.g. HO's GL 1881/1882/1883/8549/8551/8552 - the
+    "GROSS" branch-wise-total rollups the bank's own HO export prints
+    alongside 1878/1879/1880 and 8546/8547/8548, confirmed by the CA office
+    Oct 2026 to not be income or a distinct ledger account at all) is
+    dropped entirely - not income, not booked to any ledger table, no
+    review flag raised.
 
     warnings is a list of dicts describing anything that could not be handled
     with full confidence - a duplicate GL code seen twice in one upload batch,
@@ -7514,6 +7520,8 @@ def finalize_ledger_accounts(raw_accounts, financial_year='2026-27', month='July
             # them out entirely, carrying their closing balance rather than
             # a period net.
             ledger_role = meta.get('ledger_role') if meta else None
+            if ledger_role == 'IGNORE':
+                continue
             if ledger_role:
                 closing_balance = a.get('closing_balance')
                 is_ai_sourced = a.get('balance_source') == 'ai_extracted'
@@ -8052,7 +8060,7 @@ def add_income_code_master():
     if ledger_role is not None:
         ledger_role = str(ledger_role).strip().upper()
         valid_ledger_roles = ('CGST_PAYABLE', 'SGST_PAYABLE', 'IGST_PAYABLE', 'EXEMPT_INCOME',
-                              'GGST_RECEIVABLE', 'CGST_RECEIVABLE', 'IGST_RECEIVABLE')
+                              'GGST_RECEIVABLE', 'CGST_RECEIVABLE', 'IGST_RECEIVABLE', 'IGNORE')
         if ledger_role not in valid_ledger_roles:
             return jsonify({"error": f"ledger_role must be one of {', '.join(valid_ledger_roles)}, or blank."}), 400
         # A payable-ledger account (GL 1878/1879/1880-style) or an exempt-
