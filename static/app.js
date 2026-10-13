@@ -442,6 +442,32 @@ document.addEventListener('DOMContentLoaded', () => {
     let masterVendors = [];
     let masterRemarks = [];
 
+    function updateRemarkSuggestionsDatalist() {
+        const dl = document.getElementById('remark-suggestions');
+        if (!dl) return;
+        const options = [];
+        const seen = new Set();
+        (window.glPlCodes || []).forEach(c => {
+            const entry1 = `${c.code} - ${c.particulars}`;
+            if (!seen.has(entry1)) {
+                seen.add(entry1);
+                options.push(`<option value="${escapeHtml(entry1)}">Expense PL Code</option>`);
+            }
+            if (c.particulars && !seen.has(c.particulars)) {
+                seen.add(c.particulars);
+                options.push(`<option value="${escapeHtml(c.particulars)}">PL ${escapeHtml(c.code)}</option>`);
+            }
+        });
+        (masterRemarks || []).forEach(r => {
+            if (r && !seen.has(r)) {
+                seen.add(r);
+                options.push(`<option value="${escapeHtml(r)}"></option>`);
+            }
+        });
+        dl.innerHTML = options.join('');
+    }
+    window.updateRemarkSuggestionsDatalist = updateRemarkSuggestionsDatalist;
+
     function loadMasterData() {
         return fetch('/api/master-data')
             .then(res => res.json())
@@ -450,6 +476,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (data.vendors) masterVendors = data.vendors;
                 if (data.remarks) masterRemarks = data.remarks;
                 initAutocompletes();
+                updateRemarkSuggestionsDatalist();
             })
             .catch(err => console.error("Error loading master data:", err));
     }
@@ -464,6 +491,7 @@ document.addEventListener('DOMContentLoaded', () => {
             .then(data => {
                 window.glPlCodes = data.codes || [];
                 populateGlCodeDropdowns();
+                updateRemarkSuggestionsDatalist();
             })
             .catch(err => console.error("Error loading Expense PL codes:", err));
     }
@@ -474,12 +502,22 @@ document.addEventListener('DOMContentLoaded', () => {
     function populateGlCodeDropdowns() {
         const optionsHtml = '<option value="">-- No PL code --</option>' +
             window.glPlCodes.slice().sort((a, b) => a.code.localeCompare(b.code))
-                .map(c => `<option value="${c.code}">${c.code} - ${c.particulars}</option>`).join('');
+                .map(c => `<option value="${c.code}">${c.code} - ${c.particulars}</option>`).join('') +
+            '<option value="__ADD_NEW__" style="color: #2563eb; font-weight: 600;">+ Add New PL Code...</option>';
         const mbGlCode = document.getElementById('mb-gl-code');
         if (mbGlCode) {
             const current = mbGlCode.value;
             mbGlCode.innerHTML = optionsHtml;
             mbGlCode.value = current;
+            if (!mbGlCode.dataset.hasAddNewHandler) {
+                mbGlCode.dataset.hasAddNewHandler = 'true';
+                mbGlCode.addEventListener('change', () => {
+                    if (mbGlCode.value === '__ADD_NEW__') {
+                        mbGlCode.value = '';
+                        if (window.openGlCodesModal) window.openGlCodesModal(mbGlCode);
+                    }
+                });
+            }
         }
         document.querySelectorAll('.field-gl-code').forEach(sel => {
             const current = sel.value;
@@ -670,20 +708,53 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         }
 
-        // 4. Manual Bill modal Remark / Reason input -- every remark typed is
-        // automatically remembered server-side (see save-invoice), so this
-        // just grows into a useful suggestion list over time.
+        // 4. Manual Bill modal Remark / Reason input -- provides both saved remarks
+        // and bank Expense PL codes so users can easily select standard expense categories.
+        // Selecting a PL code automatically sets the PL Code dropdown as well.
         const mbRemarkInput = document.getElementById('mb-remark');
         const mbRemarkDropdown = document.getElementById('mb-remark-dropdown');
+        const mbGlCodeSelect = document.getElementById('mb-gl-code');
         if (mbRemarkInput && mbRemarkDropdown) {
             setupAutocomplete({
                 inputEl: mbRemarkInput,
                 dropdownEl: mbRemarkDropdown,
                 getItems: (query) => {
-                    const remarks = query
-                        ? masterRemarks.filter(r => r.toLowerCase().includes(query))
-                        : masterRemarks.slice(0, 15);
-                    return remarks.map(r => ({ text: r }));
+                    const q = (query || '').toLowerCase().trim();
+                    const results = [];
+                    // 1. PL Codes
+                    const plMatches = (window.glPlCodes || []).filter(c =>
+                        !q || c.code.toLowerCase().includes(q) || (c.particulars || '').toLowerCase().includes(q)
+                    ).slice(0, 10);
+                    plMatches.forEach(c => {
+                        results.push({
+                            text: `${c.code} - ${c.particulars}`,
+                            subtext: c.category ? `Category: ${c.category}` : 'Expense PL Code',
+                            badge: 'PL Code',
+                            badgeClass: 'gujarat',
+                            data: c
+                        });
+                    });
+                    // 2. Master Remarks
+                    const remarkMatches = masterRemarks.filter(r =>
+                        !q || r.toLowerCase().includes(r.toLowerCase() ? q : '')
+                    ).slice(0, 10);
+                    remarkMatches.forEach(r => {
+                        if (!results.some(x => x.text === r)) {
+                            results.push({
+                                text: r,
+                                subtext: '',
+                                badge: '',
+                                badgeClass: '',
+                                data: null
+                            });
+                        }
+                    });
+                    return results;
+                },
+                onSelect: (item) => {
+                    if (item.data && item.data.code && mbGlCodeSelect) {
+                        mbGlCodeSelect.value = item.data.code;
+                    }
                 }
             });
         }
@@ -1115,22 +1186,34 @@ document.addEventListener('DOMContentLoaded', () => {
             const relPath = file.webkitRelativePath || '';
             const parts = relPath.split('/').filter(p => p.trim().length > 0);
 
-            let branch;
-            if (parts.length === 2) {
-                // Direct branch folder: "Andheri/invoice1.pdf" -> "Andheri"
-                branch = parts[0];
-            } else if (parts.length > 2) {
-                // Container folder: "Bills/Andheri/invoice1.pdf" -> "Andheri"
-                // Or nested: "Bills/2024/Andheri/invoice1.pdf" -> "Andheri"
-                branch = (parts[parts.length - 2] !== parts[0]) ? parts[parts.length - 2] : parts[1];
+            let branch = '';
+            const uiBranch = branchInput ? branchInput.value.trim() : '';
+
+            if (parts.length >= 2) {
+                // Look for matching master branch from innermost folder outward
+                const folderParts = parts.slice(0, -1);
+                for (let i = folderParts.length - 1; i >= 0; i--) {
+                    const rawPart = folderParts[i].trim().toUpperCase();
+                    const cleanPart = rawPart.replace(/[^A-Z0-9]/g, '');
+                    const matched = getAllBranches().find(b => {
+                        const bClean = b.name.toUpperCase().replace(/[^A-Z0-9]/g, '');
+                        return bClean === cleanPart || (cleanPart.length >= 4 && (bClean.includes(cleanPart) || cleanPart.includes(bClean)));
+                    });
+                    if (matched) {
+                        branch = matched.name;
+                        break;
+                    }
+                }
+                // Fallback to direct parent folder name if not in master branches
+                if (!branch) {
+                    branch = parts[parts.length - 2];
+                }
             } else {
-                // No real folder structure for this file (plain multi-file
-                // fallback) -- use the branch name gathered up front.
-                branch = fallbackBranch || 'Unassigned';
+                branch = uiBranch || fallbackBranch || 'Unassigned';
             }
 
             branch = (branch || '').trim();
-            if (!branch) branch = 'Unassigned';
+            if (!branch) branch = uiBranch || 'Unassigned';
 
             if (!groups.has(branch)) groups.set(branch, []);
             groups.get(branch).push(file);
@@ -1336,6 +1419,12 @@ document.addEventListener('DOMContentLoaded', () => {
         if (options.highAccuracy) {
             formData.append('high_accuracy', 'true');
             formData.append('confirm_password', options.password || '');
+        }
+        if (options.splitMode) {
+            formData.append('split_mode', options.splitMode);
+        }
+        if (options.pageRanges) {
+            formData.append('page_ranges', options.pageRanges);
         }
 
         const statusLabel = options.highAccuracy
@@ -1919,7 +2008,8 @@ document.addEventListener('DOMContentLoaded', () => {
         // with hundreds of rows).
         const glCodeOptionsHtml = '<option value="">-- No PL code --</option>' +
             (window.glPlCodes || []).slice().sort((a, b) => a.code.localeCompare(b.code))
-                .map(c => `<option value="${c.code}">${c.code} - ${c.particulars}</option>`).join('');
+                .map(c => `<option value="${c.code}">${c.code} - ${c.particulars}</option>`).join('') +
+            '<option value="__ADD_NEW__" style="color: #2563eb; font-weight: 600;">+ Add New PL Code...</option>';
 
         function buildRow(inv) {
             const tr = document.createElement('tr');
@@ -1960,7 +2050,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 <td class="numeric"><input type="number" step="0.01" class="field-sgst" value="${(inv.sgst || 0).toFixed(2)}"></td>
                 <td class="numeric"><input type="number" step="0.01" class="field-igst" value="${(inv.igst || 0).toFixed(2)}"></td>
                 <td class="checkbox-cell"><input type="checkbox" class="field-itc-blocked" title="Section 17(5) blocked credit / fully ineligible" ${inv.itc_blocked ? 'checked' : ''}></td>
-                <td><input type="text" class="field-remark" placeholder="e.g. GSTIN not on bill" maxlength="500" value="${(inv.remark || '').replace(/"/g, '&quot;')}"></td>
+                <td><input type="text" class="field-remark" list="remark-suggestions" placeholder="e.g. GSTIN not on bill" maxlength="500" value="${(inv.remark || '').replace(/"/g, '&quot;')}"></td>
                 <td><select class="field-gl-code"><option value="">-- No PL code --</option></select></td>
                 <td class="numeric eligible-column font-bold" id="row-eligible-${inv.id}">₹${(inv.eligible_itc || 0).toFixed(2)}</td>
                 <td class="numeric ineligible-column" id="row-ineligible-${inv.id}">₹${(inv.ineligible_itc || 0).toFixed(2)}</td>
@@ -1995,6 +2085,30 @@ document.addEventListener('DOMContentLoaded', () => {
             if (glCodeSelect) {
                 glCodeSelect.innerHTML = glCodeOptionsHtml;
                 glCodeSelect.value = inv.gl_code || '';
+                glCodeSelect.addEventListener('change', () => {
+                    if (glCodeSelect.value === '__ADD_NEW__') {
+                        glCodeSelect.value = inv.gl_code || '';
+                        if (window.openGlCodesModal) window.openGlCodesModal(glCodeSelect);
+                    }
+                });
+            }
+
+            // Sync Remark selection to PL Code dropdown if a PL code is picked in Remark
+            const remarkInputRow = tr.querySelector('.field-remark');
+            if (remarkInputRow && glCodeSelect) {
+                remarkInputRow.addEventListener('change', () => {
+                    const val = remarkInputRow.value.trim().toLowerCase();
+                    if (!val) return;
+                    const matchedCode = (window.glPlCodes || []).find(c =>
+                        c.code.toLowerCase() === val ||
+                        (c.particulars && c.particulars.toLowerCase() === val) ||
+                        `${c.code} - ${c.particulars}`.toLowerCase() === val
+                    );
+                    if (matchedCode && (!glCodeSelect.value || glCodeSelect.value !== matchedCode.code)) {
+                        glCodeSelect.value = matchedCode.code;
+                        updateStateFromRow(tr, inv.id);
+                    }
+                });
             }
 
             // Row selection listener
@@ -2742,6 +2856,11 @@ document.addEventListener('DOMContentLoaded', () => {
         if (mpbStateSelect && stateInput) mpbStateSelect.value = stateInput.value.trim();
         const mpbBranchInput = document.getElementById('mpb-branch');
         if (mpbBranchInput && branchInput) mpbBranchInput.value = branchInput.value.trim();
+        const rangesContainer = document.getElementById('mpb-ranges-container');
+        const selectedSplit = document.querySelector('input[name="mpb-split-mode"]:checked');
+        if (rangesContainer) {
+            rangesContainer.style.display = (selectedSplit && selectedSplit.value === 'ranges') ? 'block' : 'none';
+        }
         if (multipageBillOverlay) multipageBillOverlay.style.display = 'flex';
     }
 
@@ -2758,6 +2877,16 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // Toggle manual page range container in multi-page bill modal
+    document.querySelectorAll('input[name="mpb-split-mode"]').forEach(radio => {
+        radio.addEventListener('change', () => {
+            const rangesContainer = document.getElementById('mpb-ranges-container');
+            if (rangesContainer) {
+                rangesContainer.style.display = radio.value === 'ranges' && radio.checked ? 'block' : 'none';
+            }
+        });
+    });
+
     if (mpbUploadBtn) {
         mpbUploadBtn.addEventListener('click', () => {
             const files = mpbFileInput ? mpbFileInput.files : null;
@@ -2771,11 +2900,23 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
             const mpbBranchInput = document.getElementById('mpb-branch');
+            const selectedSplit = document.querySelector('input[name="mpb-split-mode"]:checked');
+            const splitMode = selectedSplit ? selectedSplit.value : 'single';
+            const pageRangesInput = document.getElementById('mpb-page-ranges');
+            const pageRanges = pageRangesInput ? pageRangesInput.value.trim() : '';
+
+            if (splitMode === 'ranges' && !pageRanges) {
+                alert('Please enter page ranges (e.g. 1-2, 3-5, 6, 7-8).');
+                return;
+            }
+
             closeMultipageBillModal();
             handleFileUpload(files, {
                 endpoint: '/api/process-multipage-bill',
                 branch: mpbBranchInput ? mpbBranchInput.value.trim() : '',
-                state: mpbStateSelect ? mpbStateSelect.value.trim() : ''
+                state: mpbStateSelect ? mpbStateSelect.value.trim() : '',
+                splitMode: splitMode,
+                pageRanges: pageRanges
             });
         });
     }

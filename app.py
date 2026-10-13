@@ -19,7 +19,7 @@ import psycopg2
 import psycopg2.extras
 from werkzeug.security import generate_password_hash, check_password_hash
 from functools import wraps
-from master_data import MASTER_BRANCHES, MASTER_VENDORS, get_branch_state, match_master_vendor, normalize_gstin
+from master_data import MASTER_BRANCHES, MASTER_VENDORS, get_branch_state, match_master_vendor, normalize_gstin, match_master_branch
 
 # Load environment variables
 load_dotenv()
@@ -3610,6 +3610,56 @@ def _merge_multipage_bill(page_bills):
     return merged, conflict_note
 
 
+def resolve_bill_branch_and_state(filename, batch_branch, batch_state, extracted_branch=None, extracted_state=None):
+    """Authoritative branch & state resolution:
+    1. Priority 1 (Ground Truth): If user explicitly selected a branch (batch_branch), or if
+       folder-upload explicitly passed a branch, that selection ALWAYS wins.
+    2. Priority 2 (Folder Name Ground Truth): If filename has folder structure (e.g. 'Chandkheda/bill.pdf',
+       'Bills/Chandkheda/bill.pdf') or filename contains a master branch name, that folder branch ALWAYS wins.
+    3. Priority 3 (AI extraction fallback ONLY): Only if neither batch_branch nor folder/file path
+       identified any branch, check extracted_branch -- but ONLY accept it if it is a VALID
+       Nutan Bank branch in MASTER_BRANCHES! Foreign cities (e.g. 'Mangalore') are rejected as Unassigned.
+    """
+    # 1. Explicit batch_branch (User selection or folder batch from UI)
+    if batch_branch and str(batch_branch).strip().lower() not in ('', 'unassigned', 'none'):
+        mb = match_master_branch(batch_branch)
+        b_name = mb['name'] if mb else str(batch_branch).strip()
+        b_state = mb['state'] if mb else (batch_state or get_branch_state(b_name))
+        return b_name, b_state
+
+    # 2. Folder path / filename ground truth
+    if filename:
+        fn_norm = str(filename).replace("\\", "/").strip()
+        parts = [p.strip() for p in fn_norm.split('/') if p.strip()]
+        # Check folder parts from deepest folder to root (excluding the file itself)
+        if len(parts) > 1:
+            for folder_part in reversed(parts[:-1]):
+                mb = match_master_branch(folder_part)
+                if mb:
+                    return mb['name'], mb['state']
+
+        # Check full filename / subfolder string for branch tokens
+        fn_upper = fn_norm.upper()
+        for mb in MASTER_BRANCHES:
+            b_name = mb['name'].upper()
+            if (f"/{b_name}/" in fn_upper or f"/{b_name}_" in fn_upper or fn_upper.startswith(f"{b_name}/")
+                or f"_{b_name}_" in fn_upper or f" {b_name} " in fn_upper or f"_{b_name} " in fn_upper
+                or f" {b_name}_" in fn_upper or b_name in fn_upper):
+                return mb['name'], mb['state']
+
+    # 3. AI extraction fallback (Strictly validated against MASTER_BRANCHES)
+    if extracted_branch and str(extracted_branch).strip().lower() not in ('', 'unassigned', 'none'):
+        mb = match_master_branch(extracted_branch)
+        if mb:
+            return mb['name'], mb['state']
+        # If extracted branch is NOT a valid Nutan Bank branch (like 'Mangalore'), reject it!
+        # Do not allow non-existent branches to be assigned.
+
+    # 4. Fallback to batch_state or Unassigned
+    final_state = batch_state or 'Unassigned'
+    return 'Unassigned', final_state
+
+
 def _parse_single_invoice_file(filename, file_bytes, batch_branch, batch_state, high_accuracy):
     """Processes a single uploaded bill file (PDF, Image, Excel/CSV) and returns
     its parsed invoice records, file storage buffers, and error state. Thread-safe."""
@@ -3873,23 +3923,11 @@ def process_invoices():
                 inv["payment_date"] = normalize_date_ddmmyyyy(str(inv["payment_date"]))[:50] if inv.get("payment_date") else None
                 inv["vendor_name"] = str(inv.get("vendor_name") or "Unknown Vendor")[:255]
                 inv["gstin"] = normalize_gstin(str(inv.get("gstin") or "N/A")[:50], inv["vendor_name"])
-                inv["branch"] = str(inv.get("branch") or batch_branch or "Unassigned")[:100]
-                inv["state"] = str(inv.get("state") or batch_state or "Unassigned")[:100]
-
-                # Auto-detect branch and state from folder path or filename when uploading
-                if (inv["branch"] == 'Unassigned' or not inv["branch"]) and not batch_branch:
-                    fn_norm = filename.replace("\\", "/").upper()
-                    for mb in MASTER_BRANCHES:
-                        b_name = mb['name'].upper()
-                        if (f"{b_name}/" in fn_norm or f"/{b_name}" in fn_norm or fn_norm.startswith(f"{b_name}/")
-                            or f"_{b_name}_" in fn_norm or f" {b_name} " in fn_norm or f"_{b_name} " in fn_norm
-                            or f" {b_name}_" in fn_norm or b_name in fn_norm):
-                            inv["branch"] = mb['name']
-                            inv["state"] = mb['state']
-                            break
-
-                if (inv["state"] == 'Unassigned' or not inv["state"]) and inv["branch"] != 'Unassigned':
-                    inv["state"] = get_branch_state(inv["branch"])
+                resolved_branch, resolved_state = resolve_bill_branch_and_state(
+                    filename, batch_branch, batch_state, inv.get("branch"), inv.get("state")
+                )
+                inv["branch"] = resolved_branch[:100]
+                inv["state"] = resolved_state[:100]
                 inv["itc_blocked"] = bool(inv.get("itc_blocked", False))
                 inv["remark"] = str(inv.get("remark") or "").strip()[:500]
                 for field in ("taxable_value", "cgst", "sgst", "igst"):
@@ -4052,18 +4090,80 @@ def process_invoices():
         "failed_count": failed_count
     })
 
+def _parse_page_ranges(range_str, total_pages):
+    """Parses user-entered range strings like '1-2, 3-5, 6, 7-8' into list of (start_1_based, end_1_based)."""
+    if not range_str or not total_pages:
+        return [(1, total_pages)] if total_pages else []
+    ranges = []
+    tokens = [t.strip() for t in str(range_str).split(',') if t.strip()]
+    for token in tokens:
+        if '-' in token:
+            parts = token.split('-')
+            try:
+                s = max(1, min(total_pages, int(parts[0].strip())))
+                e = max(1, min(total_pages, int(parts[1].strip())))
+                if s <= e:
+                    ranges.append((s, e))
+                else:
+                    ranges.append((e, s))
+            except ValueError:
+                continue
+        else:
+            try:
+                p = max(1, min(total_pages, int(token.strip())))
+                ranges.append((p, p))
+            except ValueError:
+                continue
+    return ranges or [(1, total_pages)]
+
+
+def _auto_detect_page_ranges(page_bills_lists, total_pages):
+    """Automatically detects bill boundaries in a multi-page PDF where bills span 2-3 pages.
+    A new bill begins when a page contains a distinct new invoice number or a distinct vendor header.
+    Continuation pages (no invoice number or same invoice number) belong to the preceding bill."""
+    if total_pages <= 1:
+        return [(1, 1)]
+
+    boundaries = [1]
+    last_inv_num = None
+    for i in range(total_pages):
+        bills = page_bills_lists[i] if i < len(page_bills_lists) else []
+        curr_bill = bills[0] if bills else {}
+        curr_inv = str(curr_bill.get('invoice_number') or '').strip().upper()
+        curr_vendor = str(curr_bill.get('vendor_name') or '').strip()
+
+        if i == 0:
+            last_inv_num = curr_inv if curr_inv not in ('', 'N/A', '-', 'NONE', 'ERROR') else None
+            continue
+
+        is_new_bill = False
+        if curr_inv and curr_inv not in ('', 'N/A', '-', 'NONE', 'ERROR'):
+            if last_inv_num and curr_inv != last_inv_num:
+                is_new_bill = True
+            elif not last_inv_num and curr_vendor and curr_vendor not in ('', 'Unknown Vendor'):
+                is_new_bill = True
+
+        if is_new_bill:
+            boundaries.append(i + 1)
+            last_inv_num = curr_inv if curr_inv not in ('', 'N/A', '-', 'NONE', 'ERROR') else None
+
+    ranges = []
+    for b_idx, start_p in enumerate(boundaries):
+        if b_idx + 1 < len(boundaries):
+            end_p = boundaries[b_idx + 1] - 1
+        else:
+            end_p = total_pages
+        ranges.append((start_p, end_p))
+    return ranges
+
+
 @app.route('/api/process-multipage-bill', methods=['POST'])
 @login_required
 def process_multipage_bill():
-    """Dedicated upload path for a SINGLE bill that spans multiple physical
-    pages (e.g. a 3-page tax invoice) -- kept entirely separate from the
-    regular bulk-upload path, where every page of a PDF is instead treated
-    as its own independent bill (the common case: a scanned stack of many
-    one-page bills in one file). Here, ALL pages of each uploaded PDF are
-    merged into ONE bill record via _merge_multipage_bill. Per-page scanning
-    itself is byte-for-byte the same extraction the regular upload path uses
-    (_extract_bills_for_page) -- only what happens to the results afterward
-    differs, so the AI vision models/prompts are untouched."""
+    """Multi-page bill scanning & splitting:
+    1. Single Bill per file (default): merges all pages into 1 bill.
+    2. Manual Page Ranges (e.g. 1-2, 3-5, 6, 7-8): splits PDF into separate bills.
+    3. Auto-Identify & Split: automatically detects bill boundaries and groups continuation pages."""
     user_id = session['user_id']
     client_id = get_current_client_id()
     if 'files[]' not in request.files:
@@ -4072,6 +4172,8 @@ def process_multipage_bill():
     files = request.files.getlist('files[]')
     batch_branch = request.form.get('branch', '').strip()
     batch_state = request.form.get('state', '').strip()
+    split_mode = request.form.get('split_mode', 'single').strip().lower()
+    page_ranges_raw = request.form.get('page_ranges', '').strip()
 
     file_payloads = [(f.filename, f.read()) for f in files]
 
@@ -4083,8 +4185,8 @@ def process_multipage_bill():
 
             doc = pymupdf.open(stream=fbytes, filetype="pdf")
             num_pages = len(doc)
-            doc.close()
             if num_pages == 0:
+                doc.close()
                 return {"filename": fname, "error": "Could not open this PDF."}
 
             page_bills_lists = [None] * num_pages
@@ -4098,21 +4200,47 @@ def process_multipage_bill():
                         print(f"Error scanning page {i+1} of {fname}: {ex}")
                         page_bills_lists[i] = []
 
-            # Flatten to one "bill" per page (first found, if a page somehow
-            # yields more than one) in page order -- a genuine multi-page
-            # bill has exactly one logical bill spread across its pages.
-            page_bills = [bills[0] for bills in page_bills_lists if bills]
+            # Determine page groups for splitting
+            if split_mode == 'ranges' and page_ranges_raw:
+                ranges = _parse_page_ranges(page_ranges_raw, num_pages)
+            elif split_mode == 'auto':
+                ranges = _auto_detect_page_ranges(page_bills_lists, num_pages)
+            else:
+                ranges = [(1, num_pages)]
 
-            if not page_bills:
+            bills_to_return = []
+            for sp, ep in ranges:
+                slice_page_bills = []
+                for p_idx in range(sp - 1, min(ep, num_pages)):
+                    if p_idx < len(page_bills_lists) and page_bills_lists[p_idx]:
+                        slice_page_bills.append(page_bills_lists[p_idx][0])
+
+                if not slice_page_bills:
+                    continue
+
+                merged, conflict_note = _merge_multipage_bill(slice_page_bills)
+                if sp == 1 and ep == num_pages:
+                    sub_bytes = fbytes
+                    sub_name = fname
+                else:
+                    sub_doc = pymupdf.open()
+                    sub_doc.insert_pdf(doc, from_page=sp - 1, to_page=ep - 1)
+                    sub_bytes = sub_doc.tobytes()
+                    sub_doc.close()
+                    sub_name = _insert_before_ext(fname, f" (Pages {sp}-{ep})" if sp != ep else f" (Page {sp})")
+
+                merged['_store_file_bytes'] = sub_bytes
+                merged['_store_mime_type'] = "application/pdf"
+                merged['_store_file_name'] = sub_name
+                merged['_merge_conflict'] = conflict_note
+                merged['_num_pages'] = (ep - sp + 1)
+                bills_to_return.append(merged)
+
+            doc.close()
+            if not bills_to_return:
                 return {"filename": fname, "error": "No readable bill data found on any page."}
 
-            merged, conflict_note = _merge_multipage_bill(page_bills)
-            merged['_store_file_bytes'] = fbytes
-            merged['_store_mime_type'] = "application/pdf"
-            merged['_store_file_name'] = fname
-            merged['_merge_conflict'] = conflict_note
-            merged['_num_pages'] = num_pages
-            return {"filename": fname, "bill": merged, "error": None}
+            return {"filename": fname, "bills": bills_to_return, "error": None}
         except Exception as e:
             print(f"Error processing multi-page bill {fname}: {e}")
             return {"filename": fname, "error": str(e)}
@@ -4144,101 +4272,104 @@ def process_multipage_bill():
                 })
                 continue
 
-            inv = file_res["bill"]
-            inv["invoice_number"] = str(inv.get("invoice_number") or "N/A")[:100]
-            inv["invoice_date"] = normalize_date_ddmmyyyy(str(inv.get("invoice_date") or "N/A"))[:50]
-            inv["payment_date"] = normalize_date_ddmmyyyy(str(inv["payment_date"]))[:50] if inv.get("payment_date") else None
-            inv["vendor_name"] = str(inv.get("vendor_name") or "Unknown Vendor")[:255]
-            inv["gstin"] = normalize_gstin(str(inv.get("gstin") or "N/A")[:50], inv["vendor_name"])
-            inv["branch"] = str(inv.get("branch") or batch_branch or "Unassigned")[:100]
-            inv["state"] = str(inv.get("state") or batch_state or "Unassigned")[:100]
-            if (inv["state"] == 'Unassigned' or not inv["state"]) and inv["branch"] != 'Unassigned':
-                inv["state"] = get_branch_state(inv["branch"])
-            inv["itc_blocked"] = bool(inv.get("itc_blocked", False))
-            inv["remark"] = str(inv.get("remark") or "").strip()[:500]
-            for field in ("taxable_value", "cgst", "sgst", "igst"):
+            file_bills = file_res.get("bills") or ([file_res["bill"]] if "bill" in file_res else [])
+            for inv in file_bills:
+                bill_filename = inv.get('_store_file_name') or filename
+                inv["invoice_number"] = str(inv.get("invoice_number") or "N/A")[:100]
+                inv["invoice_date"] = normalize_date_ddmmyyyy(str(inv.get("invoice_date") or "N/A"))[:50]
+                inv["payment_date"] = normalize_date_ddmmyyyy(str(inv["payment_date"]))[:50] if inv.get("payment_date") else None
+                inv["vendor_name"] = str(inv.get("vendor_name") or "Unknown Vendor")[:255]
+                inv["gstin"] = normalize_gstin(str(inv.get("gstin") or "N/A")[:50], inv["vendor_name"])
+                resolved_branch, resolved_state = resolve_bill_branch_and_state(
+                    bill_filename, batch_branch, batch_state, inv.get("branch"), inv.get("state")
+                )
+                inv["branch"] = resolved_branch[:100]
+                inv["state"] = resolved_state[:100]
+                inv["itc_blocked"] = bool(inv.get("itc_blocked", False))
+                inv["remark"] = str(inv.get("remark") or "").strip()[:500]
+                for field in ("taxable_value", "cgst", "sgst", "igst"):
+                    try:
+                        inv[field] = float(inv.get(field) or 0.0)
+                    except (TypeError, ValueError):
+                        inv[field] = 0.0
+
+                total_gst = inv["cgst"] + inv["sgst"] + inv["igst"]
+                if inv["itc_blocked"]:
+                    eligible = 0.0
+                    ineligible = round(total_gst, 2)
+                else:
+                    eligible = round(total_gst * 0.5, 2)
+                    ineligible = round(total_gst * 0.5, 2)
+
+                fy, m = compute_billing_period(inv["invoice_date"], inv["payment_date"])
+
+                dup_id, dup_reason = find_duplicate_invoice(
+                    cur, user_id, inv["gstin"], inv["invoice_number"],
+                    inv["vendor_name"], inv["invoice_date"], inv["taxable_value"], fy
+                )
+
+                merge_warning = f"WARNING: {inv['_merge_conflict']}" if inv.get('_merge_conflict') else None
+
+                if dup_id:
+                    log_duplicate_rejection(user_id, client_id, inv, dup_id, dup_reason, 'multipage_bill_upload', filename=bill_filename, fy=fy, month=m)
+                    results.append({
+                        "id": None, "is_duplicate": True,
+                        "duplicate_of_id": dup_id if isinstance(dup_id, int) else None,
+                        "invoice_number": inv["invoice_number"], "invoice_date": inv["invoice_date"],
+                        "payment_date": inv["payment_date"], "vendor_name": inv["vendor_name"],
+                        "gstin": inv["gstin"], "branch": inv["branch"], "state": inv["state"],
+                        "taxable_value": inv["taxable_value"], "cgst": inv["cgst"], "sgst": inv["sgst"], "igst": inv["igst"],
+                        "itc_blocked": inv["itc_blocked"], "remark": inv["remark"], "has_file": False,
+                        "eligible_itc": eligible, "ineligible_itc": ineligible,
+                        "financial_year": fy, "month": m, "filename": bill_filename,
+                        "ai_model_used": inv.get("_ai_model"),
+                        "message": dup_reason + (f" -- {merge_warning}" if merge_warning else ""),
+                        "merge_conflict": inv.get('_merge_conflict')
+                    })
+                    continue
+
                 try:
-                    inv[field] = float(inv.get(field) or 0.0)
-                except (TypeError, ValueError):
-                    inv[field] = 0.0
-
-            total_gst = inv["cgst"] + inv["sgst"] + inv["igst"]
-            if inv["itc_blocked"]:
-                eligible = 0.0
-                ineligible = round(total_gst, 2)
-            else:
-                eligible = round(total_gst * 0.5, 2)
-                ineligible = round(total_gst * 0.5, 2)
-
-            fy, m = compute_billing_period(inv["invoice_date"], inv["payment_date"])
-
-            dup_id, dup_reason = find_duplicate_invoice(
-                cur, user_id, inv["gstin"], inv["invoice_number"],
-                inv["vendor_name"], inv["invoice_date"], inv["taxable_value"], fy
-            )
-
-            merge_warning = f"WARNING: {inv['_merge_conflict']}" if inv.get('_merge_conflict') else None
-
-            if dup_id:
-                log_duplicate_rejection(user_id, client_id, inv, dup_id, dup_reason, 'multipage_bill_upload', filename=filename, fy=fy, month=m)
-                results.append({
-                    "id": None, "is_duplicate": True,
-                    "duplicate_of_id": dup_id if isinstance(dup_id, int) else None,
-                    "invoice_number": inv["invoice_number"], "invoice_date": inv["invoice_date"],
-                    "payment_date": inv["payment_date"], "vendor_name": inv["vendor_name"],
-                    "gstin": inv["gstin"], "branch": inv["branch"], "state": inv["state"],
-                    "taxable_value": inv["taxable_value"], "cgst": inv["cgst"], "sgst": inv["sgst"], "igst": inv["igst"],
-                    "itc_blocked": inv["itc_blocked"], "remark": inv["remark"], "has_file": False,
-                    "eligible_itc": eligible, "ineligible_itc": ineligible,
-                    "financial_year": fy, "month": m, "filename": filename,
-                    "ai_model_used": inv.get("_ai_model"),
-                    "message": dup_reason + (f" -- {merge_warning}" if merge_warning else ""),
-                    "merge_conflict": inv.get('_merge_conflict')
-                })
-                continue
-
-            try:
-                cur.execute("SAVEPOINT sp_mpb")
-                cur.execute('''
-                    INSERT INTO invoices (user_id, client_id, invoice_number, invoice_date, payment_date, vendor_name, gstin, branch, state, taxable_value, cgst, sgst, igst, itc_blocked, remark, eligible_itc, ineligible_itc, file_data, file_mime_type, file_name, financial_year, month)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
-                ''', (user_id, client_id, inv["invoice_number"], inv["invoice_date"], inv["payment_date"], inv["vendor_name"], inv["gstin"], inv["branch"], inv["state"],
-                      inv["taxable_value"], inv["cgst"], inv["sgst"], inv["igst"], inv["itc_blocked"], inv["remark"],
-                      eligible, ineligible,
-                      psycopg2.Binary(inv['_store_file_bytes']) if inv.get('_store_file_bytes') else None,
-                      inv.get('_store_mime_type'), inv.get('_store_file_name') or filename, fy, m))
-                db_id = cur.fetchone()[0]
-                cur.execute("RELEASE SAVEPOINT sp_mpb")
-                results.append({
-                    "id": db_id, "is_duplicate": False,
-                    "invoice_number": inv["invoice_number"], "invoice_date": inv["invoice_date"],
-                    "payment_date": inv["payment_date"], "vendor_name": inv["vendor_name"],
-                    "gstin": inv["gstin"], "branch": inv["branch"], "state": inv["state"],
-                    "taxable_value": inv["taxable_value"], "cgst": inv["cgst"], "sgst": inv["sgst"], "igst": inv["igst"],
-                    "itc_blocked": inv["itc_blocked"], "remark": inv["remark"],
-                    "has_file": inv.get('_store_file_bytes') is not None,
-                    "eligible_itc": eligible, "ineligible_itc": ineligible,
-                    "financial_year": fy, "month": m,
-                    "filename": inv.get('_store_file_name') or filename,
-                    "username": session.get('username', ''),
-                    "ai_model_used": inv.get("_ai_model"),
-                    "message": merge_warning or f"Merged from {inv.get('_num_pages')} page(s)",
-                    "merge_conflict": inv.get('_merge_conflict'),
-                    "num_pages": inv.get('_num_pages')
-                })
-            except Exception as ins_err:
-                cur.execute("ROLLBACK TO SAVEPOINT sp_mpb")
-                print(f"Insert error for {filename}: {ins_err}")
-                results.append({
-                    "id": None, "is_duplicate": False, "invoice_number": "ERROR",
-                    "invoice_date": inv.get("invoice_date", "-"), "payment_date": None,
-                    "vendor_name": inv.get("vendor_name", f"Failed {filename}"), "gstin": inv.get("gstin", "N/A"),
-                    "branch": inv.get("branch", "Unassigned"), "state": inv.get("state", "Unassigned"),
-                    "taxable_value": 0.0, "cgst": 0.0, "sgst": 0.0, "igst": 0.0,
-                    "itc_blocked": False, "remark": inv.get("remark", ""), "has_file": False,
-                    "eligible_itc": 0.0, "ineligible_itc": 0.0, "filename": filename,
-                    "message": f"Database save error: {ins_err}"
-                })
+                    cur.execute("SAVEPOINT sp_mpb")
+                    cur.execute('''
+                        INSERT INTO invoices (user_id, client_id, invoice_number, invoice_date, payment_date, vendor_name, gstin, branch, state, taxable_value, cgst, sgst, igst, itc_blocked, remark, eligible_itc, ineligible_itc, file_data, file_mime_type, file_name, financial_year, month)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
+                    ''', (user_id, client_id, inv["invoice_number"], inv["invoice_date"], inv["payment_date"], inv["vendor_name"], inv["gstin"], inv["branch"], inv["state"],
+                          inv["taxable_value"], inv["cgst"], inv["sgst"], inv["igst"], inv["itc_blocked"], inv["remark"],
+                          eligible, ineligible,
+                          psycopg2.Binary(inv['_store_file_bytes']) if inv.get('_store_file_bytes') else None,
+                          inv.get('_store_mime_type'), bill_filename, fy, m))
+                    db_id = cur.fetchone()[0]
+                    cur.execute("RELEASE SAVEPOINT sp_mpb")
+                    results.append({
+                        "id": db_id, "is_duplicate": False,
+                        "invoice_number": inv["invoice_number"], "invoice_date": inv["invoice_date"],
+                        "payment_date": inv["payment_date"], "vendor_name": inv["vendor_name"],
+                        "gstin": inv["gstin"], "branch": inv["branch"], "state": inv["state"],
+                        "taxable_value": inv["taxable_value"], "cgst": inv["cgst"], "sgst": inv["sgst"], "igst": inv["igst"],
+                        "itc_blocked": inv["itc_blocked"], "remark": inv["remark"],
+                        "has_file": inv.get('_store_file_bytes') is not None,
+                        "eligible_itc": eligible, "ineligible_itc": ineligible,
+                        "financial_year": fy, "month": m,
+                        "filename": bill_filename,
+                        "username": session.get('username', ''),
+                        "ai_model_used": inv.get("_ai_model"),
+                        "message": merge_warning or f"Merged from {inv.get('_num_pages')} page(s)",
+                        "merge_conflict": inv.get('_merge_conflict'),
+                        "num_pages": inv.get('_num_pages')
+                    })
+                except Exception as ins_err:
+                    cur.execute("ROLLBACK TO SAVEPOINT sp_mpb")
+                    print(f"Insert error for {bill_filename}: {ins_err}")
+                    results.append({
+                        "id": None, "is_duplicate": False, "invoice_number": "ERROR",
+                        "invoice_date": inv.get("invoice_date", "-"), "payment_date": None,
+                        "vendor_name": inv.get("vendor_name", f"Failed {bill_filename}"), "gstin": inv.get("gstin", "N/A"),
+                        "branch": inv.get("branch", "Unassigned"), "state": inv.get("state", "Unassigned"),
+                        "taxable_value": 0.0, "cgst": 0.0, "sgst": 0.0, "igst": 0.0,
+                        "itc_blocked": False, "remark": inv.get("remark", ""), "has_file": False,
+                        "eligible_itc": 0.0, "ineligible_itc": 0.0, "filename": bill_filename,
+                        "message": f"Database save error: {ins_err}"
+                    })
 
         conn.commit()
         cur.close()
@@ -7928,8 +8059,6 @@ def get_expense_codes_master():
 @app.route('/api/expense-codes-master', methods=['POST'])
 @login_required
 def add_expense_code_master():
-    if not is_admin_user():
-        return jsonify({"error": "Adding or editing expense PL codes is restricted to Administrator users only."}), 403
 
     data = request.json or {}
     code = str(data.get('code', '')).strip().upper()

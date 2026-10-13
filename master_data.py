@@ -1,4 +1,5 @@
 # Master directory extracted from official Nutan Nagrik Bank reference files
+import re
 
 MASTER_BRANCHES = [
     {
@@ -488,6 +489,62 @@ def get_branch_state(branch_name):
     if 'ANDHERI' in b_upper or 'MAHARASHTRA' in b_upper or 'MAHARASTRA' in b_upper:
         return 'Maharashtra'
     return 'Gujarat'
+
+def match_master_branch(branch_query):
+    """Matches an extracted or folder branch string against official MASTER_BRANCHES.
+    Handles common spelling variations (e.g. ASHARAM ROAD -> ASHRAM ROAD, SATELLITE -> SATTELITE).
+    Returns the canonical branch dict {'name': ..., 'state': ...} if valid, or None if invalid/unknown."""
+    if not branch_query:
+        return None
+    b_raw = str(branch_query).strip()
+    b_clean = re.sub(r'[^A-Za-z0-9]', '', b_raw).upper()
+    if not b_clean or b_clean in ('UNASSIGNED', 'NONE', 'NULL', 'UNKNOWN'):
+        return None
+
+    # Common spelling alias mappings for Nutan Bank branches
+    aliases = {
+        'ASHARAMROAD': 'ASHRAM ROAD',
+        'ASHRAMROAD': 'ASHRAM ROAD',
+        'SATELLITE': 'SATTELITE',
+        'SATTELITE': 'SATTELITE',
+        'CHANDKHEDA': 'CHANDKHEDA',
+        'ANDHERI': 'ANDHERI-MAHARASTRA',
+        'ANDHERIMAHARASHTRA': 'ANDHERI-MAHARASTRA',
+        'ANDHERIMAHARASTRA': 'ANDHERI-MAHARASTRA',
+        'DRIVEIN': 'DRIVE IN',
+        'LAWGARDEN': 'LAW GARDEN',
+        'NEWCLOTH': 'NEW CLOTH',
+        'SHANTICOMMERCIAL': 'SHANTI COMMERCIAL',
+        'SHARDAMANDIR': 'SHARDA MANDIR',
+        'PANJRAPOLE': 'PANJARAPOLE',
+        'PANJARAPOLE': 'PANJARAPOLE',
+    }
+    if b_clean in aliases:
+        target_name = aliases[b_clean]
+        for b in MASTER_BRANCHES:
+            if b['name'] == target_name:
+                return b
+
+    # Direct match by name
+    b_upper = b_raw.upper()
+    for b in MASTER_BRANCHES:
+        if b['name'] == b_upper:
+            return b
+
+    # Clean match without punctuation/spaces
+    for b in MASTER_BRANCHES:
+        mb_clean = re.sub(r'[^A-Za-z0-9]', '', b['name']).upper()
+        if mb_clean == b_clean:
+            return b
+
+    # Substring match if clean string is distinctive (>= 5 chars)
+    if len(b_clean) >= 5:
+        for b in MASTER_BRANCHES:
+            mb_clean = re.sub(r'[^A-Za-z0-9]', '', b['name']).upper()
+            if b_clean in mb_clean or mb_clean in b_clean:
+                return b
+
+    return None
 
 def match_master_vendor(vendor_name_query, gstin_query="", extra_vendors=None):
     """Fuzzy matches an extracted vendor name or partial GSTIN against the 91

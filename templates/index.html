@@ -325,7 +325,10 @@
                         <button class="btn btn-secondary" id="btn-add-manual">
                             <i class="fa-solid fa-pen-to-square"></i> Add Manual Bill
                         </button>
-                        <button class="btn btn-secondary" id="btn-multipage-bill" title="For a single bill that spans several physical pages -- all pages are scanned and merged into one bill, with the final amount from the last page">
+                        <button class="btn btn-secondary" id="btn-open-expense-codes-top" title="View, search, or add official bank PL codes (also available in Remarks)">
+                            <i class="fa-solid fa-list-check"></i> Manage PL Codes
+                        </button>
+                        <button class="btn btn-secondary" id="btn-multipage-bill" title="For bills spanning multiple pages or a single PDF containing multiple 2-3 page bills">
                             <i class="fa-solid fa-file-lines"></i> Multi-Page Bill
                         </button>
                         <button class="btn btn-secondary" id="btn-vendor-directory" title="See which vendors each branch has actually billed from, with GSTIN and totals">
@@ -454,11 +457,9 @@
                         <span class="row-count">Tally Purchase Bills against each branch's own PL ledger, branch-wise and code-wise</span>
                     </div>
                     <div class="toolbar-right">
-                        {% if is_admin %}
                         <button class="btn btn-secondary" id="btn-manage-expense-codes" title="Manage the shared PL code catalog (also used by Income & Output GST)">
                             <i class="fa-solid fa-list-check"></i> Manage PL Codes
                         </button>
-                        {% endif %}
                         <button class="btn btn-secondary" id="btn-refresh-gl-tally">
                             <i class="fa-solid fa-arrows-rotate"></i> Refresh Tally
                         </button>
@@ -755,7 +756,7 @@
                 <div class="form-field">
                     <label for="mb-gl-code">
                         PL Code <span class="field-hint">(optional &mdash; for branch expense tally)</span>
-                        {% if is_admin %}<button type="button" class="link-btn" id="mb-manage-expense-codes-btn">Manage codes</button>{% endif %}
+                        <button type="button" class="link-btn" id="mb-quick-add-pl-code-btn" style="margin-left: 8px; font-weight: 600;"><i class="fa-solid fa-plus-circle"></i> + Add New PL Code</button>
                     </label>
                     <select id="mb-gl-code">
                         <option value="">-- No PL code --</option>
@@ -772,23 +773,20 @@
         </div>
     </div>
 
-    <!-- Multi-Page Bill Upload Modal - kept entirely separate from the
-         regular bulk-upload panel, where every PDF page is treated as its
-         own independent bill (a scanned stack of many one-page bills).
-         Here, ALL pages of each uploaded PDF are merged into ONE bill
-         record, with the final amount taken from the last page. -->
+    <!-- Multi-Page Bill Upload Modal - supports single bill per PDF,
+         manual page range grouping (e.g. 1-2, 3-5), or auto-detection of 2-3 page bills. -->
     <div class="modal-overlay" id="multipage-bill-overlay" style="display: none;">
         <div class="modal-card">
             <div class="modal-header">
-                <h3><i class="fa-solid fa-file-lines"></i> Upload Multi-Page Bill</h3>
+                <h3><i class="fa-solid fa-file-lines"></i> Upload &amp; Split Multi-Page Bills</h3>
                 <button type="button" class="modal-close" id="multipage-bill-close" aria-label="Close">
                     <i class="fa-solid fa-xmark"></i>
                 </button>
             </div>
 
             <div class="modal-body">
-                <p class="panel-subtitle" style="margin-bottom: 16px;">
-                    For a single bill that spans several physical pages (e.g. a 3-page tax invoice). Each PDF you pick here is treated as ONE bill, not several &mdash; all its pages are scanned and merged, with the final amount taken from the last page. Upload multiple PDFs at once if you have several such bills.
+                <p class="panel-subtitle" style="margin-bottom: 14px;">
+                    Scan multi-page bills (e.g. 2–3 page tax invoices) or a batch PDF containing multiple multi-page bills.
                 </p>
 
                 <div class="form-grid">
@@ -803,15 +801,43 @@
                     <div class="form-field">
                         <label for="mpb-branch">Branch</label>
                         <div class="autocomplete-wrapper" id="mpb-branch-wrapper">
-                            <input type="text" id="mpb-branch" placeholder="Select or type branch (e.g. Ashram Road)" autocomplete="off">
+                            <input type="text" id="mpb-branch" placeholder="Select or type branch (e.g. Ashram Road, Chandkheda)" autocomplete="off">
                             <ul class="autocomplete-dropdown" id="mpb-branch-dropdown"></ul>
                         </div>
                     </div>
                 </div>
 
-                <div class="form-field">
+                <div class="form-field" style="margin-top: 10px;">
                     <label for="mpb-file-input">Multi-page bill PDF(s)</label>
                     <input type="file" id="mpb-file-input" accept="application/pdf" multiple>
+                </div>
+
+                <div class="form-field" style="margin-top: 12px;">
+                    <label style="font-weight: 600; margin-bottom: 6px; display: block;"><i class="fa-solid fa-scissors"></i> Bill Splitting Option</label>
+                    <div style="display: flex; flex-direction: column; gap: 8px; background: #f8fafc; padding: 12px; border-radius: 8px; border: 1px solid var(--border-color);">
+                        <label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer; font-size: 13px;">
+                            <input type="radio" name="mpb-split-mode" value="single" checked style="margin-top: 3px;">
+                            <span><strong>Single Bill per File</strong> &mdash; All pages in the PDF belong to 1 bill (takes total amount from last page)</span>
+                        </label>
+                        <label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer; font-size: 13px;">
+                            <input type="radio" name="mpb-split-mode" value="ranges" style="margin-top: 3px;">
+                            <span><strong>Manual Page Ranges</strong> &mdash; Specify page ranges for each bill (e.g. <code>1-2, 3-5, 6, 7-8</code>)</span>
+                        </label>
+                        <label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer; font-size: 13px;">
+                            <input type="radio" name="mpb-split-mode" value="auto" style="margin-top: 3px;">
+                            <span><strong>Auto-Identify &amp; Split</strong> &mdash; Automatically detect where each new bill begins and group 2&ndash;3 page bills</span>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="form-field" id="mpb-ranges-container" style="display: none; margin-top: 10px;">
+                    <label for="mpb-page-ranges" style="font-weight: 600;">
+                        Specify Page Groups <span class="field-hint">(comma-separated ranges)</span>
+                    </label>
+                    <input type="text" id="mpb-page-ranges" placeholder="e.g. 1-2, 3-5, 6, 7-8" class="form-control" autocomplete="off" style="width: 100%; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 13px;">
+                    <small style="color: #64748b; font-size: 11.5px; display: block; margin-top: 4px;">
+                        Example: If a 5-page PDF has a 2-page bill followed by a 3-page bill, enter <code>1-2, 3-5</code>. Each range will be saved as its own bill with its own bill copy attached.
+                    </small>
                 </div>
 
                 <div class="modal-footer">
@@ -1149,6 +1175,10 @@
             </div>
         </div>
     </div>
+
+    <datalist id="remark-suggestions"></datalist>
+    <datalist id="vendor-suggestions"></datalist>
+    <datalist id="branch-suggestions"></datalist>
 
     <script>
         window.IS_ADMIN = {{ 'true' if is_admin else 'false' }};

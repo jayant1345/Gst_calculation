@@ -191,18 +191,30 @@ document.addEventListener('DOMContentLoaded', () => {
     const glCodeSearchInput = document.getElementById('glCodeSearchInput');
     const glCodeSearchCount = document.getElementById('glCodeSearchCount');
 
-    function openGlCodesModal() {
+    function openGlCodesModal(targetSelectEl) {
+        if (targetSelectEl && targetSelectEl instanceof HTMLElement) {
+            window.lastActiveGlSelect = targetSelectEl;
+        }
         if (!glCodesModalOverlay) return;
         glCodesModalOverlay.style.display = 'flex';
         renderGlCodesTable();
     }
+    window.openGlCodesModal = openGlCodesModal;
+
     function closeGlCodesModal() {
         if (glCodesModalOverlay) glCodesModalOverlay.style.display = 'none';
     }
 
-    ['btn-manage-expense-codes', 'mb-manage-expense-codes-btn'].forEach(id => {
+    ['btn-manage-expense-codes', 'mb-manage-expense-codes-btn', 'btn-open-expense-codes-top', 'mb-quick-add-pl-code-btn'].forEach(id => {
         const btn = document.getElementById(id);
-        if (btn) btn.addEventListener('click', (e) => { e.preventDefault(); openGlCodesModal(); });
+        if (btn) btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            if (id === 'mb-quick-add-pl-code-btn') {
+                openGlCodesModal(document.getElementById('mb-gl-code'));
+            } else {
+                openGlCodesModal();
+            }
+        });
     });
     if (glCodesModalClose) glCodesModalClose.addEventListener('click', closeGlCodesModal);
     if (glCodesModalOverlay) {
@@ -291,7 +303,18 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
                 return window.loadGlPlCodes();
             })
-            .then(() => renderGlCodesTable())
+            .then(() => {
+                if (window.lastActiveGlSelect) {
+                    try {
+                        window.lastActiveGlSelect.value = code;
+                        window.lastActiveGlSelect.dispatchEvent(new Event('change', { bubbles: true }));
+                    } catch (e) {
+                        console.warn('Could not auto-select new GL code on active select element:', e);
+                    }
+                    window.lastActiveGlSelect = null;
+                }
+                renderGlCodesTable();
+            })
             .catch(err => {
                 if (glCodeFormMsg) {
                     glCodeFormMsg.style.display = 'block';
