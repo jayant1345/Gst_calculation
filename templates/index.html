@@ -325,7 +325,7 @@
                         <button class="btn btn-secondary" id="btn-add-manual">
                             <i class="fa-solid fa-pen-to-square"></i> Add Manual Bill
                         </button>
-                        <button class="btn btn-secondary" id="btn-open-expense-codes-top" title="View, search, or add official bank PL codes (also available in Remarks)">
+                        <button class="btn btn-secondary" id="btn-open-expense-codes-top" title="View, search, or add official bank Expense PL codes">
                             <i class="fa-solid fa-list-check"></i> Manage PL Codes
                         </button>
                         <button class="btn btn-secondary" id="btn-multipage-bill" title="For bills spanning multiple pages or a single PDF containing multiple 2-3 page bills">
@@ -1176,7 +1176,15 @@
         </div>
     </div>
 
-    <datalist id="remark-suggestions"></datalist>
+    <datalist id="remark-suggestions">
+        <option value="BLOCKED CREDIT"></option>
+        <option value="CREDIT TAKEN UNDER WRONG HEAD"></option>
+        <option value="GST NUMBER NOT MENTIONED"></option>
+        <option value="INCORRECT GST NUMBER"></option>
+        <option value="INVOICE NOT AVAILABLE"></option>
+        <option value="PERFORMA INVOICE"></option>
+        <option value="REPEATED BILL"></option>
+    </datalist>
     <datalist id="vendor-suggestions"></datalist>
     <datalist id="branch-suggestions"></datalist>
 

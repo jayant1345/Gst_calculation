@@ -597,3 +597,14 @@ def normalize_gstin(gstin_raw, vendor_name=""):
             
     return cleaned if cleaned else 'N/A'
 
+
+# Official CA Audit Remarks for Purchase Bills
+MASTER_REMARKS = [
+    "BLOCKED CREDIT",
+    "CREDIT TAKEN UNDER WRONG HEAD",
+    "GST NUMBER NOT MENTIONED",
+    "INCORRECT GST NUMBER",
+    "INVOICE NOT AVAILABLE",
+    "PERFORMA INVOICE",
+    "REPEATED BILL"
+]

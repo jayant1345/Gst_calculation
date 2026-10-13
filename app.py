@@ -19,7 +19,7 @@ import psycopg2
 import psycopg2.extras
 from werkzeug.security import generate_password_hash, check_password_hash
 from functools import wraps
-from master_data import MASTER_BRANCHES, MASTER_VENDORS, get_branch_state, match_master_vendor, normalize_gstin, match_master_branch
+from master_data import MASTER_BRANCHES, MASTER_VENDORS, get_branch_state, match_master_vendor, normalize_gstin, match_master_branch, MASTER_REMARKS
 
 # Load environment variables
 load_dotenv()
@@ -763,6 +763,9 @@ def init_db():
             );
         ''')
         cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_remark_master_unique ON remark_master(client_id, LOWER(remark));")
+        for r in MASTER_REMARKS:
+            cur.execute("INSERT INTO remark_master (client_id, remark) VALUES (%s, %s) ON CONFLICT (client_id, LOWER(remark)) DO NOTHING;", ('nutan_nagrik', r))
+        cur.execute("DELETE FROM remark_master WHERE UPPER(remark) NOT IN %s;", (tuple(MASTER_REMARKS),))
 
         conn.commit()
 
@@ -2104,17 +2107,8 @@ def get_combined_vendors(client_id):
     return [v for v in MASTER_VENDORS if v['name'].strip().lower() not in extra_names] + extra
 
 def get_remarks_for_client(client_id):
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute('SELECT remark FROM remark_master WHERE client_id = %s ORDER BY remark', (client_id,))
-        remarks = [row[0] for row in cur.fetchall()]
-        cur.close()
-        conn.close()
-        return remarks
-    except Exception as e:
-        print(f"Note: could not load remark_master: {e}")
-        return []
+    """Returns strictly the official CA audit remarks shown in reference."""
+    return list(MASTER_REMARKS)
 
 @app.route('/api/master-data', methods=['GET'])
 @login_required
@@ -2668,10 +2662,10 @@ def save_invoice():
         # Remember this remark for future autocomplete suggestions - fully
         # automatic (unlike vendors) since a free-text note carries no risk
         # of mis-attributing data to a future bill.
-        if remark:
+        if remark and remark.strip().upper() in MASTER_REMARKS:
             cur.execute(
                 'INSERT INTO remark_master (client_id, remark) VALUES (%s, %s) ON CONFLICT (client_id, LOWER(remark)) DO NOTHING',
-                (client_id, remark)
+                (client_id, remark.strip().upper())
             )
 
         conn.commit()

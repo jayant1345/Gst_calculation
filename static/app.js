@@ -437,34 +437,25 @@ document.addEventListener('DOMContentLoaded', () => {
             });
     }
 
-    // Master Branches & Vendors Directory
+    // Official CA Audit Remarks for Purchase Bills (from CA reference list)
+    const MASTER_REMARKS = [
+        'BLOCKED CREDIT',
+        'CREDIT TAKEN UNDER WRONG HEAD',
+        'GST NUMBER NOT MENTIONED',
+        'INCORRECT GST NUMBER',
+        'INVOICE NOT AVAILABLE',
+        'PERFORMA INVOICE',
+        'REPEATED BILL'
+    ];
     let masterBranches = [];
     let masterVendors = [];
-    let masterRemarks = [];
+    let masterRemarks = [...MASTER_REMARKS];
 
     function updateRemarkSuggestionsDatalist() {
         const dl = document.getElementById('remark-suggestions');
         if (!dl) return;
-        const options = [];
-        const seen = new Set();
-        (window.glPlCodes || []).forEach(c => {
-            const entry1 = `${c.code} - ${c.particulars}`;
-            if (!seen.has(entry1)) {
-                seen.add(entry1);
-                options.push(`<option value="${escapeHtml(entry1)}">Expense PL Code</option>`);
-            }
-            if (c.particulars && !seen.has(c.particulars)) {
-                seen.add(c.particulars);
-                options.push(`<option value="${escapeHtml(c.particulars)}">PL ${escapeHtml(c.code)}</option>`);
-            }
-        });
-        (masterRemarks || []).forEach(r => {
-            if (r && !seen.has(r)) {
-                seen.add(r);
-                options.push(`<option value="${escapeHtml(r)}"></option>`);
-            }
-        });
-        dl.innerHTML = options.join('');
+        const remarks = (masterRemarks && masterRemarks.length > 0) ? masterRemarks : MASTER_REMARKS;
+        dl.innerHTML = remarks.map(r => `<option value="${escapeHtml(r)}"></option>`).join('');
     }
     window.updateRemarkSuggestionsDatalist = updateRemarkSuggestionsDatalist;
 
@@ -491,7 +482,6 @@ document.addEventListener('DOMContentLoaded', () => {
             .then(data => {
                 window.glPlCodes = data.codes || [];
                 populateGlCodeDropdowns();
-                updateRemarkSuggestionsDatalist();
             })
             .catch(err => console.error("Error loading Expense PL codes:", err));
     }
@@ -711,49 +701,33 @@ document.addEventListener('DOMContentLoaded', () => {
         // 4. Manual Bill modal Remark / Reason input -- provides both saved remarks
         // and bank Expense PL codes so users can easily select standard expense categories.
         // Selecting a PL code automatically sets the PL Code dropdown as well.
+        // 4. Manual Bill modal Remark / Reason input
+        // Shows strictly the 7 official CA audit remarks from reference:
+        // BLOCKED CREDIT, CREDIT TAKEN UNDER WRONG HEAD, GST NUMBER NOT MENTIONED,
+        // INCORRECT GST NUMBER, INVOICE NOT AVAILABLE, PERFORMA INVOICE, REPEATED BILL.
         const mbRemarkInput = document.getElementById('mb-remark');
         const mbRemarkDropdown = document.getElementById('mb-remark-dropdown');
-        const mbGlCodeSelect = document.getElementById('mb-gl-code');
         if (mbRemarkInput && mbRemarkDropdown) {
             setupAutocomplete({
                 inputEl: mbRemarkInput,
                 dropdownEl: mbRemarkDropdown,
                 getItems: (query) => {
                     const q = (query || '').toLowerCase().trim();
-                    const results = [];
-                    // 1. PL Codes
-                    const plMatches = (window.glPlCodes || []).filter(c =>
-                        !q || c.code.toLowerCase().includes(q) || (c.particulars || '').toLowerCase().includes(q)
-                    ).slice(0, 10);
-                    plMatches.forEach(c => {
-                        results.push({
-                            text: `${c.code} - ${c.particulars}`,
-                            subtext: c.category ? `Category: ${c.category}` : 'Expense PL Code',
-                            badge: 'PL Code',
-                            badgeClass: 'gujarat',
-                            data: c
-                        });
-                    });
-                    // 2. Master Remarks
-                    const remarkMatches = masterRemarks.filter(r =>
-                        !q || r.toLowerCase().includes(r.toLowerCase() ? q : '')
-                    ).slice(0, 10);
-                    remarkMatches.forEach(r => {
-                        if (!results.some(x => x.text === r)) {
-                            results.push({
-                                text: r,
-                                subtext: '',
-                                badge: '',
-                                badgeClass: '',
-                                data: null
-                            });
-                        }
-                    });
-                    return results;
+                    const remarks = (masterRemarks && masterRemarks.length > 0) ? masterRemarks : MASTER_REMARKS;
+                    const matches = q
+                        ? remarks.filter(r => r.toLowerCase().includes(q))
+                        : remarks;
+                    return matches.map(r => ({
+                        text: r,
+                        subtext: '',
+                        badge: 'Audit Remark',
+                        badgeClass: r === 'BLOCKED CREDIT' ? 'error' : 'gujarat'
+                    }));
                 },
                 onSelect: (item) => {
-                    if (item.data && item.data.code && mbGlCodeSelect) {
-                        mbGlCodeSelect.value = item.data.code;
+                    if (item.text === 'BLOCKED CREDIT') {
+                        const blockedCheckbox = document.getElementById('mb-itc-blocked');
+                        if (blockedCheckbox) blockedCheckbox.checked = true;
                     }
                 }
             });
@@ -2093,19 +2067,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 });
             }
 
-            // Sync Remark selection to PL Code dropdown if a PL code is picked in Remark
+            // If Remark is marked 'BLOCKED CREDIT', automatically check the ITC blocked box
             const remarkInputRow = tr.querySelector('.field-remark');
-            if (remarkInputRow && glCodeSelect) {
+            const itcBlockedRow = tr.querySelector('.field-itc-blocked');
+            if (remarkInputRow && itcBlockedRow) {
                 remarkInputRow.addEventListener('change', () => {
-                    const val = remarkInputRow.value.trim().toLowerCase();
-                    if (!val) return;
-                    const matchedCode = (window.glPlCodes || []).find(c =>
-                        c.code.toLowerCase() === val ||
-                        (c.particulars && c.particulars.toLowerCase() === val) ||
-                        `${c.code} - ${c.particulars}`.toLowerCase() === val
-                    );
-                    if (matchedCode && (!glCodeSelect.value || glCodeSelect.value !== matchedCode.code)) {
-                        glCodeSelect.value = matchedCode.code;
+                    const val = remarkInputRow.value.trim().toUpperCase();
+                    if (val === 'BLOCKED CREDIT' && !itcBlockedRow.checked) {
+                        itcBlockedRow.checked = true;
                         updateStateFromRow(tr, inv.id);
                     }
                 });
