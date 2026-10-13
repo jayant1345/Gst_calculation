@@ -2717,6 +2717,10 @@ document.addEventListener('DOMContentLoaded', () => {
         if (manualBillModalTitle) manualBillModalTitle.textContent = 'Add Manual Bill';
         if (manualBillSaveLabel) manualBillSaveLabel.textContent = 'Save Bill';
         manualBillForm.reset();
+        const bulkBanner = document.querySelector('.manual-bulk-banner');
+        const bulkDivider = document.getElementById('manual-bulk-divider');
+        if (bulkBanner) bulkBanner.style.display = 'flex';
+        if (bulkDivider) bulkDivider.style.display = 'flex';
         if (stateInput && document.getElementById('mb-state')) document.getElementById('mb-state').value = stateInput.value.trim();
         if (branchInput && document.getElementById('mb-branch')) document.getElementById('mb-branch').value = branchInput.value.trim();
         mbDirectFields.style.display = 'none';
@@ -2738,6 +2742,10 @@ document.addEventListener('DOMContentLoaded', () => {
         if (manualBillModalTitle) manualBillModalTitle.textContent = 'Edit Bill';
         if (manualBillSaveLabel) manualBillSaveLabel.textContent = 'Update Bill';
         manualBillForm.reset();
+        const bulkBanner = document.querySelector('.manual-bulk-banner');
+        const bulkDivider = document.getElementById('manual-bulk-divider');
+        if (bulkBanner) bulkBanner.style.display = 'none';
+        if (bulkDivider) bulkDivider.style.display = 'none';
 
         document.getElementById('mb-invoice-number').value = inv.invoice_number || '';
         document.getElementById('mb-state').value = inv.state || '';
@@ -2805,6 +2813,63 @@ document.addEventListener('DOMContentLoaded', () => {
     manualBillOverlay.addEventListener('click', (e) => {
         if (e.target === manualBillOverlay) closeManualBillModal();
     });
+
+    // Bulk Manual Bill upload via specimen Excel / CSV
+    const btnUploadBulkManual = document.getElementById('btn-upload-bulk-manual');
+    const mbBulkFileInput = document.getElementById('mb-bulk-file-input');
+    if (btnUploadBulkManual && mbBulkFileInput) {
+        btnUploadBulkManual.addEventListener('click', () => {
+            mbBulkFileInput.value = '';
+            mbBulkFileInput.click();
+        });
+
+        mbBulkFileInput.addEventListener('change', async () => {
+            const file = mbBulkFileInput.files && mbBulkFileInput.files[0];
+            if (!file) return;
+
+            const originalHtml = btnUploadBulkManual.innerHTML;
+            btnUploadBulkManual.disabled = true;
+            btnUploadBulkManual.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Uploading...';
+
+            try {
+                const formData = new FormData();
+                formData.append('file', file);
+                if (currentClientId) {
+                    formData.append('client_id', currentClientId);
+                }
+
+                const response = await fetch('/api/bulk-manual-bills-upload', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await response.json().catch(() => ({}));
+
+                if (!response.ok || !data.success) {
+                    throw new Error(data.error || 'Failed to process bulk manual bill upload.');
+                }
+
+                let msg = `Successfully added ${data.added_count} manual bill(s).`;
+                if (data.skipped_duplicates > 0) {
+                    msg += `\n(${data.skipped_duplicates} duplicate bill(s) skipped)`;
+                }
+                if (data.error_count > 0) {
+                    msg += `\n(${data.error_count} row(s) had errors)`;
+                }
+                alert(msg);
+
+                closeManualBillModal();
+                loadInvoices();
+            } catch (err) {
+                console.error('Error during bulk manual upload:', err);
+                alert(err.message || 'An error occurred during bulk manual upload.');
+            } finally {
+                btnUploadBulkManual.disabled = false;
+                btnUploadBulkManual.innerHTML = originalHtml;
+                mbBulkFileInput.value = '';
+            }
+        });
+    }
 
     // ---- Multi-Page Bill Upload (a single bill spanning several physical
     // pages, e.g. a 3-page tax invoice) -- entirely separate from the

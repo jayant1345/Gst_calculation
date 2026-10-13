@@ -615,6 +615,33 @@
             </div>
 
             <form id="manual-bill-form" class="modal-body">
+                <!-- Bulk Manual Bill Entry Banner -->
+                <div class="manual-bulk-banner" style="background: #f0fdf4; border: 1.5px dashed #86efac; border-radius: 8px; padding: 12px 16px; margin-bottom: 16px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
+                    <div>
+                        <div style="font-weight: 700; color: #166534; font-size: 13.5px; display: flex; align-items: center; gap: 6px;">
+                            <i class="fa-solid fa-file-excel" style="font-size: 16px; color: #15803d;"></i> Bulk Entry via Excel / CSV
+                        </div>
+                        <p style="margin: 3px 0 0; font-size: 12px; color: #15803d;">
+                            Have multiple manual bills? Download the specimen sheet, enter your bills, and upload for one-click bulk entry.
+                        </p>
+                    </div>
+                    <div style="display: flex; gap: 8px; align-items: center;">
+                        <a href="/api/download-manual-bill-specimen" class="btn btn-secondary" id="btn-download-specimen" style="font-size: 12px; padding: 6px 12px; text-decoration: none; border-color: #86efac; color: #166534; background: #fff;" download>
+                            <i class="fa-solid fa-download"></i> Download Specimen
+                        </a>
+                        <button type="button" class="btn btn-primary" id="btn-upload-bulk-manual" style="font-size: 12px; padding: 6px 14px; background: #16a34a; border-color: #15803d;">
+                            <i class="fa-solid fa-file-arrow-up"></i> Upload Excel / CSV
+                        </button>
+                        <input type="file" id="mb-bulk-file-input" accept=".xlsx,.xls,.csv" style="display: none;">
+                    </div>
+                </div>
+
+                <div id="manual-bulk-divider" style="display: flex; align-items: center; text-align: center; margin-bottom: 16px; color: #94a3b8; font-size: 12px;">
+                    <div style="flex: 1; border-bottom: 1px solid #e2e8f0;"></div>
+                    <span style="padding: 0 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">OR Enter Single Bill Manually Below</span>
+                    <div style="flex: 1; border-bottom: 1px solid #e2e8f0;"></div>
+                </div>
+
                 <div class="form-grid">
                     <div class="form-field">
                         <label for="mb-invoice-number">Invoice Number</label>

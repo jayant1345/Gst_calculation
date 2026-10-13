@@ -1653,6 +1653,7 @@ def parse_excel_register(file_bytes):
     payment_date_cols = ["paymentdate", "paiddate", "datepaid", "paymentdt"]
     itc_blocked_cols = ["itcblocked", "gstblocked", "blocked", "noitc", "itcineligible"]
     remark_cols = ["remark", "remarks", "reason", "reasons", "note", "notes", "comment", "comments"]
+    gl_code_cols = ["plcode", "glcode", "expensecode", "pl", "gl", "plno", "accountcode", "expensehead"]
 
     col_num = find_column(inv_num_cols)
     col_date = find_column(inv_date_cols)
@@ -1667,6 +1668,7 @@ def parse_excel_register(file_bytes):
     col_payment_date = find_column(payment_date_cols)
     col_itc_blocked = find_column(itc_blocked_cols)
     col_remark = find_column(remark_cols)
+    col_gl_code = find_column(gl_code_cols)
 
     # Positional fallback only makes sense for legacy 3-column registers (vendor, invoice no,
     # date with no headers). It's intentionally NOT applied to invoice number, since manual-bill
@@ -1687,6 +1689,7 @@ def parse_excel_register(file_bytes):
             state = str(row[col_state]).strip() if col_state and pd.notna(row[col_state]) else None
             itc_blocked = str(row[col_itc_blocked]).strip().lower() in ('yes', 'true', '1', 'y') if col_itc_blocked and pd.notna(row[col_itc_blocked]) else False
             remark = str(row[col_remark]).strip() if col_remark and pd.notna(row[col_remark]) else ''
+            gl_code = str(row[col_gl_code]).strip() if col_gl_code and pd.notna(row[col_gl_code]) else ''
 
             taxable = float(row[col_taxable]) if col_taxable and pd.notna(row[col_taxable]) else 0.0
             cgst = float(row[col_cgst]) if col_cgst and pd.notna(row[col_cgst]) else 0.0
@@ -1703,6 +1706,7 @@ def parse_excel_register(file_bytes):
                 "state": state,
                 "itc_blocked": itc_blocked,
                 "remark": remark,
+                "gl_code": gl_code,
                 "taxable_value": taxable,
                 "cgst": cgst,
                 "sgst": sgst,
@@ -2693,6 +2697,251 @@ def save_invoice():
     except Exception as e:
         print(f"Error saving invoice: {e}")
         return jsonify({"error": friendly_error_message(e)}), 500
+
+
+def generate_manual_bill_specimen_bytes():
+    """Generates an official styled .xlsx specimen workbook with sample bills and instructions."""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Manual_Bill_Entry_Specimen"
+    ws.views.sheetView[0].showGridLines = True
+
+    headers = [
+        "Branch", "State", "GSTIN", "Invoice Number", "Invoice Date",
+        "Payment Date", "Party Name", "Taxable Value", "CGST", "SGST",
+        "IGST", "ITC Blocked", "Remark", "PL Code"
+    ]
+
+    header_fill = openpyxl.styles.PatternFill(start_color="1E3A8A", end_color="1E3A8A", fill_type="solid")
+    header_font = openpyxl.styles.Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+    thin_border = openpyxl.styles.Border(
+        left=openpyxl.styles.Side(style="thin", color="CBD5E1"),
+        right=openpyxl.styles.Side(style="thin", color="CBD5E1"),
+        top=openpyxl.styles.Side(style="thin", color="CBD5E1"),
+        bottom=openpyxl.styles.Side(style="thin", color="CBD5E1")
+    )
+    align_center = openpyxl.styles.Alignment(horizontal="center", vertical="center")
+    align_left = openpyxl.styles.Alignment(horizontal="left", vertical="center")
+    align_right = openpyxl.styles.Alignment(horizontal="right", vertical="center")
+
+    ws.append(headers)
+    for col_idx in range(1, len(headers) + 1):
+        cell = ws.cell(row=1, column=col_idx)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = align_center
+        cell.border = thin_border
+    ws.row_dimensions[1].height = 26
+
+    sample_rows = [
+        ["CHANDKHEDA", "Gujarat", "24AAACN1234F1Z5", "INV-2024-001", "15/07/2024", "20/07/2024", "SHREE RAM PRINTERS", 10000.00, 900.00, 900.00, 0.00, "No", "", "42100"],
+        ["ASHRAM ROAD", "Gujarat", "27AABCS5678K1Z2", "MUM-9842", "02/08/2024", "10/08/2024", "TATA COMMUNICATIONS LTD", 25000.00, 0.00, 0.00, 4500.00, "No", "", "42200"],
+        ["SATTELITE", "Gujarat", "N/A", "CASH-881", "12/08/2024", "12/08/2024", "REPAIR & MAINTENANCE SERVICES", 5000.00, 0.00, 0.00, 0.00, "Yes", "BLOCKED CREDIT", "42300"]
+    ]
+
+    sample_font = openpyxl.styles.Font(name="Calibri", size=10)
+    for r_idx, row_data in enumerate(sample_rows, start=2):
+        ws.append(row_data)
+        ws.row_dimensions[r_idx].height = 20
+        for c_idx in range(1, len(headers) + 1):
+            cell = ws.cell(row=r_idx, column=c_idx)
+            cell.font = sample_font
+            cell.border = thin_border
+            if c_idx in (8, 9, 10, 11):
+                cell.alignment = align_right
+                cell.number_format = "#,##0.00"
+            elif c_idx in (1, 2, 5, 6, 12, 14):
+                cell.alignment = align_center
+            else:
+                cell.alignment = align_left
+
+    col_widths = {
+        "A": 16, "B": 14, "C": 18, "D": 18, "E": 14, "F": 14,
+        "G": 30, "H": 15, "I": 12, "J": 12, "K": 12, "L": 14,
+        "M": 26, "N": 14
+    }
+    for col_letter, width in col_widths.items():
+        ws.column_dimensions[col_letter].width = width
+
+    # Reference sheet with guidance and official CA remarks
+    ref_ws = wb.create_sheet(title="Instructions_&_Reference")
+    ref_ws.views.sheetView[0].showGridLines = True
+    ref_ws.column_dimensions["A"].width = 32
+    ref_ws.column_dimensions["B"].width = 44
+
+    ref_ws.append(["Official CA Audit Remarks", "Guidance / Instructions"])
+    for c_idx in (1, 2):
+        c = ref_ws.cell(row=1, column=c_idx)
+        c.fill = header_fill
+        c.font = header_font
+        c.alignment = align_center
+    ref_ws.row_dimensions[1].height = 24
+
+    guidelines = [
+        ("BLOCKED CREDIT", "Marks bill as Section 17(5) 100% ineligible credit."),
+        ("CREDIT TAKEN UNDER WRONG HEAD", "For bills where credit was booked under incorrect head."),
+        ("GST NUMBER NOT MENTIONED", "When vendor invoice lacks a valid GSTIN."),
+        ("INCORRECT GST NUMBER", "When GSTIN mentioned is invalid or mismatched."),
+        ("INVOICE NOT AVAILABLE", "For voucher entries where physical tax invoice is missing."),
+        ("PERFORMA INVOICE", "For proforma / estimate payments pending final tax invoice."),
+        ("REPEATED BILL", "For duplicate or recurring invoice entries."),
+        ("", ""),
+        ("DATE FORMAT", "Use DD/MM/YYYY format (e.g. 15/07/2024)."),
+        ("ITC BLOCKED COLUMN", "Enter 'Yes' or 'No'. 'Yes' marks 100% ineligible credit."),
+        ("BRANCH COLUMN", "Must be one of the bank's branches (e.g. Chandkheda, Ashram Road).")
+    ]
+    for r_idx, (rem, guide) in enumerate(guidelines, start=2):
+        ref_ws.append([rem, guide])
+        ref_ws.cell(row=r_idx, column=1).font = openpyxl.styles.Font(name="Calibri", size=10, bold=bool(rem and not rem.startswith(" ")))
+        ref_ws.cell(row=r_idx, column=2).font = openpyxl.styles.Font(name="Calibri", size=10)
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf.getvalue()
+
+
+@app.route('/api/download-manual-bill-specimen', methods=['GET'])
+@login_required
+def download_manual_bill_specimen():
+    """Downloads an official Excel specimen template for bulk manual bill entry."""
+    xlsx_bytes = generate_manual_bill_specimen_bytes()
+    return send_file(
+        io.BytesIO(xlsx_bytes),
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        as_attachment=True,
+        download_name="Manual_Bill_Entry_Specimen.xlsx"
+    )
+
+
+@app.route('/api/bulk-manual-bills-upload', methods=['POST'])
+@login_required
+def bulk_manual_bills_upload():
+    """Bulk entry for manual bills via Excel (.xlsx, .xls) or CSV file.
+    Inserts each valid row into the invoices database, calculates eligible/ineligible ITC,
+    assigns correct branch/state, and skips duplicate entries."""
+    if 'file' not in request.files:
+        return jsonify({"error": "No file uploaded. Please choose an Excel or CSV file."}), 400
+    file = request.files['file']
+    if not file or not file.filename:
+        return jsonify({"error": "No file selected."}), 400
+
+    fname = file.filename
+    ext = fname.split('.')[-1].lower()
+    if ext not in ('xlsx', 'xls', 'csv'):
+        return jsonify({"error": "Please upload an Excel (.xlsx, .xls) or CSV (.csv) file."}), 400
+
+    fbytes = file.read()
+    if not fbytes:
+        return jsonify({"error": "The uploaded file is empty."}), 400
+
+    if ext == 'csv':
+        try:
+            df = pd.read_csv(io.BytesIO(fbytes))
+            out = io.BytesIO()
+            df.to_excel(out, index=False)
+            fbytes = out.getvalue()
+        except Exception as ce:
+            return jsonify({"error": f"Could not read CSV file: {ce}"}), 400
+
+    try:
+        parsed_bills = parse_excel_register(fbytes)
+    except Exception as pe:
+        return jsonify({"error": f"Failed to parse spreadsheet: {pe}"}), 400
+
+    if not parsed_bills:
+        return jsonify({"error": "No bill rows could be extracted. Please check that headers match the specimen template."}), 400
+
+    user_id = session['user_id']
+    client_id = get_current_client_id()
+    conn = get_db_connection()
+    cur = conn.cursor()
+
+    added_count = 0
+    duplicate_count = 0
+    error_count = 0
+
+    for b in parsed_bills:
+        try:
+            inv_num = str(b.get("invoice_number") or "").strip() or "N/A"
+            inv_date = str(b.get("invoice_date") or "").strip() or "N/A"
+            payment_date = str(b.get("payment_date") or "").strip() or None
+            if payment_date in ('', 'N/A', '-', 'None'):
+                payment_date = None
+            vendor = str(b.get("vendor_name") or "").strip() or "Unknown Vendor"
+            gstin = normalize_gstin(b.get("gstin"), vendor)
+
+            # Resolve branch and state
+            branch, state = resolve_bill_branch_and_state(fname, b.get("branch"), b.get("state"), b.get("branch"), b.get("state"))
+
+            taxable = float(b.get("taxable_value") or 0.0)
+            cgst = float(b.get("cgst") or 0.0)
+            sgst = float(b.get("sgst") or 0.0)
+            igst = float(b.get("igst") or 0.0)
+            total_gst = cgst + sgst + igst
+
+            itc_blocked = bool(b.get("itc_blocked"))
+            remark = str(b.get("remark") or "").strip()
+            if remark.upper() == 'BLOCKED CREDIT':
+                itc_blocked = True
+
+            gl_code = str(b.get("gl_code") or "").strip() or None
+
+            eligible = 0.0 if itc_blocked else (total_gst * 0.5)
+            ineligible = total_gst if itc_blocked else (total_gst * 0.5)
+
+            fy, m = compute_billing_period(inv_date, payment_date)
+
+            # Check for existing duplicate bill
+            cur.execute("""
+                SELECT id FROM invoices
+                WHERE client_id = %s
+                  AND LOWER(TRIM(invoice_number)) = LOWER(TRIM(%s))
+                  AND LOWER(TRIM(vendor_name)) = LOWER(TRIM(%s))
+                  AND invoice_date = %s
+                  AND ABS(taxable_value - %s) < 0.01
+                LIMIT 1
+            """, (client_id, inv_num, vendor, inv_date, taxable))
+            dup = cur.fetchone()
+            if dup:
+                duplicate_count += 1
+                continue
+
+            cur.execute("""
+                INSERT INTO invoices (
+                    user_id, client_id, invoice_number, invoice_date, payment_date,
+                    vendor_name, gstin, branch, state, taxable_value, cgst, sgst, igst,
+                    itc_blocked, remark, gl_code, eligible_itc, ineligible_itc,
+                    file_data, file_mime_type, file_name, financial_year, month
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    NULL, NULL, %s, %s, %s
+                ) RETURNING id
+            """, (
+                user_id, client_id, inv_num, inv_date, payment_date,
+                vendor, gstin, branch, state, taxable, cgst, sgst, igst,
+                itc_blocked, remark, gl_code, eligible, ineligible,
+                f"Manual Bulk Entry ({fname})", fy, m
+            ))
+            cur.fetchone()
+            added_count += 1
+        except Exception as row_err:
+            print(f"Error inserting bulk manual bill row: {row_err}")
+            error_count += 1
+
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    return jsonify({
+        "success": True,
+        "added_count": added_count,
+        "duplicate_count": duplicate_count,
+        "skipped_duplicates": duplicate_count,
+        "error_count": error_count,
+        "total_rows": len(parsed_bills)
+    })
+
 
 @app.route('/api/delete-invoice', methods=['POST'])
 @login_required
