@@ -970,7 +970,7 @@
     </div>
 
     <!-- Manage PL Codes Modal (admin-only) - same shared catalog Section 3 manages -->
-    <div class="modal-overlay" id="glCodesModalOverlay" style="display: none;">
+    <div class="modal-overlay" id="glCodesModalOverlay" style="display: none; z-index: 3600;">
         <div class="modal-card" style="max-width: 640px; width: 92vw; max-height: 85vh; display: flex; flex-direction: column;">
             <div class="modal-header">
                 <h3><i class="fa-solid fa-list-check"></i> Manage Expense PL Codes</h3>
@@ -979,26 +979,32 @@
                 </button>
             </div>
             <div class="modal-body" style="display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden;">
-                <p style="font-size: 12.5px; color: #64748b; margin: -4px 0 4px; flex-shrink: 0;">
+                <p style="font-size: 12.5px; color: #64748b; margin: -4px 0 8px; flex-shrink: 0;">
                     Official bank expense PL code catalog (from CA reference list). Adding or editing a code here (e.g. for a branch expense head like Security Charges, AMC, Salaries, or Utilities) makes it available for tagging Purchase Bills and classifying branch PL vouchers immediately.
                 </p>
-                <form id="glCodeForm" class="form-grid" style="margin-bottom: 4px; flex-shrink: 0;">
+                <form id="glCodeForm" class="form-grid" style="margin-bottom: 8px; flex-shrink: 0;">
                     <div class="form-field">
-                        <label for="glCodeInputCode">PL Code</label>
+                        <label for="glCodeInputCode">PL Code <span style="color: #ef4444;">*</span></label>
                         <input type="text" id="glCodeInputCode" placeholder="e.g. 4021" autocomplete="off" required>
                     </div>
                     <div class="form-field">
-                        <label for="glCodeInputParticulars">Particulars</label>
+                        <label for="glCodeInputParticulars">Particulars <span style="color: #ef4444;">*</span></label>
                         <input type="text" id="glCodeInputParticulars" placeholder="e.g. Security Charges" autocomplete="off" required>
                     </div>
                     <div class="form-field" style="grid-column: 1 / -1;">
                         <label for="glCodeInputCategory">Category <span class="field-hint">(optional)</span></label>
                         <input type="text" id="glCodeInputCategory" placeholder="e.g. Facility & Security" autocomplete="off">
                     </div>
+                    <div style="grid-column: 1 / -1; display: flex; justify-content: flex-end; align-items: center; gap: 8px; margin-top: 4px;">
+                        <button type="button" class="btn btn-secondary" id="glCodeCancelBtn" style="display: none; padding: 7px 14px; font-size: 12.5px;">Cancel Edit</button>
+                        <button type="submit" class="btn btn-primary" id="glCodeSaveBtn" style="padding: 7px 18px; font-size: 12.5px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px;">
+                            <i class="fa-solid fa-floppy-disk"></i> <span id="glCodeSaveBtnLabel">Save PL Code</span>
+                        </button>
+                    </div>
                 </form>
-                <div id="glCodeFormMsg" style="display:none; font-size: 12.5px; padding: 8px 12px; border-radius: 8px; flex-shrink: 0;"></div>
+                <div id="glCodeFormMsg" style="display:none; font-size: 12.5px; padding: 8px 12px; border-radius: 8px; flex-shrink: 0; margin-bottom: 8px;"></div>
 
-                <div style="margin-top: 10px; display: flex; align-items: center; gap: 8px; flex-shrink: 0;">
+                <div style="margin-top: 6px; display: flex; align-items: center; gap: 8px; flex-shrink: 0;">
                     <input type="text" id="glCodeSearchInput" placeholder="Search by code or particulars..." style="flex: 1; padding: 8px 12px; border-radius: 8px; border: 1px solid #cbd5e1; font-size: 12.5px;">
                     <span id="glCodeSearchCount" style="font-size: 11.5px; color: #94a3b8; white-space: nowrap;"></span>
                 </div>
@@ -1021,6 +1027,9 @@
                         <tbody id="glCodesTableBody"></tbody>
                     </table>
                 </div>
+            </div>
+            <div class="modal-footer" style="padding: 10px 18px; border-top: 1px solid var(--border-color); display: flex; justify-content: flex-end;">
+                <button type="button" class="btn btn-secondary" id="glCodesModalDoneBtn">Close</button>
             </div>
         </div>
     </div>

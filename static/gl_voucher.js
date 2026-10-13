@@ -185,24 +185,42 @@ document.addEventListener('DOMContentLoaded', () => {
     // or classifying a voucher never requires leaving Section 1.
     const glCodesModalOverlay = document.getElementById('glCodesModalOverlay');
     const glCodesModalClose = document.getElementById('glCodesModalClose');
+    const glCodesModalDoneBtn = document.getElementById('glCodesModalDoneBtn');
     const glCodeForm = document.getElementById('glCodeForm');
     const glCodeFormMsg = document.getElementById('glCodeFormMsg');
     const glCodesTableBody = document.getElementById('glCodesTableBody');
     const glCodeSearchInput = document.getElementById('glCodeSearchInput');
     const glCodeSearchCount = document.getElementById('glCodeSearchCount');
+    const glCodeSaveBtn = document.getElementById('glCodeSaveBtn');
+    const glCodeSaveBtnLabel = document.getElementById('glCodeSaveBtnLabel');
+    const glCodeCancelBtn = document.getElementById('glCodeCancelBtn');
+
+    function resetGlCodeFormState() {
+        if (glCodeForm) glCodeForm.reset();
+        if (glCodeCancelBtn) glCodeCancelBtn.style.display = 'none';
+        if (glCodeSaveBtnLabel) glCodeSaveBtnLabel.textContent = 'Save PL Code';
+        if (glCodeSaveBtn) glCodeSaveBtn.disabled = false;
+        const codeInput = document.getElementById('glCodeInputCode');
+        if (codeInput) codeInput.readOnly = false;
+    }
 
     function openGlCodesModal(targetSelectEl) {
         if (targetSelectEl && targetSelectEl instanceof HTMLElement) {
             window.lastActiveGlSelect = targetSelectEl;
         }
         if (!glCodesModalOverlay) return;
+        resetGlCodeFormState();
+        if (glCodeFormMsg) glCodeFormMsg.style.display = 'none';
         glCodesModalOverlay.style.display = 'flex';
         renderGlCodesTable();
+        const codeInput = document.getElementById('glCodeInputCode');
+        if (codeInput) setTimeout(() => codeInput.focus(), 60);
     }
     window.openGlCodesModal = openGlCodesModal;
 
     function closeGlCodesModal() {
         if (glCodesModalOverlay) glCodesModalOverlay.style.display = 'none';
+        resetGlCodeFormState();
     }
 
     ['btn-manage-expense-codes', 'mb-manage-expense-codes-btn', 'btn-open-expense-codes-top', 'mb-quick-add-pl-code-btn'].forEach(id => {
@@ -217,6 +235,12 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
     if (glCodesModalClose) glCodesModalClose.addEventListener('click', closeGlCodesModal);
+    if (glCodesModalDoneBtn) glCodesModalDoneBtn.addEventListener('click', closeGlCodesModal);
+    if (glCodeCancelBtn) {
+        glCodeCancelBtn.addEventListener('click', () => {
+            resetGlCodeFormState();
+        });
+    }
     if (glCodesModalOverlay) {
         glCodesModalOverlay.addEventListener('click', (e) => {
             if (e.target === glCodesModalOverlay) closeGlCodesModal();
@@ -239,12 +263,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
         glCodesTableBody.innerHTML = codes.map(c => `
             <tr style="border-top: 1px solid var(--border-color);">
-                <td style="padding: 8px 10px; font-family: monospace;">${c.code}</td>
+                <td style="padding: 8px 10px; font-family: monospace; font-weight: 600;">${c.code}</td>
                 <td style="padding: 8px 10px;">${c.particulars}</td>
                 <td style="padding: 8px 10px; color: #64748b;">${c.category || ''}</td>
                 <td style="padding: 8px 10px;">
-                    <button type="button" class="btn-edit-gl-code" data-code="${c.code}" title="Edit"><i class="fa-solid fa-pen"></i></button>
-                    <button type="button" class="btn-delete-gl-code" data-code="${c.code}" title="Delete"><i class="fa-solid fa-trash"></i></button>
+                    <button type="button" class="btn-edit-gl-code" data-code="${c.code}" title="Edit" style="margin-right: 4px; padding: 4px 8px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; cursor: pointer;"><i class="fa-solid fa-pen"></i></button>
+                    <button type="button" class="btn-delete-gl-code" data-code="${c.code}" title="Delete" style="padding: 4px 8px; border: 1px solid #fecaca; border-radius: 6px; background: #fef2f2; color: #dc2626; cursor: pointer;"><i class="fa-solid fa-trash"></i></button>
                 </td>
             </tr>
         `).join('');
@@ -253,9 +277,18 @@ document.addEventListener('DOMContentLoaded', () => {
             btn.addEventListener('click', () => {
                 const c = window.glPlCodes.find(x => x.code === btn.dataset.code);
                 if (!c) return;
-                document.getElementById('glCodeInputCode').value = c.code;
-                document.getElementById('glCodeInputParticulars').value = c.particulars;
-                document.getElementById('glCodeInputCategory').value = c.category || '';
+                const codeInput = document.getElementById('glCodeInputCode');
+                const partInput = document.getElementById('glCodeInputParticulars');
+                const catInput = document.getElementById('glCodeInputCategory');
+                if (codeInput) {
+                    codeInput.value = c.code;
+                    codeInput.readOnly = true;
+                }
+                if (partInput) partInput.value = c.particulars;
+                if (catInput) catInput.value = c.category || '';
+                if (glCodeSaveBtnLabel) glCodeSaveBtnLabel.textContent = 'Update PL Code';
+                if (glCodeCancelBtn) glCodeCancelBtn.style.display = 'inline-flex';
+                if (partInput) partInput.focus();
             });
         });
         glCodesTableBody.querySelectorAll('.btn-delete-gl-code').forEach(btn => {
@@ -282,6 +315,13 @@ document.addEventListener('DOMContentLoaded', () => {
             const particulars = document.getElementById('glCodeInputParticulars').value.trim();
             const category = document.getElementById('glCodeInputCategory').value.trim();
 
+            if (!code || !particulars) return;
+
+            if (glCodeSaveBtn) glCodeSaveBtn.disabled = true;
+            if (glCodeSaveBtnLabel) glCodeSaveBtnLabel.textContent = 'Saving...';
+
+            const activeTargetSelect = window.lastActiveGlSelect;
+
             fetch('/api/expense-codes-master', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -293,25 +333,31 @@ document.addEventListener('DOMContentLoaded', () => {
                 return data;
             })
             .then(() => {
-                glCodeForm.reset();
+                resetGlCodeFormState();
                 if (glCodeFormMsg) {
                     glCodeFormMsg.style.display = 'block';
                     glCodeFormMsg.style.background = '#dcfce7';
                     glCodeFormMsg.style.color = '#166534';
-                    glCodeFormMsg.textContent = `Saved Expense PL code ${code}.`;
-                    setTimeout(() => { glCodeFormMsg.style.display = 'none'; }, 3000);
+                    glCodeFormMsg.textContent = activeTargetSelect
+                        ? `Saved Expense PL code ${code} and selected it for your bill.`
+                        : `Saved Expense PL code ${code}.`;
+                    setTimeout(() => { if (glCodeFormMsg) glCodeFormMsg.style.display = 'none'; }, 3000);
                 }
                 return window.loadGlPlCodes();
             })
             .then(() => {
-                if (window.lastActiveGlSelect) {
+                if (activeTargetSelect) {
                     try {
-                        window.lastActiveGlSelect.value = code;
-                        window.lastActiveGlSelect.dispatchEvent(new Event('change', { bubbles: true }));
+                        activeTargetSelect.value = code;
+                        activeTargetSelect.dispatchEvent(new Event('change', { bubbles: true }));
                     } catch (e) {
                         console.warn('Could not auto-select new GL code on active select element:', e);
                     }
                     window.lastActiveGlSelect = null;
+                    // Auto-close modal after brief visual feedback so user returns seamlessly to their bill
+                    setTimeout(() => {
+                        closeGlCodesModal();
+                    }, 800);
                 }
                 renderGlCodesTable();
             })
@@ -321,6 +367,12 @@ document.addEventListener('DOMContentLoaded', () => {
                     glCodeFormMsg.style.background = '#fee2e2';
                     glCodeFormMsg.style.color = '#991b1b';
                     glCodeFormMsg.textContent = err.message || 'Failed to save code.';
+                }
+            })
+            .finally(() => {
+                if (glCodeSaveBtn) glCodeSaveBtn.disabled = false;
+                if (glCodeSaveBtnLabel && glCodeSaveBtnLabel.textContent === 'Saving...') {
+                    glCodeSaveBtnLabel.textContent = 'Save PL Code';
                 }
             });
         });
