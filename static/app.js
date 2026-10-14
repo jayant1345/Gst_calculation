@@ -272,15 +272,63 @@ document.addEventListener('DOMContentLoaded', () => {
         return `${d}/${m}/${y}`;
     }
 
+    // Automatically formats date inputs as DD/MM/YYYY while typing:
+    // When the user enters day digits (e.g. 09), it automatically appends '/',
+    // then when month digits are entered, it appends '/', followed by 4-digit year.
+    // Handles Backspace and Delete gracefully so users can edit freely.
+    function setupDateAutoSlash(inputEl) {
+        if (!inputEl) return;
+        let isDeleting = false;
+
+        inputEl.addEventListener('keydown', (e) => {
+            isDeleting = (e.key === 'Backspace' || e.key === 'Delete');
+        });
+
+        inputEl.addEventListener('input', () => {
+            if (isDeleting) return;
+
+            let val = inputEl.value;
+            // Retain only digits and slashes
+            const cleaned = val.replace(/[^\d/]/g, '');
+
+            // Strip slashes to get raw numbers
+            const rawDigits = cleaned.replace(/\D/g, '').slice(0, 8); // max 8 digits for DDMMYYYY
+            if (!rawDigits) {
+                if (val !== '') inputEl.value = '';
+                return;
+            }
+
+            let formatted = '';
+            if (rawDigits.length < 2) {
+                formatted = rawDigits;
+            } else if (rawDigits.length === 2) {
+                formatted = rawDigits + '/';
+            } else if (rawDigits.length < 4) {
+                formatted = rawDigits.slice(0, 2) + '/' + rawDigits.slice(2);
+            } else if (rawDigits.length === 4) {
+                formatted = rawDigits.slice(0, 2) + '/' + rawDigits.slice(2, 4) + '/';
+            } else {
+                formatted = rawDigits.slice(0, 2) + '/' + rawDigits.slice(2, 4) + '/' + rawDigits.slice(4, 8);
+            }
+
+            if (inputEl.value !== formatted) {
+                inputEl.value = formatted;
+            }
+        });
+    }
+
     // Wires a visible DD/MM/YYYY text field to a paired hidden native
     // <input type="date"> calendar picker: the icon button opens the native
     // picker, and picking a date writes it back as DD/MM/YYYY into the
-    // visible field -- typing directly into the text field still works too.
+    // visible field -- typing directly into the text field also auto-formats DD/MM/YYYY.
     function wireDatePicker(textId, nativeId, buttonSelector) {
         const textInput = document.getElementById(textId);
         const nativeInput = document.getElementById(nativeId);
         const btn = document.querySelector(buttonSelector);
         if (!textInput || !nativeInput || !btn) return;
+
+        setupDateAutoSlash(textInput);
+
         btn.addEventListener('click', () => {
             nativeInput.value = ddmmyyyyToInputDate(textInput.value.trim());
             if (typeof nativeInput.showPicker === 'function') {
@@ -2108,6 +2156,11 @@ document.addEventListener('DOMContentLoaded', () => {
             const gstinInput = tr.querySelector('.field-gstin');
             const branchInputRow = tr.querySelector('.field-branch');
             const stateSelectRow = tr.querySelector('.field-state');
+            const dateInputRow = tr.querySelector('.field-date');
+            const paymentDateInputRow = tr.querySelector('.field-payment-date');
+
+            if (dateInputRow) setupDateAutoSlash(dateInputRow);
+            if (paymentDateInputRow) setupDateAutoSlash(paymentDateInputRow);
 
             if (vendorInput && gstinInput) {
                 vendorInput.addEventListener('input', () => {
