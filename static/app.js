@@ -2004,6 +2004,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const isStateBlank = isFieldBlank(inv.state);
             const isDateBlank = isFieldBlank(inv.invoice_date);
             const isPayDateBlank = isFieldBlank(inv.payment_date);
+            const isGlCodeBlank = isFieldBlank(inv.gl_code) || inv.gl_code === 'MANUAL_PL_REQUIRED';
 
             tr.innerHTML = `
                 <td class="checkbox-cell col-select">
@@ -2025,7 +2026,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 <td class="numeric"><input type="number" step="0.01" class="field-igst" value="${(inv.igst || 0).toFixed(2)}"></td>
                 <td class="checkbox-cell"><input type="checkbox" class="field-itc-blocked" title="Section 17(5) blocked credit / fully ineligible" ${inv.itc_blocked ? 'checked' : ''}></td>
                 <td><input type="text" class="field-remark" list="remark-suggestions" placeholder="e.g. GSTIN not on bill" maxlength="500" value="${(inv.remark || '').replace(/"/g, '&quot;')}"></td>
-                <td><select class="field-gl-code"><option value="">-- No PL code --</option></select></td>
+                <td><select class="field-gl-code ${isGlCodeBlank ? 'field-needs-rectification' : ''}" title="${isGlCodeBlank ? 'Missing PL Code — Manual PL Entry Required' : 'PL Code'}"><option value="">-- No PL code --</option></select></td>
                 <td class="numeric eligible-column font-bold" id="row-eligible-${inv.id}">₹${(inv.eligible_itc || 0).toFixed(2)}</td>
                 <td class="numeric ineligible-column" id="row-ineligible-${inv.id}">₹${(inv.ineligible_itc || 0).toFixed(2)}</td>
                 ${window.IS_ADMIN ? `<td class="col-owner">${inv.username || window.CURRENT_USERNAME || ''}</td>` : ''}
@@ -2058,11 +2059,17 @@ document.addEventListener('DOMContentLoaded', () => {
             const glCodeSelect = tr.querySelector('.field-gl-code');
             if (glCodeSelect) {
                 glCodeSelect.innerHTML = glCodeOptionsHtml;
-                glCodeSelect.value = inv.gl_code || '';
+                const cleanGl = (inv.gl_code && inv.gl_code !== 'MANUAL_PL_REQUIRED') ? inv.gl_code : '';
+                glCodeSelect.value = cleanGl;
+                if (!cleanGl) {
+                    glCodeSelect.classList.add('field-needs-rectification');
+                }
                 glCodeSelect.addEventListener('change', () => {
                     if (glCodeSelect.value === '__ADD_NEW__') {
-                        glCodeSelect.value = inv.gl_code || '';
+                        glCodeSelect.value = cleanGl;
                         if (window.openGlCodesModal) window.openGlCodesModal(glCodeSelect);
+                    } else if (glCodeSelect.value) {
+                        glCodeSelect.classList.remove('field-needs-rectification');
                     }
                 });
             }

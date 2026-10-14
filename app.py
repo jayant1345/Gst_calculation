@@ -1365,11 +1365,16 @@ def extract_from_pdf_binary_rescan(file_bytes, page_index=0):
         "2 digits (state), 5 uppercase letters (PAN), 4 digits, 1 uppercase letter, 1 alphanumeric, 'Z', 1 checksum alphanumeric. "
         "Disambiguate: letter 'O' vs digit '0', letter 'I' vs digit '1', letter 'S' vs digit '5', letter 'B' vs digit '8'. "
         "If not found, leave empty string \"\".\n"
+        "- gl_code: The bank expense PL Code written in HANDWRITTEN format on the bill (e.g. 'PL-4006', 'PL 4006', "
+        "'P/L 4006', 'GL 4006', 'Head 4006', or inside the payment voucher stamp block). Match against the Known "
+        "Bank Expense PL Codes list below. Return ONLY the numeric code (e.g. '4006') if matched; if absent or unlisted, "
+        "return 'MANUAL_PL_REQUIRED'.\n"
         "- taxable_value: Base taxable amount before GST (numeric).\n"
         "- cgst: Central GST amount (numeric).\n"
         "- sgst: State/UT GST amount (numeric).\n"
         "- igst: Integrated GST amount (numeric).\n"
-        "Ensure exact numeric math: Total GST = CGST + SGST + IGST."
+        "Ensure exact numeric math: Total GST = CGST + SGST + IGST.\n\n"
+        + build_master_reference_block()
     )
     # Render PDF page at 250 DPI for ultra-crisp resolution of small print and handwriting
     base64_jpg = render_pdf_page_to_png_base64(file_bytes, page_index=page_index, dpi=250)
@@ -1406,11 +1411,16 @@ def extract_from_image_rescan(file_bytes, ext):
         "2 digits (state), 5 uppercase letters (PAN), 4 digits, 1 uppercase letter, 1 alphanumeric, 'Z', 1 checksum alphanumeric. "
         "Disambiguate: letter 'O' vs digit '0', letter 'I' vs digit '1', letter 'S' vs digit '5', letter 'B' vs digit '8'. "
         "If not found, leave empty string \"\".\n"
+        "- gl_code: The bank expense PL Code written in HANDWRITTEN format on the bill (e.g. 'PL-4006', 'PL 4006', "
+        "'P/L 4006', 'GL 4006', 'Head 4006', or inside the payment voucher stamp block). Match against the Known "
+        "Bank Expense PL Codes list below. Return ONLY the numeric code (e.g. '4006') if matched; if absent or unlisted, "
+        "return 'MANUAL_PL_REQUIRED'.\n"
         "- taxable_value: Base taxable amount before GST (numeric).\n"
         "- cgst: Central GST amount (numeric).\n"
         "- sgst: State/UT GST amount (numeric).\n"
         "- igst: Integrated GST amount (numeric).\n"
-        "Ensure exact numeric math: Total GST = CGST + SGST + IGST."
+        "Ensure exact numeric math: Total GST = CGST + SGST + IGST.\n\n"
+        + build_master_reference_block()
     )
     result, model_used = call_rescan_vision_model(system_prompt, user_prompt, base64_img, mime_type)
     if "```json" in result:
@@ -1422,28 +1432,104 @@ def extract_from_image_rescan(file_bytes, ext):
     return parsed
 
 
+def get_all_expense_codes():
+    """Returns unique, sorted expense PL codes from EXPENSE_MASTER_CODES / JSON."""
+    global EXPENSE_MASTER_CODES
+    if not EXPENSE_MASTER_CODES:
+        cat_path = os.path.join(os.path.dirname(__file__), 'reference_data', 'expense_master_catalog.json')
+        if os.path.exists(cat_path):
+            try:
+                with open(cat_path, 'r', encoding='utf-8') as f:
+                    EXPENSE_MASTER_CODES = json.load(f).get('expense_codes', [])
+            except Exception as e:
+                print(f"Error loading expense catalog: {e}")
+    seen = set()
+    codes = []
+    for c in (EXPENSE_MASTER_CODES or []):
+        code_str = str(c.get('code', '')).strip().upper()
+        if code_str and code_str not in seen:
+            seen.add(code_str)
+            codes.append({"code": code_str, "particulars": c.get('particulars', '')})
+    return sorted(codes, key=lambda x: x['code'])
+
+
+def match_expense_pl_code(raw_val, text_fallback=""):
+    """Validates and normalizes an extracted PL / GL code against our official
+    known expense PL code catalog. Bank branch staff write or stamp the PL code
+    in handwritten format (e.g. 'PL-4006', 'PL 4006', 'PL: 4006', 'P/L 4006',
+    'GL 4006', '4006', or inside the payment voucher stamp block).
+    
+    Returns:
+        (matched_code_or_None, is_manual_required)
+        - If matched to a valid code from our list: (clean_code, False)
+        - If not available or not in our list: (None, True)
+    """
+    valid_codes = {str(c['code']).strip().upper() for c in get_all_expense_codes() if c.get('code')}
+
+    candidates = []
+    if raw_val and str(raw_val).strip():
+        candidates.append(str(raw_val).strip())
+
+    if text_fallback and str(text_fallback).strip():
+        # Search raw/OCR text for handwritten PL patterns like PL-4006, PL 4006, P/L: 4006
+        found = re.findall(r'\b(?:PL|P/L|P\.L\.|GL|HEAD|A/C|EXPENSE)[\s\-.:#]*([0-9OIl]{3,5})\b', str(text_fallback), flags=re.I)
+        candidates.extend(found)
+
+    for cand in candidates:
+        cand_upper = cand.upper()
+        if cand_upper in ('MANUAL_PL_REQUIRED', 'MANUAL_REQUIRED', 'MANUAL', 'NONE', 'NULL', 'N/A', '-', ''):
+            continue
+
+        # Strip prefixes: PL-, PL, P/L, GL, etc.
+        cleaned = re.sub(r'^(?:PL|P/L|P\.L\.|GL|HEAD|A/C|EXPENSE|CODE|EXP)[\s\-.:#]*', '', cand, flags=re.I).strip()
+        # Fix common OCR / handwriting confusions: 'O' -> '0', 'I'/'l' -> '1'
+        disambiguated = cleaned.replace('O', '0').replace('o', '0').replace('I', '1').replace('l', '1')
+        m = re.search(r'\b(\d{3,5})\b', disambiguated)
+        if m:
+            code_num = m.group(1)
+            if code_num in valid_codes:
+                return code_num, False
+
+    # Check direct exact match
+    for cand in candidates:
+        c_clean = cand.strip().upper()
+        if c_clean in valid_codes:
+            return c_clean, False
+
+    return None, True
+
+
 _MASTER_REFERENCE_BLOCK = None
 def build_master_reference_block():
-    """Formats the known-branch and known-vendor master lists into one compact
-    text block to inject into every extraction prompt, so the model can match
-    OCR'd branch/vendor text against known-correct values directly while
-    reading the bill (fixing abbreviations, letterhead OCR noise, etc.)
+    """Formats the known-branch, known-vendor, and known bank expense PL code master
+    lists into one compact text block to inject into every extraction prompt, so the model
+    can match OCR'd branch/vendor/PL code text against known-correct values directly while
+    reading the bill (including handwritten PL codes like 'PL-4006' or stamped codes)
     instead of relying only on post-hoc fuzzy string matching after the fact.
-    Cached module-wide since the master lists never change during a run."""
+    Cached module-wide and invalidated whenever expense codes are added/modified."""
     global _MASTER_REFERENCE_BLOCK
     if _MASTER_REFERENCE_BLOCK is not None:
         return _MASTER_REFERENCE_BLOCK
     branch_lines = "\n".join(f"- {b['name']} ({b['state']})" for b in MASTER_BRANCHES)
     vendor_lines = "\n".join(f"- {v['name']} -> {v['gstin']}" for v in MASTER_VENDORS)
+    expense_codes = get_all_expense_codes()
+    pl_lines = "\n".join(f"- {c['code']}: {c['particulars']}" for c in expense_codes)
     _MASTER_REFERENCE_BLOCK = (
         "REFERENCE LISTS (use ONLY to correct OCR/reading errors when the bill's own "
         "printed/handwritten text CLOSELY matches one of these -- never force a match "
-        "onto a clearly different, unlisted vendor or branch, and never invent a branch "
-        "that isn't actually indicated on the bill):\n\n"
+        "onto a clearly different, unlisted vendor, branch, or PL code):\n\n"
         "Known bank branches (name (state)):\n" + branch_lines + "\n\n"
         "Known vendor master list (name -> GSTIN) -- if the vendor name or GSTIN you read "
         "closely matches one of these, prefer the listed GSTIN over a noisy OCR read:\n"
-        + vendor_lines
+        + vendor_lines + "\n\n"
+        "Known Bank Expense PL Codes list (code: particulars) -- Bank branch staff write or stamp "
+        "the expense PL code in HANDWRITTEN format on the invoice (e.g. 'PL-4006', 'PL 4006', 'P/L: 4006', "
+        "'GL: 4006', 'Head 4006', 'A/c 4006', or a 4-digit number in the payment/sanction rubber stamp). "
+        "Read this handwritten PL code with high forensic accuracy and match it against this list of codes. "
+        "Return ONLY the exact matched numeric code (e.g. '4006'). "
+        "If NO handwritten/stamped PL code is present on the document, or if the code does NOT match "
+        "any code in this known list, return 'MANUAL_PL_REQUIRED':\n"
+        + pl_lines
     )
     return _MASTER_REFERENCE_BLOCK
 
@@ -1490,6 +1576,13 @@ _BILL_FIELDS_PROMPT = """- Invoice Number (invoice_number)
   belongs to (a stamp, letterhead, or handwritten note explicitly naming one) -- match it to the
   closest name in the known branches reference list below. Leave blank/null if the bill has no
   such explicit indication; do NOT guess a branch from the vendor's address or general context.
+- PL Code (gl_code) - The bank expense PL Code written in HANDWRITTEN format on the bill.
+  Bank branches write the PL code by hand or stamp it on the invoice (e.g. "PL-4006", "PL 4006",
+  "PL: 4006", "P/L: 4006", "GL: 4006", "A/C: 4006", or a 4-digit number inside the rubber stamp or margin).
+  Carefully inspect all handwritten pen markings and stamps across the document.
+  Match the handwritten code against the Known Bank Expense PL Codes list below.
+  If matched to a known code, return ONLY the numeric code (e.g. "4006").
+  If no PL code is written/stamped, or if it does not match our list, return "MANUAL_PL_REQUIRED".
 - Taxable Value (taxable_value) - The value before taxes
 - CGST Amount (cgst)
 - SGST Amount (sgst)
@@ -1502,6 +1595,7 @@ _BILL_JSON_SCHEMA = """{
       "vendor_name": "...",
       "gstin": "...",
       "branch": "...",
+      "gl_code": "4006 or MANUAL_PL_REQUIRED",
       "taxable_value": 0.0,
       "cgst": 0.0,
       "sgst": 0.0,
@@ -1568,6 +1662,7 @@ _VISION_SYSTEM_PROMPT = (
     "You are an expert financial OCR assistant specialized in reading Indian tax invoices, "
     "utility bills, handwritten vouchers, bank payment stamps, and purchase registers. "
     "Analyze the invoice image and extract the key values with high precision. "
+    "Pay particular attention to HANDWRITTEN PL / GL codes (e.g. 'PL-4006') written by bank staff. "
     "You must respond with ONLY a valid JSON array. Do not include any explanation outside JSON."
 )
 
@@ -1592,6 +1687,11 @@ def _vision_bill_prompt():
         "letterhead, or handwritten note explicitly naming one; match it to the closest name in the "
         "known branches reference list below; leave blank/null if there's no explicit indication -- "
         "do NOT guess a branch from the vendor's address or general context)\n"
+        "- gl_code (the bank expense PL Code written in HANDWRITTEN format on the bill, e.g. 'PL-4006', "
+        "'PL 4006', 'P/L 4006', 'GL 4006', 'Head 4006', or inside the payment voucher stamp; "
+        "carefully scan all handwritten annotations and match against the Known Bank Expense PL Codes list below; "
+        "return ONLY the matched numeric code e.g. '4006'; if no handwritten PL code is found or not in our list, "
+        "return 'MANUAL_PL_REQUIRED')\n"
         "- taxable_value (pre-tax base amount, printed or handwritten)\n"
         "- cgst, sgst, igst (tax amounts, printed or handwritten)\n"
         "IMPORTANT for accuracy:\n"
@@ -3181,6 +3281,7 @@ def rescan_invoices_batch():
                         OR invoice_number IS NULL OR invoice_number = '' OR invoice_number = 'N/A' OR invoice_number ILIKE '%%error%%'
                         OR invoice_date IS NULL OR invoice_date = '' OR invoice_date = 'N/A'
                         OR payment_date IS NULL OR payment_date = ''
+                        OR gl_code IS NULL OR gl_code = '' OR gl_code = 'MANUAL_PL_REQUIRED'
                         OR branch IS NULL OR branch = '' OR branch = 'Unassigned'
                         OR state IS NULL OR state = '' OR state = 'Unassigned'
                         OR ((taxable_value IS NULL OR taxable_value <= 0) AND (cgst IS NULL OR cgst = 0) AND (sgst IS NULL OR sgst = 0) AND (igst IS NULL OR igst = 0))
@@ -3196,6 +3297,7 @@ def rescan_invoices_batch():
                         OR invoice_number IS NULL OR invoice_number = '' OR invoice_number = 'N/A' OR invoice_number ILIKE '%%error%%'
                         OR invoice_date IS NULL OR invoice_date = '' OR invoice_date = 'N/A'
                         OR payment_date IS NULL OR payment_date = ''
+                        OR gl_code IS NULL OR gl_code = '' OR gl_code = 'MANUAL_PL_REQUIRED'
                         OR branch IS NULL OR branch = '' OR branch = 'Unassigned'
                         OR state IS NULL OR state = '' OR state = 'Unassigned'
                         OR ((taxable_value IS NULL OR taxable_value <= 0) AND (cgst IS NULL OR cgst = 0) AND (sgst IS NULL OR sgst = 0) AND (igst IS NULL OR igst = 0))
@@ -3217,7 +3319,7 @@ def rescan_invoices_batch():
                 "success": True, 
                 "results": [], 
                 "message": "No invoices with attached original files found to re-scan.",
-                "summary": {"total_scanned": 0, "total_with_changes": 0, "recovered_gstin": 0, "recovered_payment_date": 0, "recovered_invoice_num": 0}
+                "summary": {"total_scanned": 0, "total_with_changes": 0, "recovered_gstin": 0, "recovered_payment_date": 0, "recovered_invoice_num": 0, "recovered_gl_code": 0}
             })
             
         def _process_row(row_dict):
@@ -3248,6 +3350,7 @@ def rescan_invoices_batch():
             orig_blocked = bool(row_dict['itc_blocked'])
             orig_branch = (row_dict['branch'] or 'Unassigned').strip()
             orig_state = (row_dict['state'] or 'Unassigned').strip()
+            orig_gl_code = (row_dict.get('gl_code') or '').strip()
             
             new_vendor = (scanned.get('vendor_name') or orig_vendor).strip()
             new_gstin = normalize_gstin((scanned.get('gstin') or '').strip() or orig_gstin, new_vendor)
@@ -3260,6 +3363,11 @@ def rescan_invoices_batch():
             # of defaulting to blank.
             new_pay_date = (scanned.get('payment_date') or orig_pay_date or '').strip() or None
             
+            # Match & validate handwritten PL code
+            raw_new_gl = scanned.get('gl_code')
+            matched_gl, manual_req = match_expense_pl_code(raw_new_gl, text_fallback=scanned.get('remark', ''))
+            new_gl_code = matched_gl if matched_gl else (orig_gl_code if orig_gl_code else "")
+
             # Numeric values
             try:
                 new_taxable = float(scanned.get('taxable_value', orig_taxable) or 0.0)
@@ -3329,6 +3437,18 @@ def rescan_invoices_batch():
                     "is_recovered": orig_pay_invalid and new_pay_valid
                 })
                 
+            # PL Code check
+            orig_gl_invalid = not orig_gl_code or orig_gl_code in ('N/A', '', 'MANUAL_PL_REQUIRED')
+            new_gl_valid = bool(new_gl_code and new_gl_code not in ('N/A', '', 'MANUAL_PL_REQUIRED'))
+            if (orig_gl_code or '') != (new_gl_code or ''):
+                changes.append({
+                    "field": "gl_code",
+                    "label": "PL Code",
+                    "old": orig_gl_code or "Missing",
+                    "new": new_gl_code or "Missing",
+                    "is_recovered": orig_gl_invalid and new_gl_valid
+                })
+
             # Vendor Name
             if orig_vendor != new_vendor and new_vendor not in ('Unknown Vendor', 'N/A', ''):
                 changes.append({
@@ -3376,6 +3496,7 @@ def rescan_invoices_batch():
                     "invoice_number": orig_inv_num,
                     "invoice_date": orig_inv_date,
                     "payment_date": orig_pay_date,
+                    "gl_code": orig_gl_code,
                     "taxable_value": orig_taxable,
                     "cgst": orig_cgst,
                     "sgst": orig_sgst,
@@ -3390,6 +3511,7 @@ def rescan_invoices_batch():
                     "invoice_number": new_inv_num,
                     "invoice_date": new_inv_date,
                     "payment_date": new_pay_date,
+                    "gl_code": new_gl_code,
                     "taxable_value": new_taxable,
                     "cgst": new_cgst,
                     "sgst": new_sgst,
@@ -3422,6 +3544,7 @@ def rescan_invoices_batch():
         rec_gstin = sum(1 for r in results if any(c['field'] == 'gstin' and c.get('is_recovered') for c in r['changes']))
         rec_pay = sum(1 for r in results if any(c['field'] == 'payment_date' and c.get('is_recovered') for c in r['changes']))
         rec_inv = sum(1 for r in results if any(c['field'] == 'invoice_number' and c.get('is_recovered') for c in r['changes']))
+        rec_gl = sum(1 for r in results if any(c['field'] == 'gl_code' and c.get('is_recovered') for c in r['changes']))
         with_changes = sum(1 for r in results if r['has_changes'])
         
         return jsonify({
@@ -3433,6 +3556,7 @@ def rescan_invoices_batch():
                 "recovered_gstin": rec_gstin,
                 "recovered_payment_date": rec_pay,
                 "recovered_invoice_num": rec_inv,
+                "recovered_gl_code": rec_gl,
                 "ai_model_used": AI_RESCAN_MODEL_DISPLAY_NAME
             }
         })
@@ -3479,6 +3603,7 @@ def apply_rescan_results():
             itc_blocked = bool(item.get('itc_blocked', False))
             branch = (item.get('branch') or 'Unassigned').strip()
             state = (item.get('state') or 'Unassigned').strip()
+            gl_code = (item.get('gl_code') or '').strip()
             
             total_gst = cgst + sgst + igst
             if itc_blocked:
@@ -3496,20 +3621,22 @@ def apply_rescan_results():
                     SET vendor_name = %s, gstin = %s, invoice_number = %s, invoice_date = %s,
                         payment_date = %s, taxable_value = %s, cgst = %s, sgst = %s, igst = %s,
                         itc_blocked = %s, eligible_itc = %s, ineligible_itc = %s,
-                        financial_year = %s, month = %s, branch = %s, state = %s
+                        financial_year = %s, month = %s, branch = %s, state = %s,
+                        gl_code = CASE WHEN %s != '' THEN %s ELSE gl_code END
                     WHERE id = %s
                 ''', (vendor, gstin, inv_num, inv_date, payment_date, taxable, cgst, sgst, igst,
-                      itc_blocked, eligible, ineligible, fy, m, branch, state, inv_id))
+                      itc_blocked, eligible, ineligible, fy, m, branch, state, gl_code, gl_code, inv_id))
             else:
                 cur.execute('''
                     UPDATE invoices
                     SET vendor_name = %s, gstin = %s, invoice_number = %s, invoice_date = %s,
                         payment_date = %s, taxable_value = %s, cgst = %s, sgst = %s, igst = %s,
                         itc_blocked = %s, eligible_itc = %s, ineligible_itc = %s,
-                        financial_year = %s, month = %s, branch = %s, state = %s
+                        financial_year = %s, month = %s, branch = %s, state = %s,
+                        gl_code = CASE WHEN %s != '' THEN %s ELSE gl_code END
                     WHERE id = %s AND user_id = %s
                 ''', (vendor, gstin, inv_num, inv_date, payment_date, taxable, cgst, sgst, igst,
-                      itc_blocked, eligible, ineligible, fy, m, branch, state, inv_id, user_id))
+                      itc_blocked, eligible, ineligible, fy, m, branch, state, gl_code, gl_code, inv_id, user_id))
                       
             applied_count += cur.rowcount
             
@@ -3787,8 +3914,9 @@ def _extract_bills_for_page(file_bytes, filename, p_idx, high_accuracy):
             payment_date_markers = ('rtgs', 'neft', 'p.o. no', 'po no', 'cheque',
                                      'sanctioned', 'please pay', 'paid on', 'demand draft')
             has_payment_voucher_section = any(m in page_text.lower() for m in payment_date_markers)
+            needs_gl_code = not inv.get('gl_code') or inv.get('gl_code') == 'MANUAL_PL_REQUIRED'
 
-            if needs_gstin or (needs_payment_date and has_payment_voucher_section):
+            if needs_gstin or (needs_payment_date and has_payment_voucher_section) or needs_gl_code:
                 try:
                     vision_bills = extract_from_pdf_binary(file_bytes, page_index=p_idx)
                     vision_inv = vision_bills[0] if vision_bills else {}
@@ -3796,6 +3924,8 @@ def _extract_bills_for_page(file_bytes, filename, p_idx, high_accuracy):
                         inv['payment_date'] = vision_inv['payment_date']
                     if needs_gstin and vision_inv.get('gstin'):
                         inv['gstin'] = vision_inv['gstin']
+                    if needs_gl_code and vision_inv.get('gl_code'):
+                        inv['gl_code'] = vision_inv['gl_code']
                     inv['_ai_model'] = vision_inv.get('_ai_model', inv.get('_ai_model'))
                 except Exception as ex:
                     print(f"Vision fallback failed for {filename} page {p_idx+1}: {ex}")
@@ -3814,7 +3944,7 @@ def _merge_multipage_bill(page_bills):
     that a multi-page bill's final/total amount always sits on its last
     page -- with a fallback to an earlier page if the very last page's own
     extraction came back empty. Returns (merged_dict, conflict_note_or_None)."""
-    header_fields = ['invoice_number', 'vendor_name', 'gstin', 'invoice_date', 'payment_date']
+    header_fields = ['invoice_number', 'vendor_name', 'gstin', 'invoice_date', 'payment_date', 'gl_code']
     merged = {f: None for f in header_fields}
     for pb in page_bills:
         for f in header_fields:
@@ -3954,9 +4084,9 @@ def _parse_single_invoice_file(filename, file_bytes, batch_branch, batch_state, 
                     needs_payment_date = not inv.get('payment_date') or inv.get('payment_date') == inv.get('invoice_date')
                     payment_date_markers = ('rtgs', 'neft', 'p.o. no', 'po no', 'cheque',
                                              'sanctioned', 'please pay', 'paid on', 'demand draft')
-                    has_payment_voucher_section = any(m in page_text.lower() for m in payment_date_markers)
+                    needs_gl_code = not inv.get('gl_code') or inv.get('gl_code') == 'MANUAL_PL_REQUIRED'
 
-                    if needs_gstin or (needs_payment_date and has_payment_voucher_section):
+                    if needs_gstin or (needs_payment_date and has_payment_voucher_section) or needs_gl_code:
                         try:
                             vision_bills = extract_from_pdf_binary(file_bytes, page_index=0)
                             vision_inv = vision_bills[0] if vision_bills else {}
@@ -3964,6 +4094,8 @@ def _parse_single_invoice_file(filename, file_bytes, batch_branch, batch_state, 
                                 inv['payment_date'] = vision_inv['payment_date']
                             if needs_gstin and vision_inv.get('gstin'):
                                 inv['gstin'] = vision_inv['gstin']
+                            if needs_gl_code and vision_inv.get('gl_code'):
+                                inv['gl_code'] = vision_inv['gl_code']
                             inv['_ai_model'] = vision_inv.get('_ai_model', inv.get('_ai_model'))
                         except Exception as ex:
                             print(f"Vision fallback failed for {filename}: {ex}")
@@ -4169,6 +4301,13 @@ def process_invoices():
                 resolved_branch, resolved_state = resolve_bill_branch_and_state(
                     filename, batch_branch, batch_state, inv.get("branch"), inv.get("state")
                 )
+                # Validate and match handwritten / stamped PL code against known catalog
+                raw_gl = inv.get("gl_code")
+                matched_gl, manual_gl_req = match_expense_pl_code(raw_gl, text_fallback=inv.get("remark", ""))
+                inv["gl_code"] = matched_gl or ""
+                if manual_gl_req and not inv.get("remark"):
+                    inv["remark"] = "Manual PL entry required"
+
                 inv["branch"] = resolved_branch[:100]
                 inv["state"] = resolved_state[:100]
                 inv["itc_blocked"] = bool(inv.get("itc_blocked", False))
@@ -4231,6 +4370,7 @@ def process_invoices():
                         "igst": inv["igst"],
                         "itc_blocked": inv["itc_blocked"],
                         "remark": inv["remark"],
+                        "gl_code": inv.get("gl_code") or "",
                         "has_file": False,
                         "eligible_itc": eligible,
                         "ineligible_itc": ineligible,
@@ -4245,10 +4385,10 @@ def process_invoices():
                 try:
                     cur.execute("SAVEPOINT sp_inv")
                     cur.execute('''
-                        INSERT INTO invoices (user_id, client_id, invoice_number, invoice_date, payment_date, vendor_name, gstin, branch, state, taxable_value, cgst, sgst, igst, itc_blocked, remark, eligible_itc, ineligible_itc, file_data, file_mime_type, file_name, financial_year, month)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
+                        INSERT INTO invoices (user_id, client_id, invoice_number, invoice_date, payment_date, vendor_name, gstin, branch, state, taxable_value, cgst, sgst, igst, itc_blocked, remark, gl_code, eligible_itc, ineligible_itc, file_data, file_mime_type, file_name, financial_year, month)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
                     ''', (user_id, client_id, inv["invoice_number"], inv["invoice_date"], inv["payment_date"], inv["vendor_name"], inv["gstin"], inv["branch"], inv["state"],
-                          inv["taxable_value"], inv["cgst"], inv["sgst"], inv["igst"], inv["itc_blocked"], inv["remark"],
+                          inv["taxable_value"], inv["cgst"], inv["sgst"], inv["igst"], inv["itc_blocked"], inv["remark"], inv.get("gl_code") or "",
                           eligible, ineligible,
                           psycopg2.Binary(inv_store_bytes) if inv_store_bytes else None,
                           inv_store_mime, inv_store_name, fy, m))
@@ -4271,6 +4411,7 @@ def process_invoices():
                         "igst": inv["igst"],
                         "itc_blocked": inv["itc_blocked"],
                         "remark": inv["remark"],
+                        "gl_code": inv.get("gl_code") or "",
                         "has_file": inv_store_bytes is not None,
                         "eligible_itc": eligible,
                         "ineligible_itc": ineligible,
@@ -4299,6 +4440,7 @@ def process_invoices():
                         "igst": 0.0,
                         "itc_blocked": False,
                         "remark": inv.get("remark", ""),
+                        "gl_code": inv.get("gl_code") or "",
                         "has_file": False,
                         "eligible_itc": 0.0,
                         "ineligible_itc": 0.0,
@@ -4526,6 +4668,13 @@ def process_multipage_bill():
                 resolved_branch, resolved_state = resolve_bill_branch_and_state(
                     bill_filename, batch_branch, batch_state, inv.get("branch"), inv.get("state")
                 )
+                # Validate and match handwritten / stamped PL code against known catalog
+                raw_gl = inv.get("gl_code")
+                matched_gl, manual_gl_req = match_expense_pl_code(raw_gl, text_fallback=inv.get("remark", ""))
+                inv["gl_code"] = matched_gl or ""
+                if manual_gl_req and not inv.get("remark"):
+                    inv["remark"] = "Manual PL entry required"
+
                 inv["branch"] = resolved_branch[:100]
                 inv["state"] = resolved_state[:100]
                 inv["itc_blocked"] = bool(inv.get("itc_blocked", False))
@@ -4562,7 +4711,8 @@ def process_multipage_bill():
                         "payment_date": inv["payment_date"], "vendor_name": inv["vendor_name"],
                         "gstin": inv["gstin"], "branch": inv["branch"], "state": inv["state"],
                         "taxable_value": inv["taxable_value"], "cgst": inv["cgst"], "sgst": inv["sgst"], "igst": inv["igst"],
-                        "itc_blocked": inv["itc_blocked"], "remark": inv["remark"], "has_file": False,
+                        "itc_blocked": inv["itc_blocked"], "remark": inv["remark"],
+                        "gl_code": inv.get("gl_code") or "", "has_file": False,
                         "eligible_itc": eligible, "ineligible_itc": ineligible,
                         "financial_year": fy, "month": m, "filename": bill_filename,
                         "ai_model_used": inv.get("_ai_model"),
@@ -4574,10 +4724,10 @@ def process_multipage_bill():
                 try:
                     cur.execute("SAVEPOINT sp_mpb")
                     cur.execute('''
-                        INSERT INTO invoices (user_id, client_id, invoice_number, invoice_date, payment_date, vendor_name, gstin, branch, state, taxable_value, cgst, sgst, igst, itc_blocked, remark, eligible_itc, ineligible_itc, file_data, file_mime_type, file_name, financial_year, month)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
+                        INSERT INTO invoices (user_id, client_id, invoice_number, invoice_date, payment_date, vendor_name, gstin, branch, state, taxable_value, cgst, sgst, igst, itc_blocked, remark, gl_code, eligible_itc, ineligible_itc, file_data, file_mime_type, file_name, financial_year, month)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
                     ''', (user_id, client_id, inv["invoice_number"], inv["invoice_date"], inv["payment_date"], inv["vendor_name"], inv["gstin"], inv["branch"], inv["state"],
-                          inv["taxable_value"], inv["cgst"], inv["sgst"], inv["igst"], inv["itc_blocked"], inv["remark"],
+                          inv["taxable_value"], inv["cgst"], inv["sgst"], inv["igst"], inv["itc_blocked"], inv["remark"], inv.get("gl_code") or "",
                           eligible, ineligible,
                           psycopg2.Binary(inv['_store_file_bytes']) if inv.get('_store_file_bytes') else None,
                           inv.get('_store_mime_type'), bill_filename, fy, m))
@@ -4590,6 +4740,7 @@ def process_multipage_bill():
                         "gstin": inv["gstin"], "branch": inv["branch"], "state": inv["state"],
                         "taxable_value": inv["taxable_value"], "cgst": inv["cgst"], "sgst": inv["sgst"], "igst": inv["igst"],
                         "itc_blocked": inv["itc_blocked"], "remark": inv["remark"],
+                        "gl_code": inv.get("gl_code") or "",
                         "has_file": inv.get('_store_file_bytes') is not None,
                         "eligible_itc": eligible, "ineligible_itc": ineligible,
                         "financial_year": fy, "month": m,
@@ -4609,7 +4760,8 @@ def process_multipage_bill():
                         "vendor_name": inv.get("vendor_name", f"Failed {bill_filename}"), "gstin": inv.get("gstin", "N/A"),
                         "branch": inv.get("branch", "Unassigned"), "state": inv.get("state", "Unassigned"),
                         "taxable_value": 0.0, "cgst": 0.0, "sgst": 0.0, "igst": 0.0,
-                        "itc_blocked": False, "remark": inv.get("remark", ""), "has_file": False,
+                        "itc_blocked": False, "remark": inv.get("remark", ""),
+                        "gl_code": inv.get("gl_code") or "", "has_file": False,
                         "eligible_itc": 0.0, "ineligible_itc": 0.0, "filename": bill_filename,
                         "message": f"Database save error: {ins_err}"
                     })
@@ -8310,7 +8462,8 @@ def add_expense_code_master():
     if not code or not particulars:
         return jsonify({"error": "Expense PL code and particulars are both required."}), 400
 
-    global EXPENSE_MASTER_CODES
+    global EXPENSE_MASTER_CODES, _MASTER_REFERENCE_BLOCK
+    _MASTER_REFERENCE_BLOCK = None
     entry = {"code": code, "particulars": particulars, "category": category}
     existing = next((m for m in EXPENSE_MASTER_CODES if str(m.get('code')).strip().upper() == code), None)
     if existing:
@@ -8361,7 +8514,8 @@ def delete_expense_code_master(code):
         return jsonify({"error": "Deleting expense PL codes is restricted to Administrator users only."}), 403
 
     clean = str(code).strip().upper()
-    global EXPENSE_MASTER_CODES
+    global EXPENSE_MASTER_CODES, _MASTER_REFERENCE_BLOCK
+    _MASTER_REFERENCE_BLOCK = None
     before = len(EXPENSE_MASTER_CODES)
     EXPENSE_MASTER_CODES = [m for m in EXPENSE_MASTER_CODES if str(m.get('code')).strip().upper() != clean]
     if len(EXPENSE_MASTER_CODES) == before:
