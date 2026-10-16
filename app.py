@@ -5605,7 +5605,10 @@ def export_filtered_reconciliation():
 
         # 2. Apply Status filter
         if status_filter and status_filter.lower() != 'all':
-            items = [i for i in items if (i.get('status') or '').lower() == status_filter.lower()]
+            if 'gst' in status_filter.lower() and 'amount' in status_filter.lower():
+                items = [i for i in items if 'gst' in (i.get('status') or '').lower() and 'amount' in (i.get('status') or '').lower()]
+            else:
+                items = [i for i in items if (i.get('status') or '').lower() == status_filter.lower()]
 
         # 3. Apply Search query
         if search_query:

@@ -218,7 +218,10 @@ document.addEventListener('DOMContentLoaded', function() {
 
             // Sync status filter buttons
             statusBtns.forEach(btn => {
-                if (btn.getAttribute('data-status') === activeFilter) {
+                const btnStatus = btn.getAttribute('data-status') || '';
+                const isMatch = (btnStatus === activeFilter) ||
+                                (btnStatus.includes('GST') && btnStatus.includes('Amount') && activeFilter.includes('GST') && activeFilter.includes('Amount'));
+                if (isMatch) {
                     btn.classList.add('active');
                 } else {
                     btn.classList.remove('active');
@@ -232,8 +235,10 @@ document.addEventListener('DOMContentLoaded', function() {
 
     function syncKpiCardHighlights() {
         kpiCards.forEach(card => {
-            const status = card.getAttribute('data-kpi-status');
-            if (activeFilter === status) {
+            const status = card.getAttribute('data-kpi-status') || '';
+            const isMatch = (activeFilter === status) || 
+                            (activeFilter.includes('GST') && activeFilter.includes('Amount') && status.includes('GST') && status.includes('Amount'));
+            if (isMatch) {
                 card.style.transform = 'translateY(-2px)';
                 card.style.boxShadow = '0 6px 14px rgba(37, 99, 235, 0.2)';
                 card.style.outline = '2px solid var(--accent-blue)';
@@ -719,8 +724,14 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (item.is_split && (item.status === 'Missing in GSTR-2B' || item.status === 'Missing in Books')) {
                     return false;
                 }
-            } else if (item.status !== activeFilter) {
-                return false;
+            } else {
+                const isGstFilter = (activeFilter.includes('GST') && activeFilter.includes('Amount'));
+                const isItemGst = (item.status && item.status.includes('GST') && item.status.includes('Amount'));
+                if (isGstFilter) {
+                    if (!isItemGst) return false;
+                } else if (item.status !== activeFilter) {
+                    return false;
+                }
             }
 
             // 3. Search Text Query (Fuzzy check supplier, gstin, or inv number)
