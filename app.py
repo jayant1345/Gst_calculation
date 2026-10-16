@@ -6088,8 +6088,8 @@ def execute_reconciliation(fy, months, user_id, is_admin, client_id='nutan_nagri
             m_status = match_info['status']
 
             if m_status.startswith('Split'):
-                # CA chose to split this near-match:
-                # Left side (Our Books) becomes "Missing in GSTR-2B"
+                # CA chose to split this near-match for monthly reports:
+                # 1. Left side (Our Books) becomes "Missing in GSTR-2B" for monthly reporting/vendor notice
                 manual_reconciled.append({
                     "status": "Missing in GSTR-2B",
                     "book": bi,
@@ -6099,7 +6099,7 @@ def execute_reconciliation(fy, months, user_id, is_admin, client_id='nutan_nagri
                     "split_pair_id": pe['id'],
                     "split_origin": m_status
                 })
-                # Right side (Portal) becomes "Missing in Books"
+                # 2. Right side (Portal) becomes "Missing in Books" for monthly unbooked 2B tracking
                 manual_reconciled.append({
                     "status": "Missing in Books",
                     "book": None,
@@ -6109,8 +6109,19 @@ def execute_reconciliation(fy, months, user_id, is_admin, client_id='nutan_nagri
                     "split_pair_id": bi['id'],
                     "split_origin": m_status
                 })
+                # 3. AND BOTH sides remain linked as a pair under "GST Same & Amount Same (Inv Mismatch)" for Annual / Multi-month Recon!
+                manual_reconciled.append({
+                    "status": "GST Same & Amount Same (Inv Mismatch)",
+                    "book": bi,
+                    "portal": pe,
+                    "state": st,
+                    "is_split": True,
+                    "split_for_monthly": True,
+                    "split_origin": m_status
+                })
                 manual_split_portal_count += 1
                 manual_split_books_count += 1
+                gst_same_amount_same_count += 1
             else:
                 manual_reconciled.append({
                     "status": m_status,
@@ -6702,6 +6713,8 @@ def get_gstr3b_summary():
             status = item["status"]
             book = item.get("book")
             if not book:
+                continue
+            if item.get("is_split") and status.startswith("GST"):
                 continue
 
             cgst = book.get("cgst", 0.0)

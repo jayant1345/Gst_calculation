@@ -689,8 +689,9 @@ document.addEventListener('DOMContentLoaded', function() {
             mismatched: 0, 
             missing_in_portal: 0, 
             missing_in_books: 0,
+            possible_match: 0,
             gst_same_amount_same: 0,
-            total_books: subset.filter(i => i.book).length || subset.length
+            total_books: subset.filter(i => i.book && !(i.is_split && i.status === 'Missing in GSTR-2B')).length || subset.length
         };
         subset.forEach(item => {
             if (item.status === 'Matched') counts.matched++;
@@ -714,7 +715,11 @@ document.addEventListener('DOMContentLoaded', function() {
             }
 
             // 2. Status Filter
-            if (activeFilter !== 'all' && item.status !== activeFilter) {
+            if (activeFilter === 'all') {
+                if (item.is_split && (item.status === 'Missing in GSTR-2B' || item.status === 'Missing in Books')) {
+                    return false;
+                }
+            } else if (item.status !== activeFilter) {
                 return false;
             }
 
@@ -810,7 +815,14 @@ document.addEventListener('DOMContentLoaded', function() {
             const pGst = item.portal && item.portal.total_gst !== undefined && item.portal.total_gst !== null ? `₹${item.portal.total_gst.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}` : '-';
 
             // Status Badge
-            const statusBadge = `<span class="badge ${getStatusBadgeClass(item.status)}">${escapeHtml(item.status)}</span>`;
+            let statusBadge = `<span class="badge ${getStatusBadgeClass(item.status)}">${escapeHtml(item.status)}</span>`;
+            if (item.is_split) {
+                if (item.status === 'Missing in GSTR-2B' || item.status === 'Missing in Books') {
+                    statusBadge += `<div style="font-size:10px; color:#64748b; font-weight:600; margin-top:3px;"><i class="fa-solid fa-calendar-day"></i> Split for Monthly</div>`;
+                } else if (item.status === 'GST Same & Amount Same (Inv Mismatch)' || item.status === 'GST & Amount Same (Inv Mismatch)') {
+                    statusBadge += `<div style="font-size:10px; color:#7c3aed; font-weight:600; margin-top:3px;"><i class="fa-solid fa-link"></i> Linked for Annual Recon</div>`;
+                }
+            }
 
             // Actions Button (kind stored on a data attribute; listener attached after insert)
             let actionBtn = '';
@@ -825,8 +837,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     actionBtn += `<button class="btn-action-small view" data-action="view-bill" title="Show Purchase Bill" style="background:#0284c7; color:#fff;"><i class="fa-solid fa-file-invoice"></i></button>`;
                 }
                 actionBtn += `
-                    <button class="btn-action-small" data-action="split-missing-portal" data-book-id="${item.book ? item.book.id : ''}" data-portal-id="${item.portal ? item.portal.id : ''}" title="Split Match: Send Book Bill (Left) to 'Missing in Portal' and Portal Entry (Right) to 'Missing in Books'" style="background:#dc2626; color:#fff; border: 1px solid #b91c1c;"><i class="fa-solid fa-file-circle-xmark"></i></button>
-                    <button class="btn-action-small" data-action="split-missing-books" data-book-id="${item.book ? item.book.id : ''}" data-portal-id="${item.portal ? item.portal.id : ''}" title="Split Match: Send Portal Entry (Right) to 'Missing in Books' and Book Bill (Left) to 'Missing in Portal'" style="background:#ea580c; color:#fff; border: 1px solid #c2410c;"><i class="fa-solid fa-file-circle-question"></i></button>
+                    <button class="btn-action-small" data-action="split-possible-match" data-book-id="${item.book ? item.book.id : ''}" data-portal-id="${item.portal ? item.portal.id : ''}" title="Split Match: Books (Left) to 'Missing in Portal' & Portal (Right) to 'Missing in Books'" style="background:#dc2626; color:#fff; border: 1px solid #b91c1c;"><i class="fa-solid fa-arrows-split-up-and-left"></i></button>
                 `;
                 if (item.book && item.book.has_file) {
                     actionBtn += `<button class="btn-action-small hold" data-action="rescan" title="Re-scan original bill with AI"><i class="fa-solid fa-arrows-rotate"></i></button>`;
@@ -936,20 +947,17 @@ document.addEventListener('DOMContentLoaded', function() {
                         })
                         .catch(() => alert('Failed to revert.'));
                     }
-                    else if (kind === 'split-missing-portal' || kind === 'split-missing-books') {
+                    else if (kind === 'split-possible-match' || kind === 'split-missing-portal' || kind === 'split-missing-books') {
                         const bId = actionEl.dataset.bookId || (item.book ? item.book.id : null);
                         const pId = actionEl.dataset.portalId || (item.portal ? item.portal.id : null);
                         if (!bId || !pId) return;
-                        const actionType = kind === 'split-missing-portal' ? 'missing_in_portal' : 'missing_in_books';
-                        const promptMsg = kind === 'split-missing-portal'
-                            ? `Split this Possible Match?\n\n• Left side (Our Books #${bInv || bId}) → Missing in Portal\n• Right side (Portal #${pInv || pId}) → Missing in Books`
-                            : `Split this Possible Match?\n\n• Right side (Portal #${pInv || pId}) → Missing in Books\n• Left side (Our Books #${bInv || bId}) → Missing in Portal`;
+                        const promptMsg = `Split this Possible Match?\n\n• Books Bill (Left) → Missing in Portal\n• Portal Entry (Right) → Missing in Books\n• Also linked in 'GST Same & Amount Same' for Annual Recon`;
                         if (!confirm(promptMsg)) return;
 
                         fetch('/api/split-possible-match', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ book_id: parseInt(bId), portal_id: parseInt(pId), action: actionType })
+                            body: JSON.stringify({ book_id: parseInt(bId), portal_id: parseInt(pId), action: 'split' })
                         })
                         .then(res => res.json())
                         .then(data => {
@@ -1066,7 +1074,14 @@ document.addEventListener('DOMContentLoaded', function() {
             const pIgst = item.portal && item.portal.igst !== undefined && item.portal.igst !== null ? `₹${item.portal.igst.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}` : '-';
             const pGst = item.portal && item.portal.total_gst !== undefined && item.portal.total_gst !== null ? `₹${item.portal.total_gst.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}` : '-';
 
-            const statusBadge = `<span class="badge ${getStatusBadgeClass(item.status)}">${escapeHtml(item.status)}</span>`;
+            let statusBadge = `<span class="badge ${getStatusBadgeClass(item.status)}">${escapeHtml(item.status)}</span>`;
+            if (item.is_split) {
+                if (item.status === 'Missing in GSTR-2B' || item.status === 'Missing in Books') {
+                    statusBadge += `<div style="font-size:10px; color:#64748b; font-weight:600; margin-top:3px;"><i class="fa-solid fa-calendar-day"></i> Split for Monthly</div>`;
+                } else if (item.status === 'GST Same & Amount Same (Inv Mismatch)' || item.status === 'GST & Amount Same (Inv Mismatch)') {
+                    statusBadge += `<div style="font-size:10px; color:#7c3aed; font-weight:600; margin-top:3px;"><i class="fa-solid fa-link"></i> Linked for Annual Recon</div>`;
+                }
+            }
 
             const isMatched = item.status === 'Matched';
             const isPossibleMatch = item.status === 'Possible Match';
@@ -1077,8 +1092,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 actionHtml = `
                     <button class="mobile-action-btn approve" data-action="confirm-match"><i class="fa-solid fa-check"></i> Confirm Match</button>
                     <button class="mobile-action-btn" data-action="convert-gst-amount-same" style="background:#7c3aed; color:#fff; border-color:#6d28d9;"><i class="fa-solid fa-arrow-right-arrow-left"></i> Convert (GST & Amount Same)</button>
-                    <button class="mobile-action-btn" data-action="split-missing-portal" data-book-id="${item.book ? item.book.id : ''}" data-portal-id="${item.portal ? item.portal.id : ''}" style="background:#dc2626; color:#fff; border-color:#b91c1c;"><i class="fa-solid fa-file-circle-xmark"></i> Missing in Portal (Left Side)</button>
-                    <button class="mobile-action-btn" data-action="split-missing-books" data-book-id="${item.book ? item.book.id : ''}" data-portal-id="${item.portal ? item.portal.id : ''}" style="background:#ea580c; color:#fff; border-color:#c2410c;"><i class="fa-solid fa-file-circle-question"></i> Missing in Books (Right Side)</button>
+                    <button class="mobile-action-btn" data-action="split-possible-match" data-book-id="${item.book ? item.book.id : ''}" data-portal-id="${item.portal ? item.portal.id : ''}" style="background:#dc2626; color:#fff; border-color:#b91c1c;"><i class="fa-solid fa-arrows-split-up-and-left"></i> Split Match (Push to Both)</button>
                 `;
                 if (item.book) {
                     actionHtml += `<button class="mobile-action-btn view" data-action="view-bill" style="background:#0284c7; color:#fff;"><i class="fa-solid fa-file-invoice"></i> Show Bill</button>`;
@@ -1196,20 +1210,17 @@ document.addEventListener('DOMContentLoaded', function() {
                         })
                         .catch(() => alert('Failed to revert.'));
                     }
-                    else if (kind === 'split-missing-portal' || kind === 'split-missing-books') {
+                    else if (kind === 'split-possible-match' || kind === 'split-missing-portal' || kind === 'split-missing-books') {
                         const bId = cardActionEl.dataset.bookId || (item.book ? item.book.id : null);
                         const pId = cardActionEl.dataset.portalId || (item.portal ? item.portal.id : null);
                         if (!bId || !pId) return;
-                        const actionType = kind === 'split-missing-portal' ? 'missing_in_portal' : 'missing_in_books';
-                        const promptMsg = kind === 'split-missing-portal'
-                            ? `Split this Possible Match?\n\n• Left side (Our Books #${bInv || bId}) → Missing in Portal\n• Right side (Portal #${pInv || pId}) → Missing in Books`
-                            : `Split this Possible Match?\n\n• Right side (Portal #${pInv || pId}) → Missing in Books\n• Left side (Our Books #${bInv || bId}) → Missing in Portal`;
+                        const promptMsg = `Split this Possible Match?\n\n• Books Bill (Left) → Missing in Portal\n• Portal Entry (Right) → Missing in Books\n• Also linked in 'GST Same & Amount Same' for Annual Recon`;
                         if (!confirm(promptMsg)) return;
 
                         fetch('/api/split-possible-match', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ book_id: parseInt(bId), portal_id: parseInt(pId), action: actionType })
+                            body: JSON.stringify({ book_id: parseInt(bId), portal_id: parseInt(pId), action: 'split' })
                         })
                         .then(res => res.json())
                         .then(data => {
