@@ -94,14 +94,43 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    // Single-click on a month selects ONLY that month (or Ctrl/Cmd-click for multi-selection)
+    let isMultiSelectMode = false;
+    const btnToggleMultiSelect = document.getElementById('btn-toggle-multiselect');
+    const multiSelectLabel = document.getElementById('multiselect-status-label');
+
+    function updateMultiSelectBtnState() {
+        if (!btnToggleMultiSelect || !multiSelectLabel) return;
+        if (isMultiSelectMode) {
+            btnToggleMultiSelect.classList.add('active');
+            btnToggleMultiSelect.style.background = '#8b5cf6';
+            btnToggleMultiSelect.style.color = '#ffffff';
+            btnToggleMultiSelect.style.borderColor = '#7c3aed';
+            multiSelectLabel.textContent = 'ON';
+        } else {
+            btnToggleMultiSelect.classList.remove('active');
+            btnToggleMultiSelect.style.background = '#f1f5f9';
+            btnToggleMultiSelect.style.color = '#475569';
+            btnToggleMultiSelect.style.borderColor = '#cbd5e1';
+            multiSelectLabel.textContent = 'OFF';
+        }
+    }
+
+    if (btnToggleMultiSelect) {
+        btnToggleMultiSelect.addEventListener('click', function(e) {
+            e.preventDefault();
+            isMultiSelectMode = !isMultiSelectMode;
+            updateMultiSelectBtnState();
+        });
+    }
+
+    // Month pill click handler (supports single-click, Multi-Select ON mode, and Ctrl/Cmd-click)
     monthPillLabels.forEach(label => {
         label.addEventListener('click', function(e) {
             e.preventDefault();
             const targetCb = this.querySelector('input[name="months"]');
             if (!targetCb) return;
 
-            const isMultiSelect = e.ctrlKey || e.metaKey || e.shiftKey;
+            const isMultiSelect = isMultiSelectMode || e.ctrlKey || e.metaKey || e.shiftKey;
 
             if (isMultiSelect) {
                 targetCb.checked = !targetCb.checked;
