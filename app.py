@@ -3262,6 +3262,43 @@ def revert_reconciliation_match():
         print(f"Error reverting reconciliation match: {e}")
         return jsonify({"error": friendly_error_message(e)}), 500
 
+@app.route('/api/split-possible-match', methods=['POST'])
+@login_required
+def split_possible_match():
+    """Splits a Possible Match into its individual components:
+    The Book bill (left side) goes to 'Missing in GSTR-2B' (Missing in Portal),
+    and the Portal entry (right side) goes to 'Missing in Books'."""
+    user_id = session['user_id']
+    data = request.json or {}
+    book_id = data.get('book_id')
+    portal_id = data.get('portal_id')
+    action_type = data.get('action') or 'missing_in_portal'
+    client_id = get_current_client_id() or 'nutan_nagrik'
+
+    if not book_id or not portal_id:
+        return jsonify({"error": "book_id and portal_id are required"}), 400
+
+    status = 'Split_Missing_In_Portal' if action_type == 'missing_in_portal' else 'Split_Missing_In_Books'
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute('''
+            INSERT INTO reconciliation_matches (client_id, book_id, portal_id, status)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (client_id, book_id)
+            DO UPDATE SET portal_id = EXCLUDED.portal_id, status = EXCLUDED.status
+        ''', (client_id, book_id, portal_id, status))
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        log_activity(user_id, 'possible_match_split', f'Split possible match: book #{book_id} to Missing in Portal, portal #{portal_id} to Missing in Books', record_count=2)
+        return jsonify({"success": True})
+    except Exception as e:
+        print(f"Error splitting possible match: {e}")
+        return jsonify({"error": friendly_error_message(e)}), 500
+
 @app.route('/api/rescan-invoice', methods=['POST'])
 @login_required
 def rescan_invoice():
@@ -6040,6 +6077,8 @@ def execute_reconciliation(fy, months, user_id, is_admin, client_id='nutan_nagri
     used_manual_portal_ids = set()
     manual_reconciled = []
     gst_same_amount_same_count = 0
+    manual_split_portal_count = 0
+    manual_split_books_count = 0
 
     for b_id, match_info in saved_matches.items():
         if b_id in books_map and match_info['portal_id'] in portal_map:
@@ -6047,16 +6086,43 @@ def execute_reconciliation(fy, months, user_id, is_admin, client_id='nutan_nagri
             pe = portal_map[match_info['portal_id']]
             st = bi.get('state') or pe.get('state') or 'Unassigned'
             m_status = match_info['status']
-            manual_reconciled.append({
-                "status": m_status,
-                "book": bi,
-                "portal": pe,
-                "state": st
-            })
+
+            if m_status.startswith('Split'):
+                # CA chose to split this near-match:
+                # Left side (Our Books) becomes "Missing in GSTR-2B"
+                manual_reconciled.append({
+                    "status": "Missing in GSTR-2B",
+                    "book": bi,
+                    "portal": None,
+                    "state": bi.get('state') or 'Unassigned',
+                    "is_split": True,
+                    "split_pair_id": pe['id'],
+                    "split_origin": m_status
+                })
+                # Right side (Portal) becomes "Missing in Books"
+                manual_reconciled.append({
+                    "status": "Missing in Books",
+                    "book": None,
+                    "portal": pe,
+                    "state": pe.get('state') or 'Unassigned',
+                    "is_split": True,
+                    "split_pair_id": bi['id'],
+                    "split_origin": m_status
+                })
+                manual_split_portal_count += 1
+                manual_split_books_count += 1
+            else:
+                manual_reconciled.append({
+                    "status": m_status,
+                    "book": bi,
+                    "portal": pe,
+                    "state": st
+                })
+                if m_status == 'GST Same & Amount Same (Inv Mismatch)':
+                    gst_same_amount_same_count += 1
+
             used_manual_book_ids.add(b_id)
             used_manual_portal_ids.add(match_info['portal_id'])
-            if m_status == 'GST Same & Amount Same (Inv Mismatch)':
-                gst_same_amount_same_count += 1
 
     def match_bucket(books_subset, portal_subset):
         """Runs the exact-match + near-match algorithm within one state's
@@ -6245,8 +6311,8 @@ def execute_reconciliation(fy, months, user_id, is_admin, client_id='nutan_nagri
         "total_portal": len(portal_entries),
         "matched": matched_count,
         "mismatched": mismatched_count,
-        "missing_in_portal": missing_portal_count,
-        "missing_in_books": missing_books_count,
+        "missing_in_portal": missing_portal_count + manual_split_portal_count,
+        "missing_in_books": missing_books_count + manual_split_books_count,
         "possible_match": possible_match_count,
         "gst_same_amount_same": gst_same_amount_same_count
     }

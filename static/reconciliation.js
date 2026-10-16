@@ -824,6 +824,10 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (item.book) {
                     actionBtn += `<button class="btn-action-small view" data-action="view-bill" title="Show Purchase Bill" style="background:#0284c7; color:#fff;"><i class="fa-solid fa-file-invoice"></i></button>`;
                 }
+                actionBtn += `
+                    <button class="btn-action-small" data-action="split-missing-portal" data-book-id="${item.book ? item.book.id : ''}" data-portal-id="${item.portal ? item.portal.id : ''}" title="Split Match: Send Book Bill (Left) to 'Missing in Portal' and Portal Entry (Right) to 'Missing in Books'" style="background:#dc2626; color:#fff; border: 1px solid #b91c1c;"><i class="fa-solid fa-file-circle-xmark"></i></button>
+                    <button class="btn-action-small" data-action="split-missing-books" data-book-id="${item.book ? item.book.id : ''}" data-portal-id="${item.portal ? item.portal.id : ''}" title="Split Match: Send Portal Entry (Right) to 'Missing in Books' and Book Bill (Left) to 'Missing in Portal'" style="background:#ea580c; color:#fff; border: 1px solid #c2410c;"><i class="fa-solid fa-file-circle-question"></i></button>
+                `;
                 if (item.book && item.book.has_file) {
                     actionBtn += `<button class="btn-action-small hold" data-action="rescan" title="Re-scan original bill with AI"><i class="fa-solid fa-arrows-rotate"></i></button>`;
                 }
@@ -842,6 +846,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
                 if (item.status === 'Missing in GSTR-2B') {
                     actionBtn += `<button class="btn-action-small hold" data-action="mark-provisional" title="Mark as Provisional -- re-check automatically against a later month"><i class="fa-solid fa-clock-rotate-left"></i></button>`;
+                    if (item.is_split) {
+                        actionBtn += `<button class="btn-action-small hold" data-action="revert-split" data-book-id="${item.book ? item.book.id : ''}" title="Revert Split (restore back into Possible Match)"><i class="fa-solid fa-rotate-left"></i></button>`;
+                    }
                 }
             } else if (item.status === 'Missing in Books') {
                 actionBtn = `
@@ -849,6 +856,9 @@ document.addEventListener('DOMContentLoaded', function() {
                     <button class="btn-action-small hold" data-action="mark-provisional" title="Mark as Provisional -- re-check automatically against a later month"><i class="fa-solid fa-clock-rotate-left"></i></button>
                     <button class="btn-action-small delete" data-action="delete-portal-entry" data-id="${item.portal ? item.portal.id : ''}" title="Delete GSTR-2B Entry" style="background: #fef2f2; color: #dc2626; border: 1px solid #fca5a5;"><i class="fa-solid fa-trash"></i></button>
                 `;
+                if (item.is_split) {
+                    actionBtn += `<button class="btn-action-small hold" data-action="revert-split" data-book-id="${item.split_pair_id || ''}" title="Revert Split (restore back into Possible Match)"><i class="fa-solid fa-rotate-left"></i></button>`;
+                }
             } else {
                 actionBtn = `<button class="btn-action-small hold" data-action="hold" title="Hold"><i class="fa-solid fa-pause"></i></button>`;
             }
@@ -925,6 +935,44 @@ document.addEventListener('DOMContentLoaded', function() {
                             else alert(data.error || 'Failed to revert.');
                         })
                         .catch(() => alert('Failed to revert.'));
+                    }
+                    else if (kind === 'split-missing-portal' || kind === 'split-missing-books') {
+                        const bId = actionEl.dataset.bookId || (item.book ? item.book.id : null);
+                        const pId = actionEl.dataset.portalId || (item.portal ? item.portal.id : null);
+                        if (!bId || !pId) return;
+                        const actionType = kind === 'split-missing-portal' ? 'missing_in_portal' : 'missing_in_books';
+                        const promptMsg = kind === 'split-missing-portal'
+                            ? `Split this Possible Match?\n\n• Left side (Our Books #${bInv || bId}) → Missing in Portal\n• Right side (Portal #${pInv || pId}) → Missing in Books`
+                            : `Split this Possible Match?\n\n• Right side (Portal #${pInv || pId}) → Missing in Books\n• Left side (Our Books #${bInv || bId}) → Missing in Portal`;
+                        if (!confirm(promptMsg)) return;
+
+                        fetch('/api/split-possible-match', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ book_id: parseInt(bId), portal_id: parseInt(pId), action: actionType })
+                        })
+                        .then(res => res.json())
+                        .then(data => {
+                            if (data.success) fetchReconciliationData();
+                            else alert(data.error || 'Failed to split match.');
+                        })
+                        .catch(() => alert('Failed to split match.'));
+                    }
+                    else if (kind === 'revert-split') {
+                        const bId = actionEl.dataset.bookId || (item.book ? item.book.id : item.split_pair_id);
+                        if (!bId) return;
+                        if (!confirm('Revert this split and restore both sides back into Possible Match?')) return;
+                        fetch('/api/revert-reconciliation-match', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ book_id: parseInt(bId) })
+                        })
+                        .then(res => res.json())
+                        .then(data => {
+                            if (data.success) fetchReconciliationData();
+                            else alert(data.error || 'Failed to revert split.');
+                        })
+                        .catch(() => alert('Failed to revert split.'));
                     }
                     else if (kind === 'rescan') rescanInvoice(item.book.id, actionEl);
                     else if (kind === 'view-bill') openBillPreview(item.book.id, supplier, bInv, item.book ? item.book.has_file : true);
@@ -1029,6 +1077,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 actionHtml = `
                     <button class="mobile-action-btn approve" data-action="confirm-match"><i class="fa-solid fa-check"></i> Confirm Match</button>
                     <button class="mobile-action-btn" data-action="convert-gst-amount-same" style="background:#7c3aed; color:#fff; border-color:#6d28d9;"><i class="fa-solid fa-arrow-right-arrow-left"></i> Convert (GST & Amount Same)</button>
+                    <button class="mobile-action-btn" data-action="split-missing-portal" data-book-id="${item.book ? item.book.id : ''}" data-portal-id="${item.portal ? item.portal.id : ''}" style="background:#dc2626; color:#fff; border-color:#b91c1c;"><i class="fa-solid fa-file-circle-xmark"></i> Missing in Portal (Left Side)</button>
+                    <button class="mobile-action-btn" data-action="split-missing-books" data-book-id="${item.book ? item.book.id : ''}" data-portal-id="${item.portal ? item.portal.id : ''}" style="background:#ea580c; color:#fff; border-color:#c2410c;"><i class="fa-solid fa-file-circle-question"></i> Missing in Books (Right Side)</button>
                 `;
                 if (item.book) {
                     actionHtml += `<button class="mobile-action-btn view" data-action="view-bill" style="background:#0284c7; color:#fff;"><i class="fa-solid fa-file-invoice"></i> Show Bill</button>`;
@@ -1045,10 +1095,29 @@ document.addEventListener('DOMContentLoaded', function() {
                     actionHtml += `<button class="mobile-action-btn view" data-action="view-bill" style="background:#0284c7; color:#fff;"><i class="fa-solid fa-file-invoice"></i> Show Bill</button>`;
                 }
             } else if (item.status === 'Missing in Books') {
-                actionHtml = `
-                    <button class="mobile-action-btn hold" data-action="hold"><i class="fa-solid fa-pause"></i> Hold</button>
-                    <button class="mobile-action-btn delete" data-action="delete-portal-entry" data-id="${item.portal ? item.portal.id : ''}" style="background: #fef2f2; color: #dc2626; border-color: #fca5a5;"><i class="fa-solid fa-trash"></i> Delete Entry</button>
-                `;
+                if (item.is_split) {
+                    actionHtml = `
+                        <button class="mobile-action-btn hold" data-action="revert-split" data-book-id="${item.split_pair_id || ''}" style="background:#64748b; color:#fff; border-color:#475569;"><i class="fa-solid fa-rotate-left"></i> Revert Split</button>
+                        <button class="mobile-action-btn delete" data-action="delete-portal-entry" data-id="${item.portal ? item.portal.id : ''}" style="background: #fef2f2; color: #dc2626; border-color: #fca5a5;"><i class="fa-solid fa-trash"></i> Delete Entry</button>
+                    `;
+                } else {
+                    actionHtml = `
+                        <button class="mobile-action-btn hold" data-action="hold"><i class="fa-solid fa-pause"></i> Hold</button>
+                        <button class="mobile-action-btn delete" data-action="delete-portal-entry" data-id="${item.portal ? item.portal.id : ''}" style="background: #fef2f2; color: #dc2626; border-color: #fca5a5;"><i class="fa-solid fa-trash"></i> Delete Entry</button>
+                    `;
+                }
+            } else if (item.status === 'Missing in GSTR-2B' || item.status === 'Missing in Portal') {
+                if (item.is_split) {
+                    actionHtml = `
+                        <button class="mobile-action-btn hold" data-action="revert-split" data-book-id="${item.book ? item.book.id : ''}" style="background:#64748b; color:#fff; border-color:#475569;"><i class="fa-solid fa-rotate-left"></i> Revert Split</button>
+                        <button class="mobile-action-btn notify" data-action="notify"><i class="fa-solid fa-envelope"></i> Send Notice</button>
+                    `;
+                } else {
+                    actionHtml = `<button class="mobile-action-btn notify" data-action="notify"><i class="fa-solid fa-envelope"></i> Send Notice</button>`;
+                }
+                if (item.book && item.book.has_file) {
+                    actionHtml += `<button class="mobile-action-btn view" data-action="view-bill"><i class="fa-solid fa-file-lines"></i> View Bill</button>`;
+                }
             } else {
                 actionHtml = `<button class="mobile-action-btn notify" data-action="notify"><i class="fa-solid fa-envelope"></i> Send Notice</button>`;
                 if (item.status === 'Value Mismatched' && item.book && item.book.has_file) {
@@ -1126,6 +1195,44 @@ document.addEventListener('DOMContentLoaded', function() {
                             else alert(data.error || 'Failed to revert.');
                         })
                         .catch(() => alert('Failed to revert.'));
+                    }
+                    else if (kind === 'split-missing-portal' || kind === 'split-missing-books') {
+                        const bId = cardActionEl.dataset.bookId || (item.book ? item.book.id : null);
+                        const pId = cardActionEl.dataset.portalId || (item.portal ? item.portal.id : null);
+                        if (!bId || !pId) return;
+                        const actionType = kind === 'split-missing-portal' ? 'missing_in_portal' : 'missing_in_books';
+                        const promptMsg = kind === 'split-missing-portal'
+                            ? `Split this Possible Match?\n\n• Left side (Our Books #${bInv || bId}) → Missing in Portal\n• Right side (Portal #${pInv || pId}) → Missing in Books`
+                            : `Split this Possible Match?\n\n• Right side (Portal #${pInv || pId}) → Missing in Books\n• Left side (Our Books #${bInv || bId}) → Missing in Portal`;
+                        if (!confirm(promptMsg)) return;
+
+                        fetch('/api/split-possible-match', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ book_id: parseInt(bId), portal_id: parseInt(pId), action: actionType })
+                        })
+                        .then(res => res.json())
+                        .then(data => {
+                            if (data.success) fetchReconciliationData();
+                            else alert(data.error || 'Failed to split match.');
+                        })
+                        .catch(() => alert('Failed to split match.'));
+                    }
+                    else if (kind === 'revert-split') {
+                        const bId = cardActionEl.dataset.bookId || (item.book ? item.book.id : item.split_pair_id);
+                        if (!bId) return;
+                        if (!confirm('Revert this split and restore both sides back into Possible Match?')) return;
+                        fetch('/api/revert-reconciliation-match', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ book_id: parseInt(bId) })
+                        })
+                        .then(res => res.json())
+                        .then(data => {
+                            if (data.success) fetchReconciliationData();
+                            else alert(data.error || 'Failed to revert split.');
+                        })
+                        .catch(() => alert('Failed to revert split.'));
                     }
                     else if (kind === 'rescan') rescanInvoice(item.book.id, cardActionEl);
                     else if (kind === 'view-bill') openBillPreview(item.book.id, supplier, bInv, item.book ? item.book.has_file : true);
