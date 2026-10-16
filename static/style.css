@@ -612,8 +612,8 @@ body {
 }
 
 .metrics-grid .metric-card:nth-child(5) {
-    background: linear-gradient(135deg, #64748b, #334155);
-    box-shadow: 0 10px 20px rgba(51, 65, 85, 0.15);
+    background: linear-gradient(135deg, #7c3aed, #4f46e5);
+    box-shadow: 0 10px 20px rgba(124, 58, 237, 0.2);
 }
 
 .card-icon {

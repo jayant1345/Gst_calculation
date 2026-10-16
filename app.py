@@ -522,6 +522,19 @@ def init_db():
             );
         ''')
 
+        # Reconciliation manual match confirmations (e.g. GST Same & Amount Same (Inv Mismatch))
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS reconciliation_matches (
+                id SERIAL PRIMARY KEY,
+                client_id VARCHAR(50) NOT NULL DEFAULT 'nutan_nagrik',
+                book_id INTEGER NOT NULL,
+                portal_id INTEGER NOT NULL,
+                status VARCHAR(100) NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (client_id, book_id)
+            );
+        ''')
+
 
 
         # Income Statements & Output GST Module Table
@@ -3153,6 +3166,102 @@ def apply_book_correction():
         print(f"Error: {e}")
         return jsonify({"error": friendly_error_message(e)}), 500
 
+@app.route('/api/convert-to-gst-amount-same', methods=['POST'])
+@login_required
+def convert_to_gst_amount_same():
+    """Converts a Possible Match invoice where GST number matches and amount matches,
+    but invoice number does not match, into 'GST Same & Amount Same (Inv Mismatch)'."""
+    user_id = session['user_id']
+    data = request.json or {}
+    book_id = data.get('book_id')
+    portal_id = data.get('portal_id')
+    client_id = get_current_client_id() or 'nutan_nagrik'
+
+    if not book_id or not portal_id:
+        return jsonify({"error": "book_id and portal_id are required"}), 400
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute('''
+            INSERT INTO reconciliation_matches (client_id, book_id, portal_id, status)
+            VALUES (%s, %s, %s, 'GST Same & Amount Same (Inv Mismatch)')
+            ON CONFLICT (client_id, book_id)
+            DO UPDATE SET portal_id = EXCLUDED.portal_id, status = EXCLUDED.status
+        ''', (client_id, book_id, portal_id))
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        log_activity(user_id, 'reconciliation_converted', f'Converted invoice #{book_id} to GST Same & Amount Same (Inv Mismatch)', record_count=1)
+        return jsonify({"success": True})
+    except Exception as e:
+        print(f"Error converting to GST same & amount same: {e}")
+        return jsonify({"error": friendly_error_message(e)}), 500
+
+@app.route('/api/convert-all-possible-to-gst-amount-same', methods=['POST'])
+@login_required
+def convert_all_possible_to_gst_amount_same():
+    """Bulk converts remaining Possible Match items into 'GST Same & Amount Same (Inv Mismatch)'."""
+    user_id = session['user_id']
+    data = request.json or {}
+    items = data.get('items') or []
+    client_id = get_current_client_id() or 'nutan_nagrik'
+
+    if not items:
+        return jsonify({"error": "No items provided"}), 400
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        count = 0
+        for it in items:
+            b_id = it.get('book_id')
+            p_id = it.get('portal_id')
+            if b_id and p_id:
+                cur.execute('''
+                    INSERT INTO reconciliation_matches (client_id, book_id, portal_id, status)
+                    VALUES (%s, %s, %s, 'GST Same & Amount Same (Inv Mismatch)')
+                    ON CONFLICT (client_id, book_id)
+                    DO UPDATE SET portal_id = EXCLUDED.portal_id, status = EXCLUDED.status
+                ''', (client_id, b_id, p_id))
+                count += 1
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        log_activity(user_id, 'reconciliation_converted_all', f'Converted {count} items to GST Same & Amount Same (Inv Mismatch)', record_count=count)
+        return jsonify({"success": True, "count": count})
+    except Exception as e:
+        print(f"Error bulk converting to GST same & amount same: {e}")
+        return jsonify({"error": friendly_error_message(e)}), 500
+
+@app.route('/api/revert-reconciliation-match', methods=['POST'])
+@login_required
+def revert_reconciliation_match():
+    """Reverts a manually categorized reconciliation match back to automatic matching."""
+    user_id = session['user_id']
+    data = request.json or {}
+    book_id = data.get('book_id')
+    client_id = get_current_client_id() or 'nutan_nagrik'
+
+    if not book_id:
+        return jsonify({"error": "book_id is required"}), 400
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute('DELETE FROM reconciliation_matches WHERE client_id = %s AND book_id = %s', (client_id, book_id))
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        log_activity(user_id, 'reconciliation_reverted', f'Reverted manual reconciliation match for invoice #{book_id}', record_count=1)
+        return jsonify({"success": True})
+    except Exception as e:
+        print(f"Error reverting reconciliation match: {e}")
+        return jsonify({"error": friendly_error_message(e)}), 500
+
 @app.route('/api/rescan-invoice', methods=['POST'])
 @login_required
 def rescan_invoice():
@@ -5541,6 +5650,7 @@ def export_filtered_reconciliation():
                 'Matched': PatternFill(start_color="D1FAE5", end_color="D1FAE5", fill_type="solid"),
                 'Value Mismatched': PatternFill(start_color="FEF3C7", end_color="FEF3C7", fill_type="solid"),
                 'Possible Match': PatternFill(start_color="EDE9FE", end_color="EDE9FE", fill_type="solid"),
+                'GST Same & Amount Same (Inv Mismatch)': PatternFill(start_color="DDD6FE", end_color="DDD6FE", fill_type="solid"),
                 'Missing in GSTR-2B': PatternFill(start_color="FEE2E2", end_color="FEE2E2", fill_type="solid"),
                 'Missing in Books': PatternFill(start_color="DBEAFE", end_color="DBEAFE", fill_type="solid"),
             }
@@ -5645,6 +5755,7 @@ def export_filtered_reconciliation():
             matched_items = [i for i in items if i.get('status') == 'Matched']
             mismatched_items = [i for i in items if i.get('status') == 'Value Mismatched']
             possible_items = [i for i in items if i.get('status') == 'Possible Match']
+            gst_same_items = [i for i in items if i.get('status') == 'GST Same & Amount Same (Inv Mismatch)']
             missing_portal_items = [i for i in items if i.get('status') == 'Missing in GSTR-2B']
             missing_books_items = [i for i in items if i.get('status') == 'Missing in Books']
 
@@ -5652,6 +5763,7 @@ def export_filtered_reconciliation():
                 ("Fully Matched", matched_items, "Matched"),
                 ("Value Mismatched", mismatched_items, "Value Mismatched"),
                 ("Possible Match", possible_items, "Possible Match"),
+                ("GST Same & Amount Same", gst_same_items, "GST Same & Amount Same (Inv Mismatch)"),
                 ("Missing in Portal", missing_portal_items, "Missing in GSTR-2B"),
                 ("Missing in Books", missing_books_items, "Missing in Books")
             ]
@@ -5912,8 +6024,39 @@ def execute_reconciliation(fy, months, user_id, is_admin, client_id='nutan_nagri
         ''', (user_id, client_id, fy, months))
     portal_entries = cur.fetchall()
 
+    cur.execute('''
+        SELECT book_id, portal_id, status
+        FROM reconciliation_matches
+        WHERE client_id = %s
+    ''', (client_id,))
+    saved_matches = {r['book_id']: r for r in cur.fetchall()}
+
     cur.close()
     conn.close()
+
+    books_map = {b['id']: b for b in books_invoices}
+    portal_map = {p['id']: p for p in portal_entries}
+    used_manual_book_ids = set()
+    used_manual_portal_ids = set()
+    manual_reconciled = []
+    gst_same_amount_same_count = 0
+
+    for b_id, match_info in saved_matches.items():
+        if b_id in books_map and match_info['portal_id'] in portal_map:
+            bi = books_map[b_id]
+            pe = portal_map[match_info['portal_id']]
+            st = bi.get('state') or pe.get('state') or 'Unassigned'
+            m_status = match_info['status']
+            manual_reconciled.append({
+                "status": m_status,
+                "book": bi,
+                "portal": pe,
+                "state": st
+            })
+            used_manual_book_ids.add(b_id)
+            used_manual_portal_ids.add(match_info['portal_id'])
+            if m_status == 'GST Same & Amount Same (Inv Mismatch)':
+                gst_same_amount_same_count += 1
 
     def match_bucket(books_subset, portal_subset):
         """Runs the exact-match + near-match algorithm within one state's
@@ -6042,9 +6185,11 @@ def execute_reconciliation(fy, months, user_id, is_admin, client_id='nutan_nagri
                 num_dist = levenshtein(bnum, p_num)
                 if gstin_dist == 0 and num_dist == 0:
                     continue  # would already have matched exactly above
-                if gstin_dist > 2 or num_dist > 3:
+                if gstin_dist > 2:
                     continue
-                score = gstin_dist + num_dist
+                if gstin_dist > 0 and num_dist > 3:
+                    continue
+                score = gstin_dist * 10 + min(num_dist, 10)
                 if best is None or score < best_score:
                     best = pr
                     best_score = score
@@ -6067,10 +6212,13 @@ def execute_reconciliation(fy, months, user_id, is_admin, client_id='nutan_nagri
     # Gujarat book invoice must never be compared against a Maharashtra
     # GSTR-2B entry, or vice versa. Legacy rows with no state tag fall into
     # their own "Unassigned" bucket and only match each other.
-    states_present = sorted({(bi['state'] or 'Unassigned') for bi in books_invoices} |
-                             {(pe['state'] or 'Unassigned') for pe in portal_entries})
+    active_books = [bi for bi in books_invoices if bi['id'] not in used_manual_book_ids]
+    active_portal = [pe for pe in portal_entries if pe['id'] not in used_manual_portal_ids]
 
-    reconciled = []
+    states_present = sorted({(bi['state'] or 'Unassigned') for bi in active_books} |
+                             {(pe['state'] or 'Unassigned') for pe in active_portal})
+
+    reconciled = list(manual_reconciled)
     matched_count = 0
     mismatched_count = 0
     missing_portal_count = 0
@@ -6078,8 +6226,8 @@ def execute_reconciliation(fy, months, user_id, is_admin, client_id='nutan_nagri
     possible_match_count = 0
 
     for st in states_present:
-        books_subset = [bi for bi in books_invoices if (bi['state'] or 'Unassigned') == st]
-        portal_subset = [pe for pe in portal_entries if (pe['state'] or 'Unassigned') == st]
+        books_subset = [bi for bi in active_books if (bi['state'] or 'Unassigned') == st]
+        portal_subset = [pe for pe in active_portal if (pe['state'] or 'Unassigned') == st]
 
         bucket_items, mc, mmc, mpc, mbc, pmc = match_bucket(books_subset, portal_subset)
         for item in bucket_items:
@@ -6099,7 +6247,8 @@ def execute_reconciliation(fy, months, user_id, is_admin, client_id='nutan_nagri
         "mismatched": mismatched_count,
         "missing_in_portal": missing_portal_count,
         "missing_in_books": missing_books_count,
-        "possible_match": possible_match_count
+        "possible_match": possible_match_count,
+        "gst_same_amount_same": gst_same_amount_same_count
     }
 
     return summary, reconciled, books_invoices, portal_entries

@@ -575,12 +575,13 @@ document.addEventListener('DOMContentLoaded', function() {
     // whichever other pill is currently active), so clicking one pill never
     // shifts the other row's numbers underneath the user.
     function updateFilterPillCounts() {
-        const statusCounts = { matched: 0, mismatched: 0, possible_match: 0, missing_in_portal: 0, missing_in_books: 0 };
+        const statusCounts = { matched: 0, mismatched: 0, possible_match: 0, gst_same_amount_same: 0, missing_in_portal: 0, missing_in_books: 0 };
         const stateCounts = { Gujarat: 0, Maharashtra: 0, Unassigned: 0 };
         reconData.forEach(item => {
             if (item.status === 'Matched') statusCounts.matched++;
             else if (item.status === 'Value Mismatched') statusCounts.mismatched++;
             else if (item.status === 'Possible Match') statusCounts.possible_match++;
+            else if (item.status === 'GST Same & Amount Same (Inv Mismatch)' || item.status === 'GST & Amount Same (Inv Mismatch)') statusCounts.gst_same_amount_same++;
             else if (item.status === 'Missing in GSTR-2B') statusCounts.missing_in_portal++;
             else if (item.status === 'Missing in Books') statusCounts.missing_in_books++;
 
@@ -600,6 +601,7 @@ document.addEventListener('DOMContentLoaded', function() {
             else if (status === 'Matched') setPillLabel(btn, statusCounts.matched);
             else if (status === 'Value Mismatched') setPillLabel(btn, statusCounts.mismatched);
             else if (status === 'Possible Match') setPillLabel(btn, statusCounts.possible_match);
+            else if (status.includes('GST') || status.includes('Amount Same')) setPillLabel(btn, statusCounts.gst_same_amount_same);
             else if (status === 'Missing in GSTR-2B') setPillLabel(btn, statusCounts.missing_in_portal);
             else if (status === 'Missing in Books') setPillLabel(btn, statusCounts.missing_in_books);
         });
@@ -669,6 +671,8 @@ document.addEventListener('DOMContentLoaded', function() {
         document.getElementById('kpi-mismatched').innerText = `${summary.mismatched} Invoices`;
         document.getElementById('kpi-missing-portal').innerText = `${summary.missing_in_portal} Invoices`;
         document.getElementById('kpi-missing-books').innerText = `${summary.missing_in_books} Invoices`;
+        const gstAmountEl = document.getElementById('kpi-gst-amount-same');
+        if (gstAmountEl) gstAmountEl.innerText = `${summary.gst_same_amount_same || 0} Invoices`;
     }
 
     // KPI cards reflect whichever state is currently selected (or the total
@@ -685,11 +689,14 @@ document.addEventListener('DOMContentLoaded', function() {
             mismatched: 0, 
             missing_in_portal: 0, 
             missing_in_books: 0,
+            gst_same_amount_same: 0,
             total_books: subset.filter(i => i.book).length || subset.length
         };
         subset.forEach(item => {
             if (item.status === 'Matched') counts.matched++;
             else if (item.status === 'Value Mismatched') counts.mismatched++;
+            else if (item.status === 'Possible Match') counts.possible_match++;
+            else if (item.status === 'GST Same & Amount Same (Inv Mismatch)' || item.status === 'GST & Amount Same (Inv Mismatch)') counts.gst_same_amount_same++;
             else if (item.status === 'Missing in GSTR-2B') counts.missing_in_portal++;
             else if (item.status === 'Missing in Books') counts.missing_in_books++;
         });
@@ -729,6 +736,32 @@ document.addEventListener('DOMContentLoaded', function() {
         });
 
         reconCountText.innerText = `${filtered.length} items found`;
+
+        const convertAllBtn = document.getElementById('btn-convert-all-possible');
+        if (convertAllBtn) {
+            const possibleItems = filtered.filter(i => i.status === 'Possible Match' && i.book && i.portal);
+            if (activeFilter === 'Possible Match' && possibleItems.length > 0) {
+                convertAllBtn.style.display = 'inline-flex';
+                convertAllBtn.onclick = () => {
+                    if (!confirm(`Convert all ${possibleItems.length} remaining Possible Matches into 'GST Same & Amount Same (Inv Mismatch)'?`)) return;
+                    const pairs = possibleItems.map(i => ({ book_id: i.book.id, portal_id: i.portal.id }));
+                    fetch('/api/convert-all-possible-to-gst-amount-same', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ items: pairs })
+                    })
+                    .then(res => res.json())
+                    .then(data => {
+                        if (data.success) fetchReconciliationData();
+                        else alert(data.error || 'Failed to bulk convert.');
+                    })
+                    .catch(() => alert('Failed to bulk convert.'));
+                };
+            } else {
+                convertAllBtn.style.display = 'none';
+            }
+        }
+
         renderLedger(filtered);
     }
 
@@ -784,14 +817,28 @@ document.addEventListener('DOMContentLoaded', function() {
             if (item.status === 'Matched') {
                 actionBtn = `<button class="btn-action-small approve" data-action="approve" title="Approve ITC"><i class="fa-solid fa-check"></i></button>`;
             } else if (item.status === 'Possible Match') {
-                actionBtn = `<button class="btn-action-small approve" data-action="confirm-match" title="Confirm this is the same invoice"><i class="fa-solid fa-code-compare"></i></button>`;
+                actionBtn = `
+                    <button class="btn-action-small approve" data-action="confirm-match" title="Confirm Match (converts to Completely Matched)"><i class="fa-solid fa-check"></i></button>
+                    <button class="btn-action-small" data-action="convert-gst-amount-same" data-book-id="${item.book ? item.book.id : ''}" data-portal-id="${item.portal ? item.portal.id : ''}" title="Convert to 'GST Same & Amount Same (Inv Mismatch)'" style="background:#7c3aed; color:#fff; border: 1px solid #6d28d9;"><i class="fa-solid fa-arrow-right-arrow-left"></i></button>
+                `;
+                if (item.book) {
+                    actionBtn += `<button class="btn-action-small view" data-action="view-bill" title="Show Purchase Bill" style="background:#0284c7; color:#fff;"><i class="fa-solid fa-file-invoice"></i></button>`;
+                }
                 if (item.book && item.book.has_file) {
                     actionBtn += `<button class="btn-action-small hold" data-action="rescan" title="Re-scan original bill with AI"><i class="fa-solid fa-arrows-rotate"></i></button>`;
+                }
+            } else if (item.status === 'GST Same & Amount Same (Inv Mismatch)' || item.status === 'GST & Amount Same (Inv Mismatch)') {
+                actionBtn = `
+                    <button class="btn-action-small approve" data-action="confirm-match" title="Promote to Completely Matched"><i class="fa-solid fa-check"></i></button>
+                    <button class="btn-action-small hold" data-action="revert-match" data-book-id="${item.book ? item.book.id : ''}" title="Revert to Possible Match"><i class="fa-solid fa-rotate-left"></i></button>
+                `;
+                if (item.book) {
+                    actionBtn += `<button class="btn-action-small view" data-action="view-bill" title="Show Purchase Bill" style="background:#0284c7; color:#fff;"><i class="fa-solid fa-file-invoice"></i></button>`;
                 }
             } else if (item.status === 'Missing in GSTR-2B' || item.status === 'Value Mismatched') {
                 actionBtn = `<button class="btn-action-small notify" data-action="notify" title="Notify Vendor"><i class="fa-solid fa-envelope"></i></button>`;
                 if (item.status === 'Value Mismatched' && item.book && item.book.has_file) {
-                    actionBtn += `<button class="btn-action-small view" data-action="view-bill" title="View original bill"><i class="fa-solid fa-file-lines"></i></button>`;
+                    actionBtn += `<button class="btn-action-small view" data-action="view-bill" title="Show Purchase Bill" style="background:#0284c7; color:#fff;"><i class="fa-solid fa-file-invoice"></i></button>`;
                 }
                 if (item.status === 'Missing in GSTR-2B') {
                     actionBtn += `<button class="btn-action-small hold" data-action="mark-provisional" title="Mark as Provisional -- re-check automatically against a later month"><i class="fa-solid fa-clock-rotate-left"></i></button>`;
@@ -848,8 +895,39 @@ document.addEventListener('DOMContentLoaded', function() {
                     const kind = actionEl.dataset.action;
                     if (kind === 'approve') alert('ITC Approved!');
                     else if (kind === 'confirm-match') confirmPossibleMatch(item.book.id, item.portal.invoice_number, item.portal.gstin, supplier);
+                    else if (kind === 'convert-gst-amount-same') {
+                        const bId = actionEl.dataset.bookId || (item.book ? item.book.id : null);
+                        const pId = actionEl.dataset.portalId || (item.portal ? item.portal.id : null);
+                        if (!bId || !pId) return;
+                        fetch('/api/convert-to-gst-amount-same', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ book_id: parseInt(bId), portal_id: parseInt(pId) })
+                        })
+                        .then(res => res.json())
+                        .then(data => {
+                            if (data.success) fetchReconciliationData();
+                            else alert(data.error || 'Failed to convert.');
+                        })
+                        .catch(() => alert('Failed to convert.'));
+                    }
+                    else if (kind === 'revert-match') {
+                        const bId = actionEl.dataset.bookId || (item.book ? item.book.id : null);
+                        if (!bId) return;
+                        fetch('/api/revert-reconciliation-match', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ book_id: parseInt(bId) })
+                        })
+                        .then(res => res.json())
+                        .then(data => {
+                            if (data.success) fetchReconciliationData();
+                            else alert(data.error || 'Failed to revert.');
+                        })
+                        .catch(() => alert('Failed to revert.'));
+                    }
                     else if (kind === 'rescan') rescanInvoice(item.book.id, actionEl);
-                    else if (kind === 'view-bill') openBillPreview(item.book.id, supplier, bInv);
+                    else if (kind === 'view-bill') openBillPreview(item.book.id, supplier, bInv, item.book ? item.book.has_file : true);
                     else if (kind === 'notify') alert(`Sending follow-up to vendor: ${supplier}`);
                     else if (kind === 'mark-provisional') {
                         const reason = item.status === 'Missing in Books' ? 'missing_in_books' : 'missing_in_portal';
@@ -948,9 +1026,23 @@ document.addEventListener('DOMContentLoaded', function() {
             if (isMatched) {
                 actionHtml = `<button class="mobile-action-btn approve" data-action="approve"><i class="fa-solid fa-check"></i> Approve</button>`;
             } else if (isPossibleMatch) {
-                actionHtml = `<button class="mobile-action-btn approve" data-action="confirm-match"><i class="fa-solid fa-code-compare"></i> Confirm Match</button>`;
+                actionHtml = `
+                    <button class="mobile-action-btn approve" data-action="confirm-match"><i class="fa-solid fa-check"></i> Confirm Match</button>
+                    <button class="mobile-action-btn" data-action="convert-gst-amount-same" style="background:#7c3aed; color:#fff; border-color:#6d28d9;"><i class="fa-solid fa-arrow-right-arrow-left"></i> Convert (GST & Amount Same)</button>
+                `;
+                if (item.book) {
+                    actionHtml += `<button class="mobile-action-btn view" data-action="view-bill" style="background:#0284c7; color:#fff;"><i class="fa-solid fa-file-invoice"></i> Show Bill</button>`;
+                }
                 if (item.book && item.book.has_file) {
                     actionHtml += `<button class="mobile-action-btn notify" data-action="rescan"><i class="fa-solid fa-arrows-rotate"></i> Re-scan Bill</button>`;
+                }
+            } else if (item.status === 'GST Same & Amount Same (Inv Mismatch)' || item.status === 'GST & Amount Same (Inv Mismatch)') {
+                actionHtml = `
+                    <button class="mobile-action-btn approve" data-action="confirm-match"><i class="fa-solid fa-check"></i> Promote to Matched</button>
+                    <button class="mobile-action-btn hold" data-action="revert-match"><i class="fa-solid fa-rotate-left"></i> Revert</button>
+                `;
+                if (item.book) {
+                    actionHtml += `<button class="mobile-action-btn view" data-action="view-bill" style="background:#0284c7; color:#fff;"><i class="fa-solid fa-file-invoice"></i> Show Bill</button>`;
                 }
             } else if (item.status === 'Missing in Books') {
                 actionHtml = `
@@ -1007,8 +1099,36 @@ document.addEventListener('DOMContentLoaded', function() {
                     const kind = cardActionEl.dataset.action;
                     if (kind === 'approve') alert('ITC Approved!');
                     else if (kind === 'confirm-match') confirmPossibleMatch(item.book.id, item.portal.invoice_number, item.portal.gstin, supplier);
+                    else if (kind === 'convert-gst-amount-same') {
+                        if (!item.book || !item.portal) return;
+                        fetch('/api/convert-to-gst-amount-same', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ book_id: item.book.id, portal_id: item.portal.id })
+                        })
+                        .then(res => res.json())
+                        .then(data => {
+                            if (data.success) fetchReconciliationData();
+                            else alert(data.error || 'Failed to convert.');
+                        })
+                        .catch(() => alert('Failed to convert.'));
+                    }
+                    else if (kind === 'revert-match') {
+                        if (!item.book) return;
+                        fetch('/api/revert-reconciliation-match', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ book_id: item.book.id })
+                        })
+                        .then(res => res.json())
+                        .then(data => {
+                            if (data.success) fetchReconciliationData();
+                            else alert(data.error || 'Failed to revert.');
+                        })
+                        .catch(() => alert('Failed to revert.'));
+                    }
                     else if (kind === 'rescan') rescanInvoice(item.book.id, cardActionEl);
-                    else if (kind === 'view-bill') openBillPreview(item.book.id, supplier, bInv);
+                    else if (kind === 'view-bill') openBillPreview(item.book.id, supplier, bInv, item.book ? item.book.has_file : true);
                     else if (kind === 'delete-portal-entry') {
                         const entryId = cardActionEl.dataset.id;
                         if (!entryId) return;
@@ -1046,6 +1166,7 @@ document.addEventListener('DOMContentLoaded', function() {
         if (status === 'Matched') return 'badge-green';
         if (status === 'Value Mismatched') return 'badge-yellow';
         if (status === 'Possible Match') return 'badge-purple';
+        if (status === 'GST Same & Amount Same (Inv Mismatch)' || status === 'GST & Amount Same (Inv Mismatch)') return 'badge-purple';
         if (status === 'Missing in GSTR-2B') return 'badge-red';
         return 'badge-blue';
     }
@@ -1124,11 +1245,11 @@ document.addEventListener('DOMContentLoaded', function() {
     const billPreviewClose = document.getElementById('billPreviewClose');
     const billPreviewOpenTab = document.getElementById('billPreviewOpenTab');
 
-    function openBillPreview(bookId, supplier, invNo) {
+    function openBillPreview(bookId, supplier, invNo, hasFile) {
         if (!billPreviewPanel) return;
-        const fileUrl = `/api/invoice-file/${bookId}`;
+        const fileUrl = (hasFile === false) ? `/bill-copy/${bookId}` : `/api/invoice-file/${bookId}`;
         billPreviewFrame.src = fileUrl;
-        billPreviewTitle.textContent = supplier || 'Bill';
+        billPreviewTitle.textContent = supplier || 'Purchase Bill';
         billPreviewSub.textContent = invNo ? `Invoice: ${invNo}` : '';
         billPreviewOpenTab.href = fileUrl;
         billPreviewPanel.classList.add('open');

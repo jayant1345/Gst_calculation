@@ -343,6 +343,14 @@
                             <span class="metric-value text-blue" id="kpi-missing-books">0 Invoices</span>
                         </div>
                     </div>
+
+                    <div class="metric-card kpi-gst-amount-same clickable-kpi" data-kpi-status="GST & Amount Same (Inv Mismatch)" title="Click to filter by GST Same & Amount Same (Invoice Not Match)" style="cursor: pointer;">
+                        <div class="card-icon purple"><i class="fa-solid fa-code-compare"></i></div>
+                        <div class="card-data">
+                            <h3>GST & Amount Same</h3>
+                            <span class="metric-value text-purple" id="kpi-gst-amount-same">0 Invoices</span>
+                        </div>
+                    </div>
                 </section>
 
                 <!-- Reconciliation ledger -->
@@ -393,9 +401,13 @@
                                 <button class="filter-status-btn" data-status="Matched">Fully Matched</button>
                                 <button class="filter-status-btn" data-status="Value Mismatched">Value Mismatched</button>
                                 <button class="filter-status-btn" data-status="Possible Match">Possible Match</button>
+                                <button class="filter-status-btn" data-status="GST & Amount Same (Inv Mismatch)">GST & Amount Same</button>
                                 <button class="filter-status-btn" data-status="Missing in GSTR-2B">Missing in Portal</button>
                                 <button class="filter-status-btn" data-status="Missing in Books">Missing in Books</button>
                             </div>
+                            <button id="btn-convert-all-possible" class="btn btn-secondary" style="display: none; background: #7c3aed; color: #fff; font-size: 11px; padding: 5px 10px; border-radius: 6px; border: none; font-weight: 600; cursor: pointer; margin-left: 6px;">
+                                <i class="fa-solid fa-arrow-right-arrow-left"></i> Convert All to GST & Amount Same
+                            </button>
                         </div>
                     </div>
 
