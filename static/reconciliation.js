@@ -60,6 +60,8 @@ document.addEventListener('DOMContentLoaded', function() {
     // Dom Elements
     const fySelect = document.getElementById('fy-select');
     const monthChecks = document.querySelectorAll('input[name="months"]');
+    const monthPillLabels = document.querySelectorAll('.month-pill');
+    const btnAllMonths = document.getElementById('btn-all-months');
     const reconSearch = document.getElementById('recon-search');
     const statusBtns = document.querySelectorAll('#status-filters .filter-status-btn');
     const stateFilterBtns = document.querySelectorAll('#state-filters .filter-status-btn');
@@ -67,12 +69,72 @@ document.addEventListener('DOMContentLoaded', function() {
     const reconCardList = document.getElementById('recon-card-list');
     const reconCountText = document.getElementById('recon-count');
 
+    function updateAllMonthsBtnState() {
+        if (!btnAllMonths) return;
+        const allChecked = Array.from(monthChecks).length > 0 && Array.from(monthChecks).every(cb => cb.checked);
+        if (allChecked) {
+            btnAllMonths.classList.add('active');
+            btnAllMonths.style.background = 'var(--accent-blue)';
+            btnAllMonths.style.color = '#ffffff';
+            btnAllMonths.style.borderColor = 'var(--accent-blue)';
+        } else {
+            btnAllMonths.classList.remove('active');
+            btnAllMonths.style.background = '#f1f5f9';
+            btnAllMonths.style.color = '#475569';
+            btnAllMonths.style.borderColor = '#cbd5e1';
+        }
+    }
+
+    if (btnAllMonths) {
+        btnAllMonths.addEventListener('click', function(e) {
+            e.preventDefault();
+            monthChecks.forEach(cb => { cb.checked = true; });
+            updateAllMonthsBtnState();
+            fetchReconciliationData();
+        });
+    }
+
+    // Single-click on a month selects ONLY that month (or Ctrl/Cmd-click for multi-selection)
+    monthPillLabels.forEach(label => {
+        label.addEventListener('click', function(e) {
+            e.preventDefault();
+            const targetCb = this.querySelector('input[name="months"]');
+            if (!targetCb) return;
+
+            const isMultiSelect = e.ctrlKey || e.metaKey || e.shiftKey;
+
+            if (isMultiSelect) {
+                targetCb.checked = !targetCb.checked;
+                const anyChecked = Array.from(monthChecks).some(cb => cb.checked);
+                if (!anyChecked) targetCb.checked = true;
+            } else {
+                const currentlyChecked = Array.from(monthChecks).filter(cb => cb.checked);
+                // If this clicked month is already the ONLY month selected, toggle to All Months
+                if (currentlyChecked.length === 1 && currentlyChecked[0] === targetCb) {
+                    monthChecks.forEach(cb => { cb.checked = true; });
+                } else {
+                    // Single select mode: check ONLY the clicked month
+                    monthChecks.forEach(cb => {
+                        cb.checked = (cb === targetCb);
+                    });
+                }
+            }
+
+            updateAllMonthsBtnState();
+            fetchReconciliationData();
+        });
+    });
+
     // Trigger reconciliation on filter parameter change
     fySelect.addEventListener('change', () => {
         loadGstr2bStatus();
         fetchReconciliationData();
     });
-    monthChecks.forEach(cb => cb.addEventListener('change', fetchReconciliationData));
+    monthChecks.forEach(cb => cb.addEventListener('change', () => {
+        updateAllMonthsBtnState();
+        fetchReconciliationData();
+    }));
+    updateAllMonthsBtnState();
     reconSearch.addEventListener('input', applyFilters);
 
     // Export Filtered Reconciliation Ledger Button
@@ -83,9 +145,13 @@ document.addEventListener('DOMContentLoaded', function() {
             const selectedMonths = Array.from(monthChecks)
                 .filter(cb => cb.checked)
                 .map(cb => cb.value);
+            if (selectedMonths.length === 0) {
+                alert("Please select at least one month to export.");
+                return;
+            }
             const monthsQuery = selectedMonths.join(',');
             const search = encodeURIComponent(reconSearch.value.trim());
-            const url = `/api/export-filtered-reconciliation?financial_year=${fy}&months=${monthsQuery}&state=${activeStateFilter}&status=${activeFilter}&search=${search}`;
+            const url = `/api/export-filtered-reconciliation?financial_year=${fy}&months=${monthsQuery}&state=${activeStateFilter}&status=${activeFilter}&search=${search}&client_id=${encodeURIComponent(currentClientId)}`;
             window.location.href = url;
         });
     }

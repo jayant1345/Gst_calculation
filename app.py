@@ -5664,7 +5664,8 @@ def export_filtered_reconciliation():
         wb.save(output)
         output.seek(0)
 
-        filename = f"GST_Reconciliation_{fy}_{state_filter}_{status_filter}.xlsx".replace(' ', '_')
+        months_tag = "_".join(months) if len(months) <= 2 else f"{len(months)}_Months"
+        filename = f"GST_Reconciliation_{fy}_{months_tag}_{state_filter}_{status_filter}.xlsx".replace(' ', '_')
         return send_file(
             output,
             mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
