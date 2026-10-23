@@ -7790,6 +7790,9 @@ def _extract_branch_from_folder_path(filename):
     if not folder_name:
         return None
     fu = folder_name.upper()
+    for alias, canonical in _BRANCH_TEXT_ALIASES.items():
+        if alias in fu or fu in alias:
+            return canonical
     for b in INCOME_MASTER_BRANCHES:
         bu = b.upper()
         if bu == fu or bu in fu or fu in bu:
@@ -7799,13 +7802,22 @@ def _extract_branch_from_folder_path(filename):
 
 # Some branches are spelled differently in the CA's own catalog than in the
 # bank's own statement headers (e.g. catalog "VASANA" vs the bank ledger's own
-# "For the Branch : 8 - Vasna") - confirmed in practice: every "Vasna" sheet
-# across a real 68-sheet bulk statement failed to match "VASANA" as a
-# substring either direction, so the branch's income silently never reached
-# income_entries at all. Mapped here (not by editing the catalog) since the
-# catalog name is the one shown throughout the UI/exports and must stay as-is.
+# "For the Branch : 8 - Vasna", "SHARDA MANDIR" vs "NEW SHARDA", etc.)
 _BRANCH_TEXT_ALIASES = {
     'VASNA': 'VASANA',
+    'SHARDA MANDIR': 'NEW SHARDA',
+    'SHARDAMANDIR': 'NEW SHARDA',
+    'SHARDA': 'NEW SHARDA',
+    'SHANTI COMMERCIAL': 'SHANTI COMM',
+    'SHANTICOMMERCIAL': 'SHANTI COMM',
+    'MASKATI MARKET': 'MASKATI',
+    'MASKATIMARKET': 'MASKATI',
+    'JODHPUR': 'JODHPUR-SATELLITE',
+    'SATELLITE': 'JODHPUR-SATELLITE',
+    'NEW CLOTH MARKET': 'NEW CLOTH',
+    'NEWCLOTHMARKET': 'NEW CLOTH',
+    'LAWGARGEN': 'LAW GARDEN',
+    'PANJARAPOLE': 'PANJRAPOLE',
 }
 
 
@@ -10497,26 +10509,57 @@ def export_income_working_sheet():
         exempt_current_sum, exempt_current_has = _sum_by_code(exempt_rows_current)
         exempt_previous_sum, exempt_previous_has = _sum_by_code(exempt_rows_previous)
 
+        def normalize_b_name(b):
+            if not b:
+                return ''
+            s = re.sub(r'[^A-Z0-9]', '', str(b).upper().strip())
+            if 'SHARDAMANDIR' in s or 'NEWSHARDA' in s or s == 'SHARDA':
+                return 'NEWSHARDA'
+            if 'SHANTICOMM' in s:
+                return 'SHANTICOMM'
+            if 'MASKATI' in s:
+                return 'MASKATI'
+            if 'VASNA' in s or 'VASANA' in s:
+                return 'VASANA'
+            if 'JODHPUR' in s or 'SATELLITE' in s:
+                return 'JODHPURSATELLITE'
+            if 'NEWCLOTH' in s:
+                return 'NEWCLOTH'
+            if 'ASHRAM' in s:
+                return 'ASHRAMROAD'
+            if 'LAWGARDEN' in s or 'LAWGARGEN' in s:
+                return 'LAWGARDEN'
+            if 'PANJRAPOLE' in s or 'PANJARAPOLE' in s:
+                return 'PANJRAPOLE'
+            return s
+
         # branch (normalized) -> {'CGST_PAYABLE'/'SGST_PAYABLE'/'IGST_PAYABLE': closing_balance or None}
         ledger_by_branch = collections.defaultdict(dict)
         for lr in ledger_rows:
             if not lr.get('ledger_role'):
                 continue
-            b_name = re.sub(r'[^A-Z0-9]', '', lr['branch'].upper().strip())
+            b_name = normalize_b_name(lr['branch'])
             ledger_by_branch[b_name][lr['ledger_role']] = lr['closing_balance']
 
         # branch (normalized) -> {'GGST_RECEIVABLE'/'CGST_RECEIVABLE'/'IGST_RECEIVABLE': closing_balance or None}
+        # Point 2: Ensure GST Receivable (ITC Available) is always positive (abs value)
         receivable_by_branch = collections.defaultdict(dict)
         for rr in receivable_rows:
             if not rr.get('ledger_role'):
                 continue
-            b_name = re.sub(r'[^A-Z0-9]', '', rr['branch'].upper().strip())
-            receivable_by_branch[b_name][rr['ledger_role']] = rr['closing_balance']
+            b_name = normalize_b_name(rr['branch'])
+            cb = rr['closing_balance']
+            if cb is not None:
+                try:
+                    cb = abs(float(cb))
+                except (ValueError, TypeError):
+                    pass
+            receivable_by_branch[b_name][rr['ledger_role']] = cb
 
         # Group entries by normalized branch and GL code
         branch_map = collections.defaultdict(dict)
         for e in entries:
-            b_name = re.sub(r'[^A-Z0-9]', '', e['branch'].upper().strip())
+            b_name = normalize_b_name(e['branch'])
             c_code = str(e['gl_code']).strip()
             branch_map[b_name][c_code] = e
 
@@ -10590,14 +10633,8 @@ def export_income_working_sheet():
                     # Ensure month and FY header is set dynamically across ALL branch tabs (e.g. AUGUST 2026)
                     ws_b['A5'] = f"SUMMARY OF INCOME FOR THE MONTH OF {period_str}"
                     ws_b['A5'].font = Font(name="Arial", size=12, bold=True)
-                    b_norm = re.sub(r'[^A-Z0-9]', '', sname.upper().strip())
-
-                    matched_dict = None
-                    for b_key in branch_map:
-                        if b_key == b_norm or b_key in b_norm or b_norm in b_key:
-                            matched_dict = branch_map[b_key]
-                            break
-                    matched_dict = matched_dict or {}
+                    b_norm = normalize_b_name(sname)
+                    matched_dict = branch_map.get(b_norm, {})
 
                     # Dynamically locate the TOTAL row in this branch sheet
                     total_row = None
@@ -10819,17 +10856,19 @@ def export_income_working_sheet():
                             _set(ws_b, r_tot, 5, r_tot_e)
                             _set(ws_b, r_tot, 6, r_tot_f)
 
-                            _set(ws_b, r_pay, 4, r_pay_d if r_pay_d is not None else "—")
-                            _set(ws_b, r_pay, 5, r_pay_d if r_pay_d is not None else "—")
-                            _set(ws_b, r_pay, 6, r_pay_f if r_pay_f is not None else "—")
+                            eff_pay_d = r_pay_d if r_pay_d is not None else (existing_pay_d if existing_pay_d is not None else 0.0)
+                            eff_pay_f = r_pay_f if r_pay_f is not None else (existing_pay_f if existing_pay_f is not None else 0.0)
+                            _set(ws_b, r_pay, 4, eff_pay_d)
+                            _set(ws_b, r_pay, 5, eff_pay_d)
+                            _set(ws_b, r_pay, 6, eff_pay_f)
 
-                            diff_d = round(r_tot_d - r_pay_d_n, 2) if r_pay_d is not None else None
-                            diff_e = round(r_tot_e - r_pay_d_n, 2) if r_pay_d is not None else None
-                            diff_f = round(r_tot_f - r_pay_f_n, 2) if r_pay_f is not None else None
-                            _set(ws_b, r_diff, 4, diff_d if diff_d is not None else "—")
-                            _set(ws_b, r_diff, 5, diff_e if diff_e is not None else "—")
-                            _set(ws_b, r_diff, 6, diff_f if diff_f is not None else "—")
-                            _set(ws_b, r_diff, 7, round(diff_d / 0.09, 2) if diff_d is not None else "—")
+                            diff_d = round(r_tot_d - eff_pay_d, 2)
+                            diff_e = round(r_tot_e - eff_pay_d, 2)
+                            diff_f = round(r_tot_f - eff_pay_f, 2)
+                            _set(ws_b, r_diff, 4, diff_d)
+                            _set(ws_b, r_diff, 5, diff_e)
+                            _set(ws_b, r_diff, 6, diff_f)
+                            _set(ws_b, r_diff, 7, round(diff_d / 0.09, 2) if diff_d != 0 else 0.0)
                         elif is_demat:
                             r_inc_c = round(b_tot_inc, 2)
                             r_inc_d = round(b_tot_ggst, 2)
@@ -10849,8 +10888,6 @@ def export_income_working_sheet():
                             existing_pay_f = _coerce_num(ws_b.cell(r_pay, 6).value)
                             r_pay_d = round(l_sgst, 2) if l_sgst is not None else existing_pay_d
                             r_pay_f = round(l_igst, 2) if l_igst is not None else existing_pay_f
-                            r_pay_d_n = r_pay_d if r_pay_d is not None else 0.0
-                            r_pay_f_n = r_pay_f if r_pay_f is not None else 0.0
 
                             _set(ws_b, r_inc, 3, r_inc_c)
                             _set(ws_b, r_inc, 4, r_inc_d)
@@ -10866,17 +10903,19 @@ def export_income_working_sheet():
                             _set(ws_b, r_tot, 5, r_tot_e)
                             _set(ws_b, r_tot, 6, r_tot_f)
 
-                            _set(ws_b, r_pay, 4, r_pay_d if r_pay_d is not None else "—")
-                            _set(ws_b, r_pay, 5, r_pay_d if r_pay_d is not None else "—")
-                            _set(ws_b, r_pay, 6, r_pay_f if r_pay_f is not None else "—")
+                            eff_pay_d = r_pay_d if r_pay_d is not None else (existing_pay_d if existing_pay_d is not None else 0.0)
+                            eff_pay_f = r_pay_f if r_pay_f is not None else (existing_pay_f if existing_pay_f is not None else 0.0)
+                            _set(ws_b, r_pay, 4, eff_pay_d)
+                            _set(ws_b, r_pay, 5, eff_pay_d)
+                            _set(ws_b, r_pay, 6, eff_pay_f)
 
-                            diff_d = round(r_tot_d - r_pay_d_n, 2) if r_pay_d is not None else None
-                            diff_e = round(r_tot_e - r_pay_d_n, 2) if r_pay_d is not None else None
-                            diff_f = round(r_tot_f - r_pay_f_n, 2) if r_pay_f is not None else None
-                            _set(ws_b, r_diff, 4, diff_d if diff_d is not None else "—")
-                            _set(ws_b, r_diff, 5, diff_e if diff_e is not None else "—")
-                            _set(ws_b, r_diff, 6, diff_f if diff_f is not None else "—")
-                            _set(ws_b, r_diff, 8, round(diff_d + diff_e, 2) if (diff_d is not None and diff_e is not None) else "—")
+                            diff_d = round(r_tot_d - eff_pay_d, 2)
+                            diff_e = round(r_tot_e - eff_pay_d, 2)
+                            diff_f = round(r_tot_f - eff_pay_f, 2)
+                            _set(ws_b, r_diff, 4, diff_d)
+                            _set(ws_b, r_diff, 5, diff_e)
+                            _set(ws_b, r_diff, 6, diff_f)
+                            _set(ws_b, r_diff, 8, round(diff_d + diff_e, 2))
                         else:
                             # Standard branch. Written as plain computed numbers,
                             # not Excel formulas - openpyxl cannot evaluate
@@ -10911,37 +10950,28 @@ def export_income_working_sheet():
                             # figure: a fresh GL 1878/1879/1880 upload wins;
                             # otherwise fall back to whatever the master
                             # template already had pre-filled (a CA-verified
-                            # reference figure for many branches - confirmed:
-                            # VASANA's template value, 35950.57, matches our
-                            # own independently-parsed real closing balance to
-                            # the cent); if genuinely nothing exists either
-                            # way, show "—" rather than fabricating a 0 (same
-                            # "don't invent a number" convention already used
-                            # on the GST Payable Reconciliation sheet).
+                            # reference figure for many branches).
                             existing_pay_d = _coerce_num(ws_b.cell(r_pay, 4).value)
                             existing_pay_f = _coerce_num(ws_b.cell(r_pay, 6).value)
                             r_pay_d = round(l_sgst, 2) if l_sgst is not None else existing_pay_d
                             r_pay_f = round(l_igst, 2) if l_igst is not None else existing_pay_f
-                            _set(ws_b, r_pay, 4, r_pay_d if r_pay_d is not None else "—")
-                            _set(ws_b, r_pay, 5, r_pay_d if r_pay_d is not None else "—")
-                            _set(ws_b, r_pay, 6, r_pay_f if r_pay_f is not None else "—")
+                            eff_pay_d = r_pay_d if r_pay_d is not None else (existing_pay_d if existing_pay_d is not None else 0.0)
+                            eff_pay_f = r_pay_f if r_pay_f is not None else (existing_pay_f if existing_pay_f is not None else 0.0)
+                            _set(ws_b, r_pay, 4, eff_pay_d)
+                            _set(ws_b, r_pay, 5, eff_pay_d)
+                            _set(ws_b, r_pay, 6, eff_pay_f)
 
-                            r_pay_d_n = r_pay_d if r_pay_d is not None else 0.0
-                            r_pay_f_n = r_pay_f if r_pay_f is not None else 0.0
-                            _set(ws_b, r_diff, 4, round(r_tot_d - r_pay_d_n, 2) if r_pay_d is not None else "—")
-                            _set(ws_b, r_diff, 5, round(r_tot_e - r_pay_d_n, 2) if r_pay_d is not None else "—")
-                            _set(ws_b, r_diff, 6, round(r_pay_f_n - r_inc_f, 2) if r_pay_f is not None else "—")
-                            _set(ws_b, r_diff, 7, round((r_tot_d - r_pay_d_n) / 0.09, 2) if r_pay_d is not None else "—")
+                            r_pay_d_n = eff_pay_d
+                            r_pay_f_n = eff_pay_f
+                            _set(ws_b, r_diff, 4, round(r_tot_d - r_pay_d_n, 2))
+                            _set(ws_b, r_diff, 5, round(r_tot_e - r_pay_d_n, 2))
+                            _set(ws_b, r_diff, 6, round(r_pay_f_n - r_inc_f, 2))
+                            _set(ws_b, r_diff, 7, round((r_tot_d - r_pay_d_n) / 0.09, 2) if (r_tot_d - r_pay_d_n) != 0 else 0.0)
 
-                    # Point 2 (CA office request, Oct 2026): auto-fetch and populate the
+                    # Point 2 (CA office request): auto-fetch and populate the
                     # "(2) INPUT TAX CREDIT" section's "Current Month Input Tax Credit
-                    # Available" row (GL 8546 GGST / GL 8547 CGST columns) from the
-                    # uploaded GST-receivable ledger, same idea as the Payable Working
-                    # section above. The CA was previously typing this figure into every
-                    # branch tab by hand each month. Only writes a cell when fresh data
-                    # actually exists for this branch/code/month - otherwise leaves it
-                    # completely alone, so a CA-typed reference figure is never silently
-                    # blanked out.
+                    # Available" row (GL 8546 GGST / GL 8547 CGST / GL 8548 IGST columns).
+                    # Strictly positive numbers (abs value) as ITC Available is an asset.
                     if 'itc' in b_rows:
                         def _itc_num(v):
                             if v is None or isinstance(v, (int, float)):
@@ -10957,38 +10987,26 @@ def export_income_working_sheet():
                         r_itc = b_rows['itc']
                         recv_ggst = receivable_vals.get('GGST_RECEIVABLE')
                         recv_cgst = receivable_vals.get('CGST_RECEIVABLE')
+                        recv_igst = receivable_vals.get('IGST_RECEIVABLE')
                         if recv_ggst is not None:
-                            _set(ws_b, r_itc, 4, round(recv_ggst, 2))
+                            _set(ws_b, r_itc, 4, round(abs(float(recv_ggst)), 2))
                         if recv_cgst is not None:
-                            _set(ws_b, r_itc, 5, round(recv_cgst, 2))
+                            _set(ws_b, r_itc, 5, round(abs(float(recv_cgst)), 2))
+                        if recv_igst is not None:
+                            _set(ws_b, r_itc, 6, round(abs(float(recv_igst)), 2))
 
-                        # The "Eligible Credit" and "Less: Credit Cannot Be Utilised" rows
-                        # just below are template Excel FORMULAS (one of them,
-                        # "=+E81-E809" for CGST, even has a typo in the CA's own template -
-                        # references a cell far below the sheet that's always blank). Like
-                        # every other section of this export, openpyxl can never evaluate a
-                        # formula - it only shows a number once Excel itself recalculates,
-                        # which Protected View blocks and "Enable Editing" doesn't always
-                        # force either. Confirmed live: this left Eligible Credit
-                        # permanently blank no matter what the CA did on their end. Fixed
-                        # by computing it ourselves and writing a plain number, bypassing
-                        # the (broken) formula chain entirely - same philosophy as the rest
-                        # of this export.
                         r_less, r_eligible = r_itc + 1, r_itc + 2
                         avail_d = _itc_num(ws_b.cell(r_itc, 4).value)
                         avail_e = _itc_num(ws_b.cell(r_itc, 5).value)
+                        avail_f = _itc_num(ws_b.cell(r_itc, 6).value)
+                        if avail_d is not None: avail_d = abs(avail_d)
+                        if avail_e is not None: avail_e = abs(avail_e)
+                        if avail_f is not None: avail_f = abs(avail_f)
 
-                        # "Less: Credit Cannot Be Utilised" is driven by the CA's own
-                        # vendor-by-vendor "INELLIGBLE CREDIT" table a few rows below
-                        # (party name + GGST amount per row, ending at a "TOTAL" row) -
-                        # this app has no data on which specific vendor bills lack a
-                        # GSTIN, so it reads whatever the CA has already typed into that
-                        # table (plain numbers only - a formula cell there means no
-                        # override exists) and sums it, rather than guessing.
                         ineligible = None
                         existing_less_d = _itc_num(ws_b.cell(r_less, 4).value)
                         if existing_less_d is not None:
-                            ineligible = existing_less_d
+                            ineligible = abs(existing_less_d)
                         else:
                             for r_chk2 in range(r_itc + 1, min(ws_b.max_row + 1, r_itc + 20)):
                                 v_label = str(ws_b.cell(r_chk2, 2).value or '').strip().upper()
@@ -11000,7 +11018,7 @@ def export_income_working_sheet():
                                             break
                                         v_party = _itc_num(ws_b.cell(r_party, 3).value)
                                         if v_party is not None:
-                                            ineligible += v_party
+                                            ineligible += abs(v_party)
                                     break
 
                         if ineligible is not None:
@@ -11008,9 +11026,16 @@ def export_income_working_sheet():
                                 _set(ws_b, r_less, 4, round(ineligible, 2))
                                 _set(ws_b, r_less, 5, round(ineligible, 2))
                             if avail_d is not None:
-                                _set(ws_b, r_eligible, 4, round(avail_d - ineligible, 2))
+                                _set(ws_b, r_eligible, 4, round(max(0.0, avail_d - ineligible), 2))
                             if avail_e is not None:
-                                _set(ws_b, r_eligible, 5, round(avail_e - ineligible, 2))
+                                _set(ws_b, r_eligible, 5, round(max(0.0, avail_e - ineligible), 2))
+                        else:
+                            if avail_d is not None:
+                                _set(ws_b, r_eligible, 4, round(avail_d, 2))
+                            if avail_e is not None:
+                                _set(ws_b, r_eligible, 5, round(avail_e, 2))
+                        if avail_f is not None:
+                            _set(ws_b, r_eligible, 6, round(avail_f, 2))
 
                     # Tab color: Green FF92D050 if statements were uploaded for this branch (completed branch)
                     ws_b.sheet_properties.tabColor = openpyxl.styles.colors.Color(rgb="FF92D050") if bool(matched_dict) else None
@@ -11176,12 +11201,12 @@ def export_income_working_sheet():
                     c.alignment = Alignment(horizontal="center")
 
                 branch_computed_by_norm = {
-                    re.sub(r'[^A-Z0-9]', '', sname.upper().strip()): vals
+                    normalize_b_name(sname): vals
                     for sname, vals in branch_computed.items()
                 }
                 r_ptr = 2
                 for b_name in INCOME_MASTER_BRANCHES:
-                    b_norm = re.sub(r'[^A-Z0-9]', '', b_name.upper().strip())
+                    b_norm = normalize_b_name(b_name)
                     bc = branch_computed_by_norm.get(b_norm, {'inc': 0.0, 'cgst': 0.0, 'sgst': 0.0, 'igst': 0.0})
                     lv = ledger_by_branch.get(b_norm, {})
                     l_cgst = lv.get('CGST_PAYABLE')
