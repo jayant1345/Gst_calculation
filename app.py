@@ -10526,13 +10526,19 @@ def export_income_working_sheet():
                 wb = openpyxl.load_workbook(template_path)
                 wb.calculation.fullCalcOnLoad = True
 
-                # Canonical 28 sheets in Nutan Bank master workbook
+                # Canonical 56 sheets in Nutan Bank master workbook (including HO1 and branch voucher tabs)
                 CANONICAL_MASTER_SHEETS = {
                     'ODHAV ', 'RAKHIAL', 'NEW SHARDA', 'CHANGODAR', 'ISANPUR', 'MANINAGAR',
                     'SHANTI COMM', 'MASKATI', 'VEJALPUR', 'JODHPUR-SATELLITE', 'PANJRAPOLE',
                     'ASHRAM ROAD', 'NARAYANNAGAR', 'NARANPURA', 'DRIVE IN', 'VASANA ', 'SURAT',
                     'LAW GARDEN', 'NEW CLOTH', 'BAPUNAGAR', 'BOPAL', 'THALTEJ', 'CHANDKHEDA',
-                    'VASTRAL', 'Sheet1', 'HO', 'DEMAT', 'SUMMARY SHEET GST'
+                    'VASTRAL', 'Sheet1', 'HO', 'DEMAT', 'SUMMARY SHEET GST',
+                    'Notes', 'GSTN CANCELLTED',
+                    'ODHAV1', 'RAKHIAL1', 'CHANGODAR1', 'SHARDA MANDIR 1', 'ISANPUR1', 'MANINAGAR1',
+                    'SHANTI COMMERCIAL', 'MASKATI MARKET', 'VEJALPUR1', 'JODHPUR1', 'PANJRAPOLE1',
+                    'ASHRAM ROAD 1', 'NARAYANNAGAR1', 'NARANPURA1', 'DRIVE IN1', 'VASNA1', 'SURAT1',
+                    'LAWGARGEN1', 'NEW CLOTH MARKET 1', 'BAPUNAGAR1', 'BOPAL1', 'THALTEJ1',
+                    'CHANDKHEDA1', 'VASTRAL1', 'DEMAT1', 'HO1'
                 }
                 for sname in list(wb.sheetnames):
                     if sname not in CANONICAL_MASTER_SHEETS:
@@ -10567,9 +10573,17 @@ def export_income_working_sheet():
                     return f"{m_clean.upper()} {yr}"
 
                 period_str = get_period_label(month, fy)
+                prev_period_str = get_period_label(prev_month or 'Previous Month', prev_fy or fy) if (prev_month and prev_fy) else "PREVIOUS MONTH"
 
                 for sname in wb.sheetnames:
                     if sname in ['SUMMARY SHEET GST', 'Notes', 'GSTN CANCELLTED', 'Sheet1'] or sname.endswith('1'):
+                        if sname.endswith('1') and sname != 'HO1':
+                            try:
+                                wb[sname]['A3'] = f"GST ENTRIES FOR THE MONTH OF {period_str}"
+                                if sname == 'ODHAV1':
+                                    wb[sname]['B12'] = f"{prev_period_str} TRANSFER TO HO)"
+                            except Exception:
+                                pass
                         continue
 
                     ws_b = wb[sname]
@@ -11276,6 +11290,17 @@ def export_income_working_sheet():
 
                 for col_i in range(1, len(exempt_headers) + 1):
                     ws_exempt.column_dimensions[get_column_letter(col_i)].width = 32 if col_i == 1 else 24
+
+                # Ensure HO1 is the final sheet in the exported workbook as requested by CA office
+                if 'HO1' in wb.sheetnames:
+                    try:
+                        ws_ho1 = wb['HO1']
+                        ws_ho1['B580'] = f"{prev_period_str} TRANSFER FROM BRANCH)"
+                        ws_ho1['B594'] = f"LEDGER BALANCE FOR THE MONTH OF {prev_period_str})"
+                        wb._sheets.remove(ws_ho1)
+                        wb._sheets.append(ws_ho1)
+                    except Exception as e_ho1:
+                        print(f"Note: Could not update/reorder HO1 to end: {e_ho1}")
 
                 buf = io.BytesIO()
                 wb.save(buf)
